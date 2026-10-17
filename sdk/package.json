@@ -3,6 +3,13 @@
   "version": "0.1.1",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
+  "homepage": "https://docs.lamarge.trade/sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snowbl-capital/lamarge-sdk.git",
+    "directory": "sdk"
+  },
+  "bugs": "https://github.com/snowbl-capital/lamarge-sdk/issues",
   "type": "module",
   "sideEffects": false,
   "engines": {

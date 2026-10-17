@@ -47,7 +47,7 @@ import { createClient, Maker, Quoter } from "@lamarge/sdk";
 const master = new Maker(createClient({ apiUrl }), financialAccount, operatorAddress, "https://app.lamarge.trade");
 await master.login();
 const credential = await master.createCredential("quoter", quoteAccount.address);
-const order = await master.addCapital({ venue: "hyperliquid", amount: "5000000", client_request_id, funding_source: "venue" }, credential, recovery);
+const order = await master.waitForFunding(await master.addCapital({ venue: "hyperliquid", amount: "5000000", client_request_id, funding_source: "venue" }, credential, store));
 
 const quoter = new Quoter(createClient({ apiUrl, token: credential.token }), credential.id, quoteAccount);
 await quoter.lease(30);

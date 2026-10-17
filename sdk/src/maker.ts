@@ -85,15 +85,32 @@ export class Maker {
     }
     return result;
   }
+  /**
+   * Waits for the funding `addCapital` submitted: its preparation, not the order, says whether it
+   * landed, since a failed top-up returns the order to its prior state. Throws when it failed.
+   */
+  async waitForFunding(order: Order, timeoutMs = 600_000): Promise<Order> {
+    const end = Date.now() + timeoutMs;
+    for (const id = order.preparation_id; id;) {
+      const preparation = await this.client.call("getMakerPreparation", { path: { id } });
+      if (preparation.state === "complete") break;
+      if (preparation.state === "failed" || preparation.state === "cancelled") throw new Error(`Funding ${preparation.state}: ${preparation.order.error ?? "no reason given"}`);
+      if (Date.now() >= end) throw new Error(`Funding of order ${order.id} still pending; recover it by the same client_request_id`);
+      await wait(2_000);
+    }
+    return this.waitFor(order.id, ["live"], end - Date.now());
+  }
+  /** Waits until the order reaches one of `states`; for a funding, `waitForFunding`. */
   async waitFor(id: string, states: Order["state"][], timeoutMs = 600_000): Promise<Order> {
     const end = Date.now() + timeoutMs;
-    while (Date.now() < end) {
+    // Read at least once, however little time is left.
+    for (;;) {
       const order = await this.order(id);
       if (states.includes(order.state)) return order;
       if (order.state === "failed") throw new Error(`Order failed: ${order.error}`);
+      if (Date.now() >= end) throw new Error(`Order ${id} still pending; recover it by the same client_request_id`);
       await wait(2_000);
     }
-    throw new Error(`Order ${id} still pending; recover it by the same client_request_id`);
   }
 }
 

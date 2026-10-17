@@ -68,7 +68,7 @@ export interface paths {
         };
         /**
          * List venues
-         * @description Every venue in display order, with its settlement terms, token, permit domain, margin-transfer format and deposit minimum (null when disabled). Check them against the [deployment values](/how-it-works#deployment-values) before signing.
+         * @description Every venue in display order, with its settlement terms, token, permit domain, margin-transfer format and deposit minimum, all null when disabled. Check them against the [deployment values](/how-it-works#deployment-values) before signing.
          */
         get: operations["getVenues"];
         put?: never;
@@ -90,7 +90,7 @@ export interface paths {
         put?: never;
         /**
          * Aster signing network
-         * @description RPC URL of chain 1666 (`0x682`), which a wallet adds with `wallet_addEthereumChain` to sign an Aster transfer: wallets sign typed data only for their current chain. It answers only `eth_chainId` and `net_version`; the chain has no accounts, blocks or transactions.
+         * @description RPC URL of chain 1666 (`0x682`), which a wallet adds with `wallet_addEthereumChain` to sign an Aster transfer: wallets sign typed data only for their current chain. It answers only `eth_chainId` and `net_version`; other methods get JSON-RPC error -32601.
          */
         post: operations["postAsterSigningRpc"];
         delete?: never;
@@ -108,7 +108,7 @@ export interface paths {
         };
         /**
          * Get a book
-         * @description Levels the taker pays on `from` and receives on `to`, best price first, then oldest; they are not reservations. A level is a quote that [admits takes](/how-it-works#quotes), with a signed expiry at least the maker timeout away and `min(available, max_fill)` at least `min_fill`. With a Hyperliquid `from`, or a pool held inside Lighter or Aster, the maker's balance must have been read within two minutes. Over 8000 candidate levels: 503 `SNAPSHOT_TOO_LARGE`.
+         * @description Levels the taker pays on `from` and receives on `to`, best price first, then oldest; they are not reservations. A level is a quote that [admits takes](/how-it-works#quotes), with a signed expiry at least the maker timeout away and `min(available, max_fill)` at least `min_fill`. With a Hyperliquid `from`, or a pool held inside Lighter or Aster (approved makers only), the maker's balance must have been read within two minutes. Over 8000 candidate levels: 503 `SNAPSHOT_TOO_LARGE`.
          */
         get: operations["getBook"];
         put?: never;
@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * Get the best route
-         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no take joins the pair (Lighter and Aster) or when that pays at least 10 bps more. The second take pays what the first delivers there, less what that venue keeps: the Lighter account's transfer fee, Aster's rounding to millionths. Each take is admitted as `POST /v1/takes` would admit it; where the second carries less than the first delivers, the first shrinks to fit and `capped` is true. Your own orders are left out and your Lighter account's fee counted; without a linked Lighter account no route goes through Lighter. A route through another venue never replaces a direct take that spends more. What would refuse the direct take, or every route, is the error; a venue between that cannot be used only leaves its routes out. Nothing is reserved; each take sweeps its book again.
+         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no direct take is possible (Lighter and Aster) or finds nothing, or when two pay at least 10 bps more and spend no less. The second take pays what the first delivers, less the Lighter account's transfer fee, rounded down to millionths; where it carries less, the first shrinks to fit. `capped`: the route spends less than `amount_in`. Takes are admitted as `POST /v1/takes` admits them, your own orders excluded; no route goes through Lighter without a linked account and a known fee. The error is what refuses the direct take, or every route; an unusable venue between only drops its routes. Nothing is reserved.
          */
         get: operations["getRoute"];
         put?: never;
@@ -148,7 +148,7 @@ export interface paths {
         };
         /**
          * Get signed trade proof
-         * @description The settled trade's signed maker `QuoteSet`, funding authorization (`FundOffer`, or the delivery for a pool held inside a venue) and taker `PayTake`, with digests and relayed transactions. Public once all three are recorded.
+         * @description The settled trade's signed maker `QuoteSet`, funding authorization (`FundOffer`, or the delivery for a pool held inside a venue) and taker `PayTake` (or the executed `payment` when paid from Lighter or Aster), with digests and relayed transactions. Public once all three are recorded.
          */
         get: operations["getTradeProof"];
         put?: never;
@@ -188,7 +188,7 @@ export interface paths {
         };
         /**
          * Health
-         * @description Settlement readiness; 503 with the same body when any chain is not `ready`.
+         * @description Settlement readiness; 503 with the same body when a chain other than an exit-only escrow is not `ready`.
          */
         get: operations["getHealth"];
         put?: never;
@@ -330,7 +330,7 @@ export interface paths {
         };
         /**
          * Read account setup
-         * @description The linked account's setup steps, each read from the venue now: a step the venue shows is recorded `done`, one it no longer accepts is `required` again with its `reason`. A step prepared but not signed carries its `to_sign`. `ready` once every step is done ([setup](/quickstart#set-up-venue-accounts)).
+         * @description The linked account's setup steps, each read from the venue now: a step the venue shows is recorded `done`, one it no longer accepts is `required` again with its `reason`. A permit prepared but not signed carries its `to_sign`. `ready` once every step is done ([setup](/quickstart#set-up-venue-accounts)).
          */
         get: operations["getVenueSetup"];
         put?: never;
@@ -454,7 +454,7 @@ export interface paths {
         };
         /**
          * Get my exposure
-         * @description A consistent snapshot per venue, Lighter and Aster included; a credential sees its identity's amounts. Locked payments and receipts are contingent. On escrow venues, check `chain_observation.current`; it is null on Lighter and Aster. Credential scope: `read`.
+         * @description A consistent snapshot per venue, Lighter and Aster included; a credential sees its identity's amounts. On escrow venues, check `chain_observation.current`; it is null on Lighter and Aster. Credential scope: `read`.
          */
         get: operations["getV1MeExposure"];
         put?: never;
@@ -476,7 +476,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare maker funds or a quote
-         * @description Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account; an unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.
+         * @description Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account, `funding_source: venue` and no `quote` (quote through `POST /v1/orders/{id}/quotes/prepare`); the preparation is `complete` at once. An unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.
          */
         post: operations["prepareMaker"];
         delete?: never;
@@ -498,7 +498,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel an unsigned maker preparation
-         * @description Cancels a `preparing` preparation, releasing its admission pause; repeating returns it, other states are `STATE_CONFLICT`. An unsigned preparation also cancels at expiry.
+         * @description Cancels a `preparing` preparation and restores its order's state; repeating returns it, other states are `STATE_CONFLICT`. An unsigned preparation also cancels at expiry.
          */
         delete: operations["cancelMakerPreparation"];
         options?: never;
@@ -576,13 +576,13 @@ export interface paths {
         get?: never;
         /**
          * Replace the quote set
-         * @description Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply chain. Credential scope: `quote`.
+         * @description Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply venue's escrow chain; a Lighter or Aster pool needs an EOA signer. Credential scope: `quote`.
          */
         put: operations["putQuotes"];
         post?: never;
         /**
          * Pull the quotes
-         * @description Removes the order from admission and advances `cancel_epoch` on every call; drafts prepared before the receipt cannot be published. Earlier reservations continue and the signed set stays valid on chain ([cancellation](/how-it-works#cancellation)). Funds stay in escrow. Credential scope: `cancel`.
+         * @description Removes the order from admission and advances `cancel_epoch` on every call; drafts prepared before the receipt cannot be published. Earlier reservations continue and the signed set stays valid on chain ([cancellation](/how-it-works#cancellation)). Capital is not withdrawn. Credential scope: `cancel`.
          */
         delete: operations["deleteQuotes"];
         options?: never;
@@ -601,7 +601,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare a quote set
-         * @description Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished drafts per identity that are under five minutes old and before `valid_until`, else `RATE_LIMITED`. Credential scope: `quote`.
+         * @description Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished, unexpired drafts per identity, else `RATE_LIMITED`. Credential scope: `quote`.
          */
         post: operations["prepareQuotes"];
         delete?: never;
@@ -761,7 +761,7 @@ export interface paths {
         put?: never;
         /**
          * Close by signature
-         * @description Relays the prepared terms, signed by the linked address, as `closeOfferBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. A recorded order is `closing`, off the books, until the transaction is final or a minute past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, at 10 pending closes per owner and chain, or for a nonce reused with other terms; the same terms return the same close.
+         * @description Relays the prepared terms, signed by the linked address, as `closeOfferBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. A recorded order is `closing`, off the books, until the transaction is final or a minute past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, while a close of the order is pending, at 10 pending closes per owner and chain, or for a nonce reused with other terms; the same terms return the same close.
          */
         post: operations["postEscrowClose"];
         delete?: never;
@@ -785,7 +785,7 @@ export interface paths {
         put?: never;
         /**
          * Create a recoverable transfer
-         * @description Records a route that withdraws from venue margin, then takes; moves no funds and reserves nothing. No payment setup needed; `funding_plan` asks for a permit when wallet funds need one. Retrying with the same `client_transfer_id` returns the intent; changed terms are `STATE_CONFLICT`.
+         * @description Records a route that withdraws from venue margin (not Lighter or Aster), then takes; moves no funds and reserves nothing. No payment setup needed; `funding_plan` asks for a permit when wallet funds need one. Retrying with the same `client_transfer_id` returns the intent; changed terms are `STATE_CONFLICT`.
          */
         post: operations["postTransfer"];
         delete?: never;
@@ -829,7 +829,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare this transfer's funding
-         * @description One withdrawal of `amount`, at most `amount_in`, from the payer's `from` margin to its escrow-chain address, for the take to deposit; on Aster the signed amount adds the venue fee. Retries return the same typed data until ten minutes after the first preparation, then `WITHDRAWAL_EXPIRED`: cancel and create another transfer. Another amount conflicts.
+         * @description One withdrawal of `amount`, at most `amount_in`, from the payer's `from` margin to its escrow-chain address, for the take to deposit; none from Lighter or Aster, which pay inside the venue (`VALIDATION_ERROR`). Retries return the same typed data until ten minutes after the first preparation, then `WITHDRAWAL_EXPIRED`: cancel and create another transfer. Another amount conflicts.
          */
         post: operations["prepareTransferWithdrawal"];
         delete?: never;
@@ -849,7 +849,7 @@ export interface paths {
         put?: never;
         /**
          * Submit this transfer's funding signature
-         * @description Submits the signed preparation, recorded before the venue is called; retries return that withdrawal with 200, even `refused`. Never sign another for an ambiguous `unknown` one.
+         * @description Submits the signed preparation, recorded before the venue is called; answers 200 with the withdrawal, even `refused`, and retries return it. Never sign another for an `unknown` one.
          */
         post: operations["submitTransferWithdrawal"];
         delete?: never;
@@ -869,7 +869,7 @@ export interface paths {
         put?: never;
         /**
          * Take at market
-         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). `STATE_CONFLICT` while another financial preparation is open on `from`; `FILL_IN_PROGRESS` while another take is unpaid. Persist `client_take_id`: the same body returns the same take.
+         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). `STATE_CONFLICT` while another financial preparation is open on `from`; `FILL_IN_PROGRESS` while another take is unpaid. Persist `client_take_id`: the same body returns the same take. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
          */
         post: operations["postTake"];
         delete?: never;
@@ -973,7 +973,7 @@ export interface paths {
         put?: never;
         /**
          * Report an in-venue delivery
-         * @description Reports the venue transfer that delivers a fill on Lighter or Aster ([active market making](/market-making#active-market-making)), with the maker's master session or a `quote` credential of the order's identity. The transfer moves at least `amount_out` from the maker's linked account to `delivery_to`, executes after the take and by `deliver_by`, and delivers only this fill. Lighter: the hash of an internal USDC transfer into collateral, memo the fill id zero-padded to 32 bytes, at status 3 (or 2 when `/v1/info` reports `settlement.delivery.min_status` 2). Aster: the `transferId` of a USDT transfer from the Spot wallet, as both accounts' Spot histories show. Accepted while the payment is `LOCKED` and `maker_leg` is `NONE` or `ABANDONED`, before `report_by` and any refund consent; the operator then claims the payment. Exact retries return the fill.
+         * @description Reports the venue transfer that delivers a fill on Lighter or Aster ([active market making](/market-making#active-market-making)), with the maker's master session or a `quote` credential of the order's identity. The transfer moves at least `amount_out` from the maker's linked account to `delivery_to`, executes after the take and by `deliver_by`, and delivers only this fill. Lighter: the hash of an internal USDC transfer into collateral, memo the fill id's 16 bytes, zero-padded to 32, at least at status `settlement.delivery.min_status` from `/v1/info` (2 or 3). Aster: the `transferId` of a USDT transfer from the Spot wallet, as both accounts' Spot histories show. Accepted while the payment is `LOCKED` and `maker_leg` is `NONE` or `ABANDONED`, before `report_by` and any refund consent; the operator then claims the payment. Exact retries return the fill.
          */
         post: operations["submitDelivery"];
         delete?: never;
@@ -1013,7 +1013,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare a withdrawal
-         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less transfers relayed since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal on the venue is `STATE_CONFLICT`. On Aster the signed amount adds the venue fee. Validate before signing; relay within ten minutes.
+         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less transfers relayed since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal on the venue is `STATE_CONFLICT`. On Aster the signed amount adds the venue fee. Relay within ten minutes.
          */
         post: operations["postWithdrawalPrepare"];
         delete?: never;
@@ -1053,7 +1053,7 @@ export interface paths {
         put?: never;
         /**
          * Create a maker credential
-         * @description Creates a maker credential and its quote identity (same `id`) with an immutable `quote_signer`; at most 32 active. Scopes: `read`, `quote`, `cancel`; none reaches financial routes. After a lost response, revoke the credential and create another.
+         * @description Creates a maker credential and its quote identity (same `id`) with an immutable `quote_signer`; at most 32 active. Scopes: `read`, `quote`, `cancel`; none reaches financial routes. After a lost response, revoke the credential and create another. `FORBIDDEN` when an admin disabled or archived the maker.
          */
         post: operations["postV1Credentials"];
         delete?: never;
@@ -1231,7 +1231,7 @@ export interface paths {
         };
         /**
          * Read public snapshot
-         * @description Public books and a committed cursor to replay strictly after. Over 1000 orders: 503 `SNAPSHOT_TOO_LARGE`, never partial. History pages give no replay cursor.
+         * @description Public books and a committed cursor to replay strictly after.
          */
         get: operations["getV1Snapshot"];
         put?: never;
@@ -1271,7 +1271,7 @@ export interface paths {
         };
         /**
          * Read private and public snapshot
-         * @description Your nonterminal orders and fills and unrevoked quote identities, with a replay cursor; `books` stays empty. Over 1000 rows in one: 503. Credential scope: `read`.
+         * @description Your nonterminal orders and fills and unrevoked quote identities, with a replay cursor; `books` stays empty. Credential scope: `read`.
          */
         get: operations["getV1MeSnapshot"];
         put?: never;
@@ -1291,7 +1291,7 @@ export interface paths {
         };
         /**
          * WebSocket event replay
-         * @description First text frame: a `StreamSubscription`; never put `token` in the URL ([WebSocket](/streaming#websocket)). Private streams need a session or `read` credential, rechecked about every 500 ms. Frames are `EventPage`s of up to 100 events, empty about every 500 ms when idle. A `StreamControl` precedes closure on authorization, capacity, resync or journal failure. Any later client message other than ping or pong, or a send blocked five seconds, closes the socket.
+         * @description First text frame, within five seconds: a `StreamSubscription`, else the socket closes; never put `token` in the URL ([WebSocket](/streaming#websocket)). Private streams need a session or `read` credential, rechecked about every 500 ms. Frames are `EventPage`s of up to 100 events, empty about every 500 ms when idle. A `StreamControl` precedes closure on authorization, capacity, resync or journal failure. Any later client message other than ping or pong, or a send blocked five seconds, closes the socket.
          */
         get: operations["getV1Stream"];
         put?: never;
@@ -1508,11 +1508,11 @@ export interface components {
             chains: components["schemas"]["ChainHealth"][];
         };
         Challenge: {
-            /** @description Sign with `personal_sign` exactly as given; on Aster, sign `typed_data` instead. */
+            /** @description Sign with `personal_sign` exactly as given. */
             message: string;
             nonce: string;
             expires_at: components["schemas"]["Timestamp"];
-            /** @description Aster only: the agent approval (`AsterSignTransaction` domain, chain 56). Sign it with `eth_signTypedData_v4` at once: Aster accepts only a recent nonce. Linking approves LaMarge's agent, only `canPerpTrade`, for 365 days. */
+            /** @description Not returned: Aster's agent approval is the `agent` setup step's `to_sign`. */
             typed_data?: components["schemas"]["TypedData"];
         };
         Session: {
@@ -1525,7 +1525,7 @@ export interface components {
             venue: components["schemas"]["VenueId"];
             /** @description Owner of the venue account; signs its transfers. */
             address: components["schemas"]["Address"];
-            /** @description Polymarket: the venue wallet next to the signer. Lighter: the account index. Null elsewhere. */
+            /** @description Polymarket: the signer's Deposit Wallet or Safe. Lighter: the account index. Null elsewhere. */
             venue_wallet: string | null;
             linked_at: components["schemas"]["Timestamp"];
         };
@@ -1607,7 +1607,7 @@ export interface components {
             escrow_balance: string | null;
             /** @description Waiting at `deposit_address` to be swept into the available balance ([balances](/how-it-works#balances)). Read with `chain_balance`. */
             deposit_balance: string | null;
-            /** @description Tokens sent here become the linked address's available balance; null without an escrow. */
+            /** @description Tokens sent here become the linked address's available balance; null on a venue settled inside itself (Lighter, Aster). */
             deposit_address: components["schemas"]["Address"] | null;
             /**
              * Format: date-time
@@ -1624,7 +1624,7 @@ export interface components {
          * @enum {string}
          */
         HeldIn: "escrow" | "venue" | (string & {});
-        /** @description What LaMarge holds for the account, read in the same snapshot as `portfolio`, each amount once, in the venue token's base units. */
+        /** @description The account's funds on the venue, in its wallets and in the escrow, from the same snapshot as `portfolio`, each counted once, in the venue token's base units. */
         Holdings: {
             /** @description Movable or committable now: the venue's withdrawable margin less what a pool still owes, the wallets, and the escrow's available balance. */
             available: string;
@@ -1640,7 +1640,7 @@ export interface components {
             total: string;
         };
         Stats: {
-            /** @description One entry per configured escrow chain, by output venue. */
+            /** @description One per venue (escrow chains, then Lighter and Aster), by output venue. */
             assets: components["schemas"]["StatsAsset"][];
             trades_30d: number;
             /** @constant */
@@ -1681,7 +1681,7 @@ export interface components {
             operator: components["schemas"]["Address"];
             /** @description Funded with this deployment's operator; `POST /v1/closes` can close it. */
             managed: boolean;
-            /** @description Your own order operated by this deployment, already counted in `/v1/balances` `holdings.orders`; the others add to it. */
+            /** @description Your own order operated by this deployment, already in `/v1/balances` `holdings.orders`. Order zero is `escrow_balance` there; other orders add to it. */
             in_balances: boolean;
             /** @description A close by signature is pending. */
             closing: boolean;
@@ -1844,17 +1844,17 @@ export interface components {
             error: string | null;
             /** @description Funded amount; inside a venue (Lighter, Aster), the maker's cap that deliveries consume. */
             amount: components["schemas"]["Amount"];
-            /** @description What the order holds, where `held_in` says: unlocked escrow; for a pool, its account's transferable balance at the last read less deliveries since, within the cap left. */
+            /** @description What the order holds, where `held_in` says: unlocked escrow; for a Lighter or Aster pool, its account's transferable balance at the last read less deliveries since, within the cap left. */
             held: components["schemas"]["Amount"];
             /**
              * @deprecated
-             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             * @description Former name of `held`; removed once makers have moved.
              */
             escrow_available: components["schemas"]["Amount"];
             /** @description Inside a venue, the last-read per-delivery fee, held back per reserved fill and for the next; `0` for an escrow order. */
             delivery_fee: components["schemas"]["Amount"];
             revision: components["schemas"]["Cursor"];
-            /** @description Unlocked inventory less unlocked admitted fills and their delivery fees; ignores quotes. Shared across receiving venues. */
+            /** @description `held` less unlocked admitted fills, their delivery fees and the next fill's; ignores quotes. Shared across receiving venues. */
             available_to_quote: components["schemas"]["Amount"];
             /** @description Settled fills' payments per paying venue, in its base units. */
             received_by_venue: {
@@ -1997,7 +1997,7 @@ export interface components {
                 created_at: components["schemas"]["Timestamp"];
             } | null;
             withdrawal: components["schemas"]["Withdrawal"] | null;
-            /** @description Returned on creation and with `funding_plan=true` while the transfer has no take and is not cancelled: before a withdrawal, or once a relayed withdrawal's funds at the wallet plus the available balance cover `amount_in`. Null otherwise, or when it cannot be computed. */
+            /** @description Returned on creation and with `funding_plan=true` while the transfer has no take and is not cancelled: before a withdrawal, or once a relayed withdrawal's funds at the wallet plus the available balance cover `amount_in`. Null otherwise, when paying from Lighter or Aster, or when it cannot be computed. */
             funding_plan: components["schemas"]["FundingPlan"] | null;
             take_id: components["schemas"]["Uuid"] | null;
             /** @description True once all its take's fills are final; null without a take. */
@@ -2005,7 +2005,7 @@ export interface components {
             then?: components["schemas"]["TransferThen"];
             /** @description The transfer this one continues. */
             previous_transfer_id: components["schemas"]["Uuid"] | null;
-            /** @description With `then`, once no part of its take can deliver more and unless cancelled: what a continuation may still pay, in `to` base units. What the take delivered, less what continuations may still pay or paid with their payments' fees, and less the next payment's fee on `to`; on Aster in whole millionths. Null otherwise, or while Lighter's fee is unknown. */
+            /** @description With `then`, once no part of its take can deliver more and unless cancelled: what a continuation may still pay, in `to` base units: what the take delivered, less what continuations may pay or paid (fees included) and the next payment's fee, in whole millionths. Null otherwise, or while Lighter's fee is unknown. */
             continuable: components["schemas"]["Amount"] | null;
             cancelled_at: components["schemas"]["Timestamp"] | null;
             created_at: components["schemas"]["Timestamp"];
@@ -2155,12 +2155,12 @@ export interface components {
         /** @enum {string} */
         OrderState: "preparing" | "moving" | "funding" | "live" | "closing" | "closed" | "failed" | (string & {});
         /**
-         * @description `PAYING`: paid from Lighter or Aster, the maker locked and the transfer not yet executed; `REFUNDING` once that payment ended unexecuted.
+         * @description `PAYING`: paid from Lighter or Aster, the maker locked and the transfer not yet executed. `REFUNDING`: one leg refunded or abandoned while the other is still locked, or a `PAYING` transfer that ended unexecuted.
          * @enum {string}
          */
         FillState: "RESERVED" | "PAID" | "PAYING" | "LOCKED" | "CLAIMING" | "SETTLED" | "EXPIRED" | "REFUNDING" | "REFUNDED" | "MAKER_LOSS" | "TAKER_LOSS" | (string & {});
         /**
-         * @description The taker's lock on the `from_venue` chain.
+         * @description The taker's lock on the `from_venue` chain; paid from Lighter or Aster, `CLAIMED` once the transfer executed.
          * @enum {string}
          */
         PaymentLeg: "NONE" | "LOCKED" | "CLAIMED" | "REFUNDED" | (string & {});
@@ -2291,12 +2291,12 @@ export interface components {
             maker_escrow: components["schemas"]["Amount"];
             /**
              * @deprecated
-             * @description `maker_escrow` + `maker_pool_inventory`, as before they split: a pool's inventory is its account's balance, never to add to the venue's equity. Removed once makers moved.
+             * @description `maker_escrow` + `maker_pool_inventory`, its former meaning; removed once makers have moved.
              */
             maker_escrow_unlocked: components["schemas"]["Amount"];
-            /** @description Lighter or Aster pool: the account's transferable balance at the last read, within the cap. Part of the venue account's equity, never added to it. */
+            /** @description Lighter or Aster pool: the account's transferable balance at the last read less deliveries since, within the cap left. Part of the venue account's equity, never added to it. */
             maker_pool_inventory: components["schemas"]["Amount"];
-            /** @description Output of the maker's reserved or paid fills not yet locked or delivered. Not added capital; can exceed observed inventory. */
+            /** @description Output of the maker's reserved or paid fills not yet locked or delivered; can exceed observed inventory. */
             maker_reserved: components["schemas"]["Amount"];
             maker_locked: components["schemas"]["Amount"];
             /** @description Output the taker received (claim or accepted delivery) with payment still locked. */
@@ -2370,7 +2370,7 @@ export interface components {
             /** @enum {string|null} */
             withdrawal_to: "signer" | null;
             /**
-             * @description `required` lists a `permit` request first: prepare it with `POST /v1/accounts/{venue}/setup/permit`, sign and submit it; take once `done`. `pending`: submitted, not yet effective. From a venue settled inside itself, `funding_plan` is null.
+             * @description `required` lists a `permit` request first: prepare it with `POST /v1/accounts/{venue}/setup/permit`, sign and submit it; take once `done`. `pending`: submitted, not yet effective.
              * @enum {string}
              */
             payment_setup: "done" | "pending" | "required" | (string & {});
@@ -2426,9 +2426,9 @@ export interface components {
         LeaseInput: {
             /** @description Ignored for a browser identity. */
             ttl_seconds: number;
-            /** @description Optional bot-reported RTT of the most recent successful HTTP request. Supply with api_rtt_age_ms. */
+            /** @description Round-trip time of your latest successful request, in ms; send with `api_rtt_age_ms`. Ignored for a browser identity. */
             api_rtt_ms?: number;
-            /** @description Monotonic age of the completed request sample when this lease was sent. Supply with api_rtt_ms. */
+            /** @description How long before this renewal that request completed, in ms; send with `api_rtt_ms`. */
             api_rtt_age_ms?: number;
         };
         Lease: {
@@ -2454,7 +2454,7 @@ export interface components {
             held: components["schemas"]["Amount"];
             /**
              * @deprecated
-             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             * @description Former name of `held`; removed once makers have moved.
              */
             escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
@@ -2620,7 +2620,7 @@ export interface components {
             held: components["schemas"]["Amount"];
             /**
              * @deprecated
-             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             * @description Former name of `held`; removed once makers have moved.
              */
             escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
@@ -2704,7 +2704,7 @@ export interface components {
             held: components["schemas"]["Amount"];
             /**
              * @deprecated
-             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             * @description Former name of `held`; removed once makers have moved.
              */
             escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
@@ -2762,7 +2762,7 @@ export interface components {
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
             settled_at: components["schemas"]["Timestamp"];
-            /** @description The initiating trader's primary wallet, not a linked venue wallet. Makers are not attributed to it. */
+            /** @description The taker's master address, not a linked venue address. */
             taker_address: components["schemas"]["Address"];
         };
         OrderHistoryPage: {
@@ -2944,7 +2944,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description `SNAPSHOT_TOO_LARGE`: more than 1000 rows; never partial. */
+        /** @description `SNAPSHOT_TOO_LARGE`: over 1000 orders, fills or quote identities, or 8000 book levels; never partial. */
         SnapshotTooLarge: {
             headers: {
                 [name: string]: unknown;
@@ -3058,7 +3058,6 @@ export interface operations {
                     "text/html": string;
                 };
             };
-            400: components["responses"]["ValidationError"];
         };
     };
     getVenues: {
@@ -3102,6 +3101,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            413: components["responses"]["PayloadTooLarge"];
+            /** @description Body not sent as `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
@@ -3162,7 +3172,15 @@ export interface operations {
             };
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["Forbidden"];
+            /** @description `FORBIDDEN`: paying from a venue is suspended after failed payments. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description `INSUFFICIENT_LIQUIDITY`: no route takes this amount. */
             409: {
                 headers: {
@@ -3175,7 +3193,6 @@ export interface operations {
             422: components["responses"]["VenueDisabled"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
-            502: components["responses"]["VenueUnavailable"];
             /** @description `OPERATOR_UNAVAILABLE`, retryable: settlement is not ready for new commitments; or `SNAPSHOT_TOO_LARGE`. */
             503: {
                 headers: {
@@ -3255,7 +3272,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every chain is ready. */
+            /** @description Every chain but exit-only escrows is ready. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3462,6 +3479,7 @@ export interface operations {
                     "application/json": components["schemas"]["VenueSetup"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             422: components["responses"]["AccountNotLinked"];
@@ -3722,7 +3740,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `STATE_CONFLICT`, also while another funding, take payment or escrow close is pending on the venue. */
+            /** @description `STATE_CONFLICT`: the order's state forbids it, a `client_request_id` reused with other terms, or another funding, take payment or escrow close pending on the venue. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4011,7 +4029,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
-            /** @description `FORBIDDEN` without `quote` scope or for a revoked quote identity, `ACCESS_REQUIRED`, or `MAKER_NOT_APPROVED` for a venue-held pool. */
+            /** @description `ACCESS_REQUIRED`, `FORBIDDEN` (no `quote` scope, quote identity revoked, or quoting disabled by an admin), or `MAKER_NOT_APPROVED` for a venue-held pool. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4223,7 +4241,7 @@ export interface operations {
             };
             400: components["responses"]["BadSignature"];
             401: components["responses"]["Unauthenticated"];
-            /** @description `NOT_FOUND`: no close to sign with this id. */
+            /** @description `NOT_FOUND`: no close with this id, or an expired one removed by a later `POST /v1/closes`. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4443,11 +4461,29 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
+            /** @description `NOT_FOUND`: unknown `previous_transfer_id`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             409: components["responses"]["StateConflict"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["AccountNotLinked"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
+            /** @description `VENUE_UNAVAILABLE`: the Lighter transfer fee a continuation (`previous_transfer_id`) pays is unknown. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getTransfer: {
@@ -4758,10 +4794,8 @@ export interface operations {
                 };
             };
             413: components["responses"]["PayloadTooLarge"];
-            422: components["responses"]["AccountNotLinked"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
-            502: components["responses"]["VenueUnavailable"];
         };
     };
     preparePaymentRefund: {
@@ -4822,7 +4856,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invalid deadline or beneficiary signature. */
+            /** @description `VALIDATION_ERROR`: deadline past, over one hour or after `t2`; `BAD_SIGNATURE`: not the beneficiary's. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4867,7 +4901,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description `VALIDATION_ERROR`: this transaction never delivers the fill. `reason`: `not_a_transfer`, `transfer_failed` (status 0 or above 3), `wrong_sender`, `wrong_recipient`, `wrong_asset` (not USDC collateral), `amount_short`, `wrong_memo`, `executed_late`, `before_fill` (an Aster transfer older than the fill) or `transfer_used` (it already delivers another fill). No `reason`: a malformed request or an escrow-settled fill. */
+            /** @description `VALIDATION_ERROR`: this transaction never delivers the fill. `reason`: `not_a_transfer`; on Lighter `transfer_failed` (status 0 or above 3), `wrong_sender`, `wrong_recipient`, `wrong_asset` (not USDC collateral) or `wrong_memo`; `amount_short`, `executed_late`, `before_fill` (an Aster transfer older than the fill) or `transfer_used` (it already settles another fill). No `reason`: a malformed request or an escrow-settled fill. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4887,7 +4921,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            /** @description `STATE_CONFLICT`, final. `reason`: `not_due` (payment not locked; fill delivered, refunded or expired), `refund_authorized` (refund consented) or `report_window_closed` (past `report_by`). */
+            /** @description `STATE_CONFLICT`. `reason`: `not_due` (payment not locked yet, or fill delivered, refunded or expired), `refund_authorized` (refund consented) or `report_window_closed` (past `report_by`); final except `not_due` before the lock. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4897,7 +4931,7 @@ export interface operations {
                 };
             };
             413: components["responses"]["PayloadTooLarge"];
-            /** @description `ACCOUNT_NOT_LINKED`: the maker's venue account is unlinked. */
+            /** @description `ACCOUNT_NOT_LINKED`: the maker's venue account is unlinked or changed. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4906,7 +4940,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue) or `not_final` (below the required status). */
+            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue; on Aster, until both Spot histories show this id as a USDT transfer from the maker to `delivery_to`) or `not_final` (Lighter, below the required status). */
             425: {
                 headers: {
                     [name: string]: unknown;
@@ -4917,7 +4951,7 @@ export interface operations {
             };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
-            /** @description `VENUE_UNAVAILABLE`: the venue did not answer, or the server's per-minute venue-read budget is spent. Report the same hash again. */
+            /** @description `VENUE_UNAVAILABLE`: the venue did not answer, or Lighter's per-minute read budget is spent. Report the same hash again. */
             502: {
                 headers: {
                     [name: string]: unknown;

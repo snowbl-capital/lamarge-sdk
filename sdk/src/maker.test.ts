@@ -215,3 +215,15 @@ test("leases report the prior completed HTTP RTT using a monotonic timer", async
     expect(bodies[1]).toEqual({ttl_seconds:30,api_rtt_ms:50,api_rtt_age_ms:25});
   } finally { clock.mockRestore(); }
 });
+
+test("a funding is followed by its preparation: a failed top-up throws though the order stays live",async()=>{
+  const states=["accepted","failed"];
+  globalThis.fetch=(async(url:string)=>{
+    if(String(url).includes("/maker/preparations/prep-1")) return Response.json({id:"prep-1",state:states.shift(),order:{...order(),state:"live",error:"venue refused the margin transfer"}});
+    return Response.json({...order(),state:"live",preparation_id:null});
+  }) as typeof fetch;
+  const master=new Maker(createClient({apiUrl:"http://localhost:8080"}),account,operator,"http://localhost:5173");
+  await expect(master.waitForFunding({...order(),state:"live",preparation_id:"prep-1"},10_000)).rejects.toThrow("Funding failed: venue refused the margin transfer");
+  globalThis.fetch=(async(url:string)=>String(url).includes("/maker/preparations/") ? Response.json({id:"prep-2",state:"complete",order:{...order(),state:"live"}}) : Response.json({...order(),state:"live",preparation_id:null})) as typeof fetch;
+  expect((await master.waitForFunding({...order(),preparation_id:"prep-2"})).state).toBe("live");
+});

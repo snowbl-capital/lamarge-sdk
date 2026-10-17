@@ -23,10 +23,13 @@ jobs:
           node-version: 22.12
           registry-url: https://registry.npmjs.org
       - name: The tag names the package's version
-        run: test "sdk-v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+        run: |
+          test "sdk-v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: bun install --frozen-lockfile
       - run: bun run check
       # Trusted publishing needs npm 11.5.1 or later.
       - run: npm install --global npm@11.6.2
       # A prerelease goes to the `next` tag, never to `latest`.
-      - run: npm publish --provenance --access public --tag "$(node -p 'require("./package.json").version.includes("-") ? "next" : "latest"')"
+      - run: |
+          tag=$(node -p 'require("./package.json").version.includes("-") ? "next" : "latest"')
+          npm publish --provenance --access public --tag "$tag"

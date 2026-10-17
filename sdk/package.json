@@ -1,0 +1,59 @@
+{
+  "name": "@lamarge/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "./aster": {
+      "types": "./dist/aster.d.ts",
+      "default": "./dist/aster.js"
+    },
+    "./lighter": {
+      "types": "./dist/lighter.d.ts",
+      "default": "./dist/lighter.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "scripts": {
+    "api:generate": "bun run scripts/generate-api.ts",
+    "api:check": "bun run scripts/generate-api.ts --check",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "check": "bun run api:check && bun run typecheck && bun test && bun run build && bun run check:package",
+    "check:package": "bun run scripts/check-package.ts"
+  },
+  "peerDependencies": {
+    "viem": "^2.38.0"
+  },
+  "peerDependenciesMeta": {
+    "viem": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@types/bun": "^1.4.2",
+    "openapi-typescript": "^7.13.0",
+    "publint": "0.3.25",
+    "typescript": "^5.9.0",
+    "viem": "2.56.9"
+  }
+}

@@ -1,0 +1,5710 @@
+export interface paths {
+    "/share/v1/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a site sharing image
+         * @description Public 1200 by 630 PNG; both filenames return the same image. Cacheable for one hour.
+         */
+        get: operations["getSiteShareImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/share/v1/trades/{id}/image.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a transfer sharing image
+         * @description Public 1200 by 630 PNG of a published trade: venues, settlement time and amounts rounded to four decimals. Cacheable for one hour.
+         */
+        get: operations["getTradeShareImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/share/trade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get explorer sharing metadata
+         * @description HTML head tags for a trade's explorer page, absolute URLs on the primary app origin; generic tags for a missing, invalid or unpublished trade or a lookup over two seconds. Not cached.
+         */
+        get: operations["getTradeShareMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/venues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List venues
+         * @description Every venue in display order, with its settlement terms, token, permit domain, margin-transfer format and deposit minimum (null when disabled). Check them against the [deployment values](/how-it-works#deployment-values) before signing.
+         */
+        get: operations["getVenues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/venues/aster/rpc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Aster signing network
+         * @description RPC URL of chain 1666 (`0x682`), which a wallet adds with `wallet_addEthereumChain` to sign an Aster transfer: wallets sign typed data only for their current chain. It answers only `eth_chainId` and `net_version`; the chain has no accounts, blocks or transactions.
+         */
+        post: operations["postAsterSigningRpc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/books": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a book
+         * @description Levels the taker pays on `from` and receives on `to`, best price first, then oldest; they are not reservations. A level is a quote that [admits takes](/how-it-works#quotes), with a signed expiry at least the maker timeout away and `min(available, max_fill)` at least `min_fill`. With a Hyperliquid `from`, or a pool held inside Lighter or Aster, the maker's balance must have been read within two minutes. Over 8000 candidate levels: 503 `SNAPSHOT_TOO_LARGE`.
+         */
+        get: operations["getBook"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the best route
+         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no take joins the pair (Lighter and Aster) or when that pays at least 10 bps more. The second take pays what the first delivers there, less what that venue keeps: the Lighter account's transfer fee, Aster's rounding to millionths. Each take is admitted as `POST /v1/takes` would admit it; where the second carries less than the first delivers, the first shrinks to fit and `capped` is true. Your own orders are left out and your Lighter account's fee counted; without a linked Lighter account no route goes through Lighter. A route through another venue never replaces a direct take that spends more. What would refuse the direct take, or every route, is the error; a venue between that cannot be used only leaves its routes out. Nothing is reserved; each take sweeps its book again.
+         */
+        get: operations["getRoute"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/trades/{id}/proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get signed trade proof
+         * @description The settled trade's signed maker `QuoteSet`, funding authorization (`FundOffer`, or the delivery for a pool held inside a venue) and taker `PayTake`, with digests and relayed transactions. Public once all three are recorded.
+         */
+        get: operations["getTradeProof"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/volume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get 24h volume
+         * @description Public trades between `a` and `b`, either way, settled in the last 24 hours, in `b` base units.
+         */
+        get: operations["getVolume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Health
+         * @description Settlement readiness; 503 with the same body when any chain is not `ready`.
+         */
+        get: operations["getHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get deployment info
+         * @description API version, limits, settlement timings, operator, deployments and access mode. Not a signing trust root: compare with independently reviewed configuration.
+         */
+        get: operations["getV1Info"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a sign-in message
+         * @description A one-use EIP-4361 message for the master address, valid ten minutes, on the request's `Origin` if allowed, else the main app origin. Check domain, URI, address and expiry before `personal_sign`.
+         */
+        post: operations["postAuthChallenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify a signed message
+         * @description Consumes the challenge and returns a revocable master session; a failed attempt leaves the challenge usable. The first sign-in creates the user; beyond 32 active sessions, the oldest are revoked.
+         */
+        post: operations["postAuthVerify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a master session
+         * @description Revokes one of the user's sessions, the current one included; a repeat answers 204. Credentials are unaffected.
+         */
+        delete: operations["deleteV1AuthSessionsId"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get my account
+         * @description The master address, its linked venue accounts and its access.
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/link/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a link message
+         * @description The EIP-191 message `address` signs to prove it controls the venue account: single use, valid ten minutes, not needed for the master address.
+         */
+        post: operations["postLinkChallenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/{venue}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read account setup
+         * @description The linked account's setup steps, each read from the venue now: a step the venue shows is recorded `done`, one it no longer accepts is `required` again with its `reason`. A step prepared but not signed carries its `to_sign`. `ready` once every step is done ([setup](/quickstart#set-up-venue-accounts)).
+         */
+        get: operations["getVenueSetup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/{venue}/setup/{step}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+                /** @description One of the venue's steps (`permit`, `agent`, `api_key`). */
+                step: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare or submit a setup step
+         * @description With `{}`, the request the linked address signs for the step, in `to_sign`; a step already done or pending answers without one. With its `ref` and the `signature`, submits it: Aster registers the agent at once (`done`), the permit and Lighter's key are relayed (`pending`) until the venue shows them. Read the [setup](/api-reference/account/setup) until `done`.
+         */
+        post: operations["postVenueSetupStep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a venue account
+         * @description One account per venue. The master address links without `nonce` or `signature`; another address sends the link challenge's. `setup` lists the steps left ([setup](/api-reference/account/setup)); relinking another address drops the steps done for the previous one. `venue_wallet` is the signer's Polymarket wallet or the Lighter master account index; without one, `WALLET_NOT_FOUND` ([venues](/how-it-works#venues-and-balances)).
+         */
+        post: operations["postLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/{venue}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlink a venue account
+         * @description `ACCOUNT_IN_USE` while an order on or quoting the venue is not `closed` (close `failed` ones too) or a fill or withdrawal is unfinished. Works on a disabled venue.
+         */
+        delete: operations["deleteLink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get balances
+         * @description Cached balances per linked venue, in venue order ([fields](/how-it-works#balances)); a read 15 seconds old queues a refresh. Unknown values are null; a value with its `error` or `chain_error` set is stale.
+         */
+        get: operations["getBalances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get my trading stats
+         * @description Settled output volume of the last 30 days per venue, Lighter and Aster included. Fees are zero.
+         */
+        get: operations["getStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/exposure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get my exposure
+         * @description A consistent snapshot per venue, Lighter and Aster included; a credential sees its identity's amounts. Locked payments and receipts are contingent. On escrow venues, check `chain_observation.current`; it is null on Lighter and Aster. Credential scope: `read`.
+         */
+        get: operations["getV1MeExposure"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/maker/{venue}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare maker funds or a quote
+         * @description Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account; an unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.
+         */
+        post: operations["prepareMaker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/maker/preparations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a maker preparation */
+        get: operations["getMakerPreparation"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel an unsigned maker preparation
+         * @description Cancels a `preparing` preparation, releasing its admission pause; repeating returns it, other states are `STATE_CONFLICT`. An unsigned preparation also cancels at expiry.
+         */
+        delete: operations["cancelMakerPreparation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/maker/preparations/{id}/signatures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit maker signatures
+         * @description Accepts every requested signature at once, before `expires_at`. A `margin_move` signed over ten minutes ago is `WITHDRAWAL_EXPIRED`; a funding is refused while a fill of the order is reserved; a changed order revision cancels the preparation. Once accepted, a retry returns it.
+         */
+        post: operations["submitMakerSignatures"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my orders
+         * @description Capital pools, nonterminal orders and orders holding funds, plus the 50 latest empty `closed` or `failed` ones, oldest first; a credential sees its identity's only. Over 1000 is 503 `SNAPSHOT_TOO_LARGE`: page with `/v1/orders/history`. Credential scope: `read`.
+         */
+        get: operations["getOrders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orders/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an order
+         * @description Credential scope: `read`.
+         */
+        get: operations["getOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orders/{id}/quotes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace the quote set
+         * @description Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply chain. Credential scope: `quote`.
+         */
+        put: operations["putQuotes"];
+        post?: never;
+        /**
+         * Pull the quotes
+         * @description Removes the order from admission and advances `cancel_epoch` on every call; drafts prepared before the receipt cannot be published. Earlier reservations continue and the signed set stays valid on chain ([cancellation](/how-it-works#cancellation)). Funds stay in escrow. Credential scope: `cancel`.
+         */
+        delete: operations["deleteQuotes"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orders/{id}/quotes/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a quote set
+         * @description Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished drafts per identity that are under five minutes old and before `valid_until`, else `RATE_LIMITED`. Credential scope: `quote`.
+         */
+        post: operations["prepareQuotes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quotes/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Atomically replace and cancel quotes
+         * @description Commits every update and cancel, or none. Updates follow `PUT /v1/orders/{id}/quotes`, cancels an unguarded `DELETE`. Results are sorted by order id. Credential scope: `quote` for `updates`, `cancel` for `cancels`.
+         */
+        post: operations["postV1QuotesBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quote-identities/{id}/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Renew quote lease
+         * @description Dead-man switch for new admissions, in server time: `ttl_seconds` for a credential identity, 9999-12-31T00:00:00Z for a browser one. Renewing after expiry advances the generation, so older quotes and drafts never return. Expiry cancels neither reserved fills nor signed sets on chain. Credential scope: `quote`.
+         */
+        put: operations["putV1QuoteIdentitiesIdLease"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quote-identities/{id}/quotes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel all identity quotes
+         * @description Atomically advances the identity's generation and every one of its orders' `cancel_epoch`; `orders` counts them, in any state. Reserved fills continue. Credential scope: `cancel`.
+         */
+        delete: operations["deleteV1QuoteIdentitiesIdQuotes"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/closes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a close
+         * @description Closes 1 to 50 of the user's orders (repeated ids count once) into their owners' venue margin. Empty orders close at once and `closing` ones are skipped; the rest need one `CloseOrders`, in the Hyperliquid escrow's domain, that the master signs and [submits](/api-reference/closes/submit-signature) within an hour. `STATE_CONFLICT` while an order is `preparing`, `moving` or `funding`.
+         */
+        post: operations["postCloses"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/closes/{id}/signatures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit close signature
+         * @description The master's `CloseOrders` signature, before its deadline: the orders become `closing` and leave the books. Once their reserved fills end, LaMarge releases the unlocked funds into the owner's margin, or into the available escrow balance if the venue refuses the deposit ([releasing capital](/how-it-works#releasing-capital)); a Lighter or Aster pool just closes. A retry returns the same orders.
+         */
+        post: operations["postCloseSignatures"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/escrow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my funds in escrow
+         * @description Orders with unlocked funds that your linked addresses own in each venue's current escrow, under any operator; close `managed` ones with `POST /v1/closes`, any by signature ([releasing capital](/how-it-works#releasing-capital)). Per address, at most 50 unmanaged orders are read: the zero-id balance, then the latest funded.
+         */
+        get: operations["getEscrow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/escrow/close/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a close by signature
+         * @description The `CloseOffer` your linked address signs to release an order's unlocked funds into your margin, or with `to_margin: false` into your wallet: escrow domain, random nonce, valid one hour. `STATE_CONFLICT` while a close of the order is pending, while a reserved fill or capital operation on a recorded order is pending, or for an unrecorded order under 1 token (the zero-id balance excepted). `VALIDATION_ERROR` for a zero-id release to margin below `release_minimum`.
+         */
+        post: operations["postEscrowClosePrepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/escrow/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close by signature
+         * @description Relays the prepared terms, signed by the linked address, as `closeOfferBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. A recorded order is `closing`, off the books, until the transaction is final or a minute past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, at 10 pending closes per owner and chain, or for a nonce reused with other terms; the same terms return the same close.
+         */
+        post: operations["postEscrowClose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my recoverable transfers
+         * @description Newest first, cancelled and completed included; follow `next_cursor` until null. Status lives in the linked withdrawal and take.
+         */
+        get: operations["getTransfers"];
+        put?: never;
+        /**
+         * Create a recoverable transfer
+         * @description Records a route that withdraws from venue margin, then takes; moves no funds and reserves nothing. No payment setup needed; `funding_plan` asks for a permit when wallet funds need one. Retrying with the same `client_transfer_id` returns the intent; changed terms are `STATE_CONFLICT`.
+         */
+        post: operations["postTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recover a transfer
+         * @description The intent and its linked operations; read before preparing more funding.
+         */
+        get: operations["getTransfer"];
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss a transfer without a take
+         * @description Blocks the intent's take and prepared withdrawal; repeats answer 204. Refused with a take or a `queued`, `submitting` or `unknown` withdrawal; relayed funds stay put. A route's first transfer (with `then`) whose take is final can be dismissed: its continuations that neither took nor hold a withdrawal in flight are cancelled with it, and what it delivered stays on the venue between.
+         */
+        delete: operations["cancelTransfer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}/withdrawal/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare this transfer's funding
+         * @description One withdrawal of `amount`, at most `amount_in`, from the payer's `from` margin to its escrow-chain address, for the take to deposit; on Aster the signed amount adds the venue fee. Retries return the same typed data until ten minutes after the first preparation, then `WITHDRAWAL_EXPIRED`: cancel and create another transfer. Another amount conflicts.
+         */
+        post: operations["prepareTransferWithdrawal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}/withdrawal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit this transfer's funding signature
+         * @description Submits the signed preparation, recorded before the venue is called; retries return that withdrawal with 200, even `refused`. Never sign another for an ambiguous `unknown` one.
+         */
+        post: operations["submitTransferWithdrawal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/takes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take at market
+         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). `STATE_CONFLICT` while another financial preparation is open on `from`; `FILL_IN_PROGRESS` while another take is unpaid. Persist `client_take_id`: the same body returns the same take.
+         */
+        post: operations["postTake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/takes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recover a take and its signing intents
+         * @description The taker's take, with its typed data while unsigned, also after expiry. Never sign an expired payment.
+         */
+        get: operations["getV1TakesId"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel a take
+         * @description Allowed until its signature is accepted, also after an unsigned expiry; repeats answer 204. Its `RESERVED` fills expire (`declined`), releasing their reservations.
+         */
+        delete: operations["deleteTake"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/takes/{id}/signatures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit take signatures
+         * @description The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once the maker is locked. Once accepted, retries return the current fills.
+         */
+        post: operations["postTakeSignatures"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills/{id}/refund/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare an early payment refund
+         * @description Maker master session only. Requires the payment `LOCKED` and, across the take, abandoned maker legs, no disclosed secret and no pending maker lock; a fill delivered inside its venue (Lighter, Aster) requires only its own leg abandoned and its secret undisclosed. Returns the `RefundPayment` consent for the beneficiary, valid one hour at most and until `t2` ([deadlines](/how-it-works#deadlines-and-outcomes)); `STATE_CONFLICT` while one is active.
+         */
+        post: operations["preparePaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills/{id}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Authorize an early payment refund
+         * @description Submits the beneficiary's `RefundPayment` signature; exact retries answer 204, even after settlement. The operator returns only this payment to the payer's available balance (finalized `Refunded` event); without consent it refunds after `t2`. For a fill delivered inside its venue, consent ends delivery reports (`refund_authorized`), even of a transfer executed in time.
+         */
+        post: operations["submitPaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills/{id}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report an in-venue delivery
+         * @description Reports the venue transfer that delivers a fill on Lighter or Aster ([active market making](/market-making#active-market-making)), with the maker's master session or a `quote` credential of the order's identity. The transfer moves at least `amount_out` from the maker's linked account to `delivery_to`, executes after the take and by `deliver_by`, and delivers only this fill. Lighter: the hash of an internal USDC transfer into collateral, memo the fill id zero-padded to 32 bytes, at status 3 (or 2 when `/v1/info` reports `settlement.delivery.min_status` 2). Aster: the `transferId` of a USDT transfer from the Spot wallet, as both accounts' Spot histories show. Accepted while the payment is `LOCKED` and `maker_leg` is `NONE` or `ABANDONED`, before `report_by` and any refund consent; the operator then claims the payment. Exact retries return the fill.
+         */
+        post: operations["submitDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my fills
+         * @description Nonfinal fills plus the latest 50 final, newest first: a session's taker and maker fills, a credential's identity's maker fills (scope `read`). Over 1000: 503 `SNAPSHOT_TOO_LARGE`; page with `/v1/fills/history`.
+         */
+        get: operations["getFills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/withdrawals/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a withdrawal
+         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less transfers relayed since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal on the venue is `STATE_CONFLICT`. On Aster the signed amount adds the venue fee. Validate before signing; relay within ten minutes.
+         */
+        post: operations["postWithdrawalPrepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/withdrawals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Relay a withdrawal
+         * @description Records the exact signed operation, then sends it; retries return the record and never resend. A `refused` withdrawal answers 502 `VENUE_REJECTED`, also on retry. Never replace an `unknown` one (transport loss or ambiguous answer): the venue stays blocked until the operator reconciles it.
+         */
+        post: operations["postWithdrawal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a maker credential
+         * @description Creates a maker credential and its quote identity (same `id`) with an immutable `quote_signer`; at most 32 active. Scopes: `read`, `quote`, `cancel`; none reaches financial routes. After a lost response, revoke the credential and create another.
+         */
+        post: operations["postV1Credentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/credentials/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a credential
+         * @description Atomically revokes bearer and identity, expires the lease, advances the generation and removes current quotes; reserved fills still settle. Irreversible; repeats answer 204.
+         */
+        delete: operations["deleteV1CredentialsId"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/credentials/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate credential bearer
+         * @description Replaces the bearer, keeping signer and identity; advances the generation and expires the lease, removing current quotes (renew the lease, prepare new drafts). Works on expired, not revoked, credentials. Returns the new bearer once.
+         */
+        post: operations["postV1CredentialsIdRotate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orders/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Page orders history
+         * @description Newest first by creation; a `read` credential sees its identity's orders. Rows show current state ([history](/streaming#history)).
+         */
+        get: operations["getV1OrdersHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/takes/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Page complete takes
+         * @description The taker's takes, newest first, each with all its fills; pages never split a take. Rows show current state ([history](/streaming#history)).
+         */
+        get: operations["getTakeHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Page fills history
+         * @description Newest first by creation; a `read` credential sees its identity's maker fills. Rows show current state ([history](/streaming#history)).
+         */
+        get: operations["getV1FillsHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/withdrawals/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Page withdrawals history
+         * @description Newest first by creation. Rows show current state ([history](/streaming#history)).
+         */
+        get: operations["getV1WithdrawalsHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/trades/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Page trade history
+         * @description Settled trades, newest first by settlement. `a` and `b` together filter a pair, either direction. `scope=mine` needs a session.
+         */
+        get: operations["getV1TradesHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Replay public events
+         * @description Events in commit order ([HTTP replay](/streaming#http-replay)). Persist `next_cursor` after every page, even an empty one with `has_more: true`, until `has_more` is false. A cursor outside retention (seven days or the last million events) or ahead of the journal: 410 `RESYNC_REQUIRED`; take a snapshot.
+         */
+        get: operations["getV1Events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read public snapshot
+         * @description Public books and a committed cursor to replay strictly after. Over 1000 orders: 503 `SNAPSHOT_TOO_LARGE`, never partial. History pages give no replay cursor.
+         */
+        get: operations["getV1Snapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Replay private and public events
+         * @description Public plus your private events; a credential gets only its identity's orders, maker fills and lease. Credential scope: `read`.
+         */
+        get: operations["getV1MeEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read private and public snapshot
+         * @description Your nonterminal orders and fills and unrevoked quote identities, with a replay cursor; `books` stays empty. Over 1000 rows in one: 503. Credential scope: `read`.
+         */
+        get: operations["getV1MeSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket event replay
+         * @description First text frame: a `StreamSubscription`; never put `token` in the URL ([WebSocket](/streaming#websocket)). Private streams need a session or `read` credential, rechecked about every 500 ms. Frames are `EventPage`s of up to 100 events, empty about every 500 ms when idle. A `StreamControl` precedes closure on authorization, capacity, resync or journal failure. Any later client message other than ping or pong, or a send blocked five seconds, closes the socket.
+         */
+        get: operations["getV1Stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
+export type webhooks = Record<string, never>;
+export interface components {
+    schemas: {
+        /** @description A venue id from `GET /v1/venues`. */
+        VenueId: string;
+        /** @description Decimal base units of the venue's token (`decimals` in `GET /v1/venues`), below 2^256: with 6 decimals, `"1000000"` is 1 token. */
+        Amount: string;
+        /** @description Any case accepted; responses are lowercase except inside typed data and signed messages. */
+        Address: string;
+        Bytes32: string;
+        /** @description A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2). */
+        Signature: string;
+        /** @description An EOA signature; for `quote_set` only, also an opaque ERC-1271 signature (up to 16384 bytes) from a quote delegate deployed on the supply chain. */
+        QuoteSignature: string;
+        /**
+         * Format: date-time
+         * @description RFC 3339 UTC (`Z` or `+00:00`), fractional seconds optional.
+         */
+        Timestamp: string;
+        Error: {
+            error: {
+                /** @description Stable; see [errors](/api-reference/overview#errors). */
+                code: string;
+                /** @description Human-readable; do not parse. */
+                message: string;
+                /** @description Stable sub-case of `code`, where the route lists its values. */
+                reason?: string;
+                /** @description `SETUP_REQUIRED`: the venue whose account needs setup. */
+                venue?: components["schemas"]["VenueId"];
+                /**
+                 * @description `SETUP_REQUIRED`: the step to do, by [setup](/api-reference/account/setup).
+                 * @enum {string}
+                 */
+                step?: "permit" | "agent" | "api_key" | (string & {});
+                request_id: components["schemas"]["Uuid"];
+                /** @description True for 425, 429, 503 and 502 except `VENUE_REJECTED`. Retry with the same client id, draft or signed operation; an uncertain withdrawal may have succeeded. */
+                retryable: boolean;
+            };
+        };
+        Venue: {
+            id: components["schemas"]["VenueId"];
+            name: string;
+            /** @description Enabled and configured in this deployment. */
+            enabled: boolean;
+            /**
+             * @description `escrow`: the maker's side of each fill locks in the escrow on `chain`. `venue` (Lighter, Aster): the maker delivers inside the venue ([active market making](/market-making#active-market-making)); `chain` only names signing terms. Null for a disabled venue.
+             * @enum {string|null}
+             */
+            settlement: "escrow" | "venue" | null;
+            /** @description Null for a disabled venue. */
+            chain: components["schemas"]["EscrowChain"] | null;
+            /** @description Margin-transfer format; null when disabled or without margin transfers (Lighter). */
+            margin_move: components["schemas"]["MarginMoveSpec"] | null;
+            /** @description Smallest amount the venue credits (deposit contract, or Lighter's 1 USDC transfer); a smaller escrow release stays in escrow. Null when none. */
+            release_minimum: string | null;
+        };
+        EscrowChain: {
+            /** @description 999 HyperEVM, 137 Polygon; on a venue settled inside itself its signing chain id, 304 for Lighter (`escrow` its zkLighter contract, `token` Ethereum's USDC), 56 for Aster (`escrow` its vault, `token` BSC's USDT). */
+            id: number;
+            escrow: components["schemas"]["Address"];
+            token: components["schemas"]["Address"];
+            symbol: string;
+            decimals: number;
+            /** @description EIP-2612 domain name and version; the chain id and token complete it. Null on a venue settled inside itself. */
+            permit: {
+                name: string;
+                version: string;
+            } | null;
+        };
+        MarginMoveSpec: {
+            /** @description `primaryType` of a `margin_move` item. */
+            primary_type: string;
+            types: components["schemas"]["Eip712Types"];
+            domain: components["schemas"]["Eip712Domain"];
+            /** @description Fields every transfer signs with these values; addresses compare case-insensitively. Fields that vary: amount, nonce or salt and time; Hyperliquid `sourceDex`; Polymarket `account` (your signer) and `to` (`venue_wallet`, signer or deposit address per destination); Aster `destination` (your signer) and `fee`. */
+            fixed: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description Signed amount format: integer base units, or decimal tokens such as `"5.25"`.
+             * @enum {string}
+             */
+            amount: "base_units" | "decimal" | (string & {});
+            /** @description `to` values `POST /v1/withdrawals/prepare` accepts on this venue. */
+            destinations: ("wallet" | "signer" | "escrow")[];
+        };
+        Book: {
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            /** @description Most one fill takes from one level, in `to` base units. */
+            max_fill: components["schemas"]["Amount"];
+            levels: components["schemas"]["Level"][];
+        };
+        Route: {
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            /** @description What the first take pays, in `from` base units. */
+            amount_in: components["schemas"]["Amount"];
+            /** @description True when the route spends less than the request beyond rounding: what it leaves buys a base unit of output or more per part. */
+            capped: boolean;
+            /** @description What the last take delivers, in `to` base units. */
+            amount_out: components["schemas"]["Amount"];
+            /** @description The takes in order. Of two, the first delivers on the venue between, from where the second pays; its `amount_in` is less than the first's `amount_out` by what that venue keeps. */
+            legs: {
+                from: components["schemas"]["VenueId"];
+                to: components["schemas"]["VenueId"];
+                amount_in: components["schemas"]["Amount"];
+                amount_out: components["schemas"]["Amount"];
+                /** @description Price levels the take goes through. */
+                parts: number;
+            }[];
+        };
+        /** @description One quote of an order: the taker pays `receive` on `from` per `supply` on `to`. An order may have several levels per book. */
+        Level: {
+            order_id: components["schemas"]["Bytes32"];
+            /** @description The quote's position in the order's signed set. */
+            quote_index: number;
+            /** @description Price denominator and this quote's budget in the sequence, in `to` base units. */
+            supply: components["schemas"]["Amount"];
+            /** @description Price numerator, in `from` base units. */
+            receive: components["schemas"]["Amount"];
+            /** @description Least of: unlocked funds less reserved fills and delivery fees; `quote_size` less this sequence's fills; `supply` less this quote's fills (abandoned maker legs excluded). An order's levels in a book share the first two, best price first. */
+            available: components["schemas"]["Amount"];
+            /** @description Executable minimum, `to` base units: the signed minimum, raised so the payment meets the `from` venue's `release_minimum`. The `to` venue's minimum applies to a take's total. */
+            min_fill: components["schemas"]["Amount"];
+            /** @description Signed on-chain settlement deadline, after `valid_until`. */
+            expires_at: components["schemas"]["Timestamp"];
+            quoted_at: components["schemas"]["Timestamp"];
+            sequence: number;
+            /** @description Last admission time. */
+            valid_until: components["schemas"]["Timestamp"];
+        };
+        SignedAgreement: {
+            signer: components["schemas"]["Address"];
+            typed_data: components["schemas"]["TypedData"];
+            signature: components["schemas"]["QuoteSignature"];
+            digest: components["schemas"]["Bytes32"];
+        };
+        TradeProof: {
+            /** @enum {integer} */
+            version: 1;
+            /** Format: uuid */
+            id: string;
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            swap_id: components["schemas"]["Bytes32"];
+            order_id: components["schemas"]["Bytes32"];
+            sequence: number;
+            /** @description The priced quote's position in the maker's signed set. */
+            quote_index: number;
+            maker_owner: components["schemas"]["Address"];
+            payer: components["schemas"]["Address"];
+            maker_recipient: components["schemas"]["Address"];
+            taker_recipient: components["schemas"]["Address"];
+            settled_at: components["schemas"]["Timestamp"];
+            maker: components["schemas"]["SignedAgreement"];
+            /** @description The owner's `FundOffer`; null for in-venue inventory, whose maker authority LaMarge attests. */
+            maker_authorization: components["schemas"]["SignedAgreement"] | null;
+            /** @description The in-venue delivery, for inventory held inside the venue; null otherwise. */
+            delivery: {
+                venue: components["schemas"]["VenueId"];
+                /** @description The Lighter transaction hash */
+                tx_hash: string;
+                /** @description The taker's account on the venue: a Lighter index in decimal, an Aster address. */
+                account: string | null;
+                /** Format: date-time */
+                executed_at: string | null;
+            } | null;
+            /** @description The payer's `PayTake`; this trade's payment is its `LockPayment` with this `swap_id`. Null for a take paid inside a venue (see `payment`). */
+            taker: components["schemas"]["SignedAgreement"] | null;
+            /** @description The taker's executed transfer, for a take paid inside the venue (Lighter, Aster); null otherwise. */
+            payment: {
+                venue: components["schemas"]["VenueId"];
+                /** @description Lighter's transaction hash, without `0x`, or Aster's `transferId`. */
+                tx_hash: string;
+                executed_at: components["schemas"]["Timestamp"] | null;
+                /** @description The transfer as sent: Lighter's transaction, or on Aster `{msg, signature}`, the request the payer's wallet signed as `Message{msg}` at chain 1666. */
+                tx_info: {
+                    [key: string]: unknown;
+                };
+            } | null;
+            transactions: components["schemas"]["Transaction"][];
+        };
+        Volume: {
+            a: components["schemas"]["VenueId"];
+            b: components["schemas"]["VenueId"];
+            /** @description In `b` base units. */
+            volume_24h: components["schemas"]["Amount"];
+            trades_24h: number;
+        };
+        Health: {
+            /** @enum {string} */
+            status: "ok" | "degraded" | (string & {});
+            ready: boolean;
+            server_time: components["schemas"]["Timestamp"];
+            /** @description Relay transactions pending on all chains. */
+            pending_transactions: number;
+            /** @description Events committed but not yet given a cursor. */
+            journal_unpublished: number;
+            journal_oldest_unpublished_seconds: number | null;
+            chains: components["schemas"]["ChainHealth"][];
+        };
+        Challenge: {
+            /** @description Sign with `personal_sign` exactly as given; on Aster, sign `typed_data` instead. */
+            message: string;
+            nonce: string;
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description Aster only: the agent approval (`AsterSignTransaction` domain, chain 56). Sign it with `eth_signTypedData_v4` at once: Aster accepts only a recent nonce. Linking approves LaMarge's agent, only `canPerpTrade`, for 365 days. */
+            typed_data?: components["schemas"]["TypedData"];
+        };
+        Session: {
+            token: string;
+            expires_at: components["schemas"]["Timestamp"];
+            session_id: components["schemas"]["Uuid"];
+        };
+        LinkedAccount: {
+            setup: components["schemas"]["SetupSteps"];
+            venue: components["schemas"]["VenueId"];
+            /** @description Owner of the venue account; signs its transfers. */
+            address: components["schemas"]["Address"];
+            /** @description Polymarket: the venue wallet next to the signer. Lighter: the account index. Null elsewhere. */
+            venue_wallet: string | null;
+            linked_at: components["schemas"]["Timestamp"];
+        };
+        /** @description The account's setup steps as recorded, without reading the venue: Hyperliquid and Polymarket `permit`, Aster `agent`, Lighter `api_key` (when paying from Lighter is on). A use whose steps are not `done` answers `SETUP_REQUIRED` naming the venue and step: making needs `permit` and `agent`, paying `agent` and `api_key` (wallet funds also the permit, read when used), receiving `agent`. An Aster account without its agent is not read. */
+        SetupSteps: components["schemas"]["SetupStatus"][];
+        SetupStatus: {
+            /** @enum {string} */
+            step: "permit" | "agent" | "api_key" | (string & {});
+            /**
+             * @description `pending`: submitted, not yet shown by the venue (ten minutes at most).
+             * @enum {string}
+             */
+            status: "done" | "pending" | "required" | (string & {});
+            /** @description Why a step done before is required again: the venue refused it, it expired, the linked address or LaMarge's escrow, agent or key changed. */
+            reason: string | null;
+            /** @description When the step lapses (Aster's agent approval, 365 days). */
+            expires_at: components["schemas"]["Timestamp"] | null;
+            needed_for: ("make" | "pay" | "receive")[];
+        };
+        SetupStep: components["schemas"]["SetupStatus"] & {
+            /** @description The request to sign, returned by preparing a required step: `permit` (EIP-712 `typed_data`), `aster_approval` (EIP-712 `typed_data`, valid 60 seconds) or `lighter_api_key` (`message`, signed with `personal_sign`). Submit it with its `ref`. */
+            to_sign: null | {
+                /** @enum {string} */
+                kind: "permit" | "aster_approval" | "lighter_api_key" | (string & {});
+                signer: components["schemas"]["Address"];
+                ref: string;
+                typed_data?: components["schemas"]["TypedData"];
+                message?: string;
+                expires_at?: components["schemas"]["Timestamp"];
+            };
+            /** @description The permit's relay transaction, while one is known. */
+            hash: string | null;
+        };
+        VenueSetup: {
+            venue: components["schemas"]["VenueId"];
+            address: components["schemas"]["Address"];
+            /** @description Every step is done. */
+            ready: boolean;
+            steps: components["schemas"]["SetupStep"][];
+        };
+        Me: {
+            master_address: components["schemas"]["Address"];
+            created_at: components["schemas"]["Timestamp"];
+            accounts: components["schemas"]["LinkedAccount"][];
+            quote_identity_id: components["schemas"]["Uuid"];
+            access: components["schemas"]["AccessState"];
+            admin: boolean;
+        };
+        /**
+         * @description Whether the user may make new commitments: `required` in invite mode until a code is redeemed or an admin admits the user; admins always `granted`.
+         * @enum {string}
+         */
+        AccessState: "granted" | "required" | "suspended" | (string & {});
+        Balance: {
+            setup: components["schemas"]["SetupSteps"];
+            holdings: components["schemas"]["Holdings"];
+            portfolio: components["schemas"]["PortfolioObservation"];
+            venue: components["schemas"]["VenueId"];
+            address: components["schemas"]["Address"];
+            /** @description Null on venues without one. */
+            venue_wallet: string | null;
+            /** @description Null before the first read. */
+            equity: string | null;
+            /** @description What can leave the venue margin. */
+            withdrawable: string | null;
+            /** @description Estimated venue withdrawal fee; 0 when none, null when unavailable. Rechecked at preparation. */
+            withdrawal_fee: string | null;
+            /** @description True when `withdrawable` is only an upper bound from the venue's public data; false while `read_at` is null ([venues](/how-it-works#venues-and-balances)). */
+            withdrawable_estimated: boolean;
+            /** @description Account mode on venues with several ([venues](/how-it-works#venues-and-balances)). */
+            mode: string | null;
+            /** @description False while the venue knows no account for the address; true while `read_at` is null. */
+            has_account: boolean;
+            /** @description Venue token outside the margin, where the venue has one ([venues](/how-it-works#venues-and-balances)). */
+            wallet: string | null;
+            /** @description Token balance of the linked address on the escrow chain. */
+            chain_balance: string | null;
+            /** @description The available balance (order ID zero), which takes pay from. Read with `chain_balance`. */
+            escrow_balance: string | null;
+            /** @description Waiting at `deposit_address` to be swept into the available balance ([balances](/how-it-works#balances)). Read with `chain_balance`. */
+            deposit_balance: string | null;
+            /** @description Tokens sent here become the linked address's available balance; null without an escrow. */
+            deposit_address: components["schemas"]["Address"] | null;
+            /**
+             * Format: date-time
+             * @description Last successful venue read.
+             */
+            read_at: string | null;
+            /** @description Why the last venue read failed; null on success. */
+            error: string | null;
+            chain_read_at: components["schemas"]["Timestamp"] | null;
+            chain_error: string | null;
+        };
+        /**
+         * @description Where `held` is: `escrow`, unlocked in the escrow; `venue`, a Lighter or Aster pool's share of its account's balance, part of that venue's `equity`.
+         * @enum {string}
+         */
+        HeldIn: "escrow" | "venue" | (string & {});
+        /** @description What LaMarge holds for the account, read in the same snapshot as `portfolio`, each amount once, in the venue token's base units. */
+        Holdings: {
+            /** @description Movable or committable now: the venue's withdrawable margin less what a pool still owes, the wallets, and the escrow's available balance. */
+            available: string;
+            /** @description `total` − `available`: escrow orders, fills in progress, deposits awaiting the sweep, what a pool owes and the margin positions use. */
+            locked: string;
+            /** @description Unlocked escrow of the account's orders this deployment operates, Lighter and Aster pools excluded. */
+            orders: components["schemas"]["Amount"];
+            /** @description A Lighter or Aster pool's inventory: part of `equity`, never added to it. */
+            pool: components["schemas"]["Amount"];
+            /** @description Legs of the account's fills locked in escrow, as maker or taker. */
+            trades: components["schemas"]["Amount"];
+            /** @description `equity` + `wallet` + `chain_balance` + `escrow_balance` + `deposit_balance` + `orders` + `trades`, an unread value counting as zero; signed, as `equity` can be negative. */
+            total: string;
+        };
+        Stats: {
+            /** @description One entry per configured escrow chain, by output venue. */
+            assets: components["schemas"]["StatsAsset"][];
+            trades_30d: number;
+            /** @constant */
+            maker_fee_bps: 0;
+            /** @constant */
+            taker_fee_bps: 0;
+        };
+        /** @description EIP-712 typed data for `eth_signTypedData_v4`. Keep each integer as prepared, JSON number or decimal string. */
+        TypedData: {
+            types: components["schemas"]["Eip712Types"];
+            primaryType: string;
+            domain: components["schemas"]["Eip712Domain"];
+            message: {
+                [key: string]: unknown;
+            };
+        };
+        Eip712Types: {
+            [key: string]: {
+                name: string;
+                type: string;
+            }[];
+        };
+        Eip712Domain: {
+            name: string;
+            version?: string;
+            chainId: number;
+            verifyingContract: components["schemas"]["Address"];
+        };
+        /** @description An order of a linked address in an escrow, with its unlocked funds. */
+        EscrowOrder: {
+            venue: components["schemas"]["VenueId"];
+            /** @description Zero is the owner's available balance; other ids are funded orders. */
+            order_id: components["schemas"]["Bytes32"];
+            owner: components["schemas"]["Address"];
+            /** @description Unlocked; what a close releases. */
+            available: components["schemas"]["Amount"];
+            /** @description Operator named at funding. */
+            operator: components["schemas"]["Address"];
+            /** @description Funded with this deployment's operator; `POST /v1/closes` can close it. */
+            managed: boolean;
+            /** @description Your own order operated by this deployment, already counted in `/v1/balances` `holdings.orders`; the others add to it. */
+            in_balances: boolean;
+            /** @description A close by signature is pending. */
+            closing: boolean;
+        };
+        /** @description One item to sign with `eth_signTypedData_v4`. */
+        ToSign: {
+            /**
+             * @description Signer: the quote signer for `quote_set`, the master for `close_orders`, else the linked owner.
+             * @enum {string}
+             */
+            kind: "margin_move" | "fund" | "quote_set" | "close_orders" | "pay_take" | "close_offer" | "refund_payment" | (string & {});
+            signer: components["schemas"]["Address"];
+            /**
+             * Format: uuid
+             * @description The take id for `pay_take`; the fill id for `refund_payment`.
+             */
+            fill_id?: string;
+            typed_data: components["schemas"]["TypedData"];
+        };
+        /** @description A take paid from Lighter: sign Lighter's owner message for the transfer `typed_data` names with `personal_sign`, not EIP-712. */
+        LighterTransferItem: {
+            /** @enum {string} */
+            kind: "lighter_transfer" | (string & {});
+            /** @description The taker's linked Lighter address, which signs `L1Sig`. */
+            signer: components["schemas"]["Address"];
+            /**
+             * Format: uuid
+             * @description The take id.
+             */
+            fill_id: string;
+            typed_data: components["schemas"]["LighterTransferTerms"];
+        };
+        /** @description The internal transfer LaMarge sends from your Lighter account once the maker is locked, signed by its key at index 254 and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
+        LighterTransferTerms: {
+            /** @description The taker's linked Lighter account. */
+            from_account_index: number;
+            /** @description The maker's linked Lighter account. */
+            to_account_index: number;
+            amount: components["schemas"]["Amount"];
+            /** @description What Lighter charges the taker's account on top. */
+            usdc_fee: components["schemas"]["Amount"];
+            /** @description The fill id's 16 bytes then 16 zero bytes, as 64 hexadecimal characters. */
+            memo: string;
+            /** @description The nonce of LaMarge's key the transfer uses. */
+            nonce: number;
+        };
+        /** @description A take paid from Aster: the transfer request itself, which your wallet signs with `eth_signTypedData_v4` at chain 1666 ([add that network](/api-reference/market-data/aster-signing-network)). LaMarge relays it once the maker is locked; Aster refuses it from about a minute after its nonce. Nothing else can be sent with it. */
+        AsterTransferItem: {
+            /** @enum {string} */
+            kind: "aster_transfer" | (string & {});
+            /** @description The taker's linked Aster address. */
+            signer: components["schemas"]["Address"];
+            /**
+             * Format: uuid
+             * @description The take id.
+             */
+            fill_id: string;
+            /** @description `Message{msg}`, `AsterSignTransaction` domain, chain 1666, where `msg` is `asset=USDT&amount=…&toAddress=…&clientTranId=…&nonce=…&user=…`: `amount_in` with six decimals at most, rounded up, to the maker's linked Aster address, the take id in 32 hexadecimal characters, a microsecond nonce 55 seconds ahead, from your address, addresses checksummed. */
+            typed_data: components["schemas"]["TypedData"];
+        };
+        /** @description Aster only, required until the withdrawal is recorded (exact retries need none): the account's own signature over this withdrawal request, relayed as is within 50 seconds of `nonce`. */
+        AsterEnvelope: {
+            /** @description The account itself. */
+            signer: components["schemas"]["Address"];
+            /** @description The current time in microseconds. */
+            nonce: string;
+            /** @description The account's EIP-712 signature of `Message{msg}`, `AsterSignTransaction` domain, chain 56, where `msg` is `chainId=56&asset=USDT&amount=…&fee=…&receiver=…&userNonce=…&userSignature=…&signatureChainId=56&nonce=…&user=…&signer=…`: the withdrawal's `amount`, `fee`, destination and `nonce`, its signature lowercase with v 27 or 28, then this nonce and the account twice, addresses checksummed. */
+            signature: components["schemas"]["Signature"];
+        };
+        Signatures: {
+            /** @description One per requested (`kind`, `fill_id`), no extras or duplicates; a close uses its first `close_orders` item. */
+            signatures: {
+                kind: string;
+                /**
+                 * Format: uuid
+                 * @description Take items only.
+                 */
+                fill_id?: string;
+                signature: components["schemas"]["QuoteSignature"];
+                /** @description An Aster `margin_move` only. */
+                envelope?: components["schemas"]["AsterEnvelope"];
+            }[];
+        };
+        MakerQuoteInput: {
+            /** @description Another enabled venue of a supported pair, where the owner has a linked, set-up account. */
+            receive_venue: components["schemas"]["VenueId"];
+            receive: components["schemas"]["Amount"];
+            /** @description At least 1 token, at most `amount` and `fill_max`. */
+            min_fill: components["schemas"]["Amount"];
+            /** @description Browser identity: default 0, no expiry. API identities: 1–300, default 300. */
+            quote_validity_seconds?: number;
+            replace?: components["schemas"]["ReplacedQuote"];
+        };
+        /** @description The `receive_venue` quote this one replaces: the current set's `sequence` and the quote's position. Without it, the quote adds a price level. An older `sequence` is `STATE_CONFLICT`; a position quoting another venue, `VALIDATION_ERROR`. */
+        ReplacedQuote: {
+            sequence: number;
+            index: number;
+        };
+        /**
+         * @description Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit, awaited on top of the tokens already at the linked address, which stay unused.
+         * @enum {string}
+         */
+        FundingSource: "wallet" | "venue" | (string & {});
+        MakerInput: {
+            client_request_id: components["schemas"]["ClientId"];
+            /** @description Default the browser identity; an API identity needs an active credential. */
+            quote_identity_id?: components["schemas"]["Uuid"];
+            /** @description `supply` with `quote`, else a deposit. A pool's first funding is at least 5 tokens. */
+            amount: components["schemas"]["Amount"];
+            quote?: components["schemas"]["MakerQuoteInput"];
+            funding_source: components["schemas"]["FundingSource"];
+        };
+        MakerPreparation: {
+            id: components["schemas"]["Uuid"];
+            client_request_id: components["schemas"]["ClientId"];
+            /** @enum {string} */
+            state: "preparing" | "accepted" | "complete" | "cancelled" | "failed" | (string & {});
+            venue: components["schemas"]["VenueId"];
+            order: components["schemas"]["Order"];
+            to_sign: components["schemas"]["ToSign"][];
+            sequence: number | null;
+            /** @description One hour after preparation, ten minutes with a `margin_move`; then cancelled if unsigned. */
+            expires_at: components["schemas"]["Timestamp"];
+            expected_revision: components["schemas"]["Cursor"];
+            intent: {
+                amount: components["schemas"]["Amount"];
+                quote: {
+                    receive_venue: components["schemas"]["VenueId"];
+                    receive: string;
+                    min_fill: string;
+                    quote_validity_seconds: number | null;
+                    replace?: components["schemas"]["ReplacedQuote"];
+                } | null;
+                quote_identity_id: components["schemas"]["Uuid"];
+                funding_source: components["schemas"]["FundingSource"];
+            };
+            funding: {
+                existing_available: components["schemas"]["Amount"];
+                added_amount: components["schemas"]["Amount"];
+                wallet_amount: components["schemas"]["Amount"];
+                venue_amount: components["schemas"]["Amount"];
+                idle_amount: components["schemas"]["Amount"];
+            };
+        };
+        Order: {
+            preparation_id: components["schemas"]["Uuid"] | null;
+            /** @description Current pool of its quote identity, venue and owner. */
+            capital_pool: boolean;
+            held_in: components["schemas"]["HeldIn"];
+            /** @description The escrow's `offerId`. */
+            id: components["schemas"]["Bytes32"];
+            /** @description Supply venue. */
+            venue: components["schemas"]["VenueId"];
+            /** @description Initial receiving venue; null for a deposit without a quote or an in-venue pool. */
+            receive_venue: components["schemas"]["VenueId"] | null;
+            /** @description The escrow offer's owner, the maker's linked address on `venue`. */
+            owner_address: components["schemas"]["Address"];
+            state: components["schemas"]["OrderState"];
+            /** @description Why the order, its funding or its last close failed. */
+            error: string | null;
+            /** @description Funded amount; inside a venue (Lighter, Aster), the maker's cap that deliveries consume. */
+            amount: components["schemas"]["Amount"];
+            /** @description What the order holds, where `held_in` says: unlocked escrow; for a pool, its account's transferable balance at the last read less deliveries since, within the cap left. */
+            held: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             */
+            escrow_available: components["schemas"]["Amount"];
+            /** @description Inside a venue, the last-read per-delivery fee, held back per reserved fill and for the next; `0` for an escrow order. */
+            delivery_fee: components["schemas"]["Amount"];
+            revision: components["schemas"]["Cursor"];
+            /** @description Unlocked inventory less unlocked admitted fills and their delivery fees; ignores quotes. Shared across receiving venues. */
+            available_to_quote: components["schemas"]["Amount"];
+            /** @description Settled fills' payments per paying venue, in its base units. */
+            received_by_venue: {
+                venue: components["schemas"]["VenueId"];
+                amount: components["schemas"]["Amount"];
+            }[];
+            /** @description `quote_size` left in the current sequence, capped by `available_to_quote`. Check `quote_set.active` too. */
+            quotable: components["schemas"]["Amount"];
+            /** @description Taken by settled fills, in `venue` base units. */
+            filled: components["schemas"]["Amount"];
+            /** @description Highest stored quote sequence; 0 without one. */
+            last_sequence: number;
+            /** @description Null without a current quote set; `active` covers its validity, the lease and the identity. */
+            quote_set: components["schemas"]["QuoteSet"] | null;
+            margin_move: components["schemas"]["MarginMove"] | null;
+            /** @description Relayed transactions, oldest first: `fund`, `close`. */
+            transactions: components["schemas"]["Transaction"][];
+            created_at: components["schemas"]["Timestamp"];
+            updated_at: components["schemas"]["Timestamp"];
+            /** @description `client_request_id` of the creating preparation. */
+            client_order_id: components["schemas"]["ClientId"];
+            quote_identity_id: components["schemas"]["Uuid"];
+            quote_signer: components["schemas"]["Address"];
+        };
+        QuoteSet: {
+            sequence: number;
+            expires_at: components["schemas"]["Timestamp"];
+            quotes: (components["schemas"]["Quote"] & {
+                /** @description What this quote alone can still fill. */
+                available: components["schemas"]["Amount"];
+                /** @description What its book level shows once the order's better levels draw on shared funds; zero when hidden. */
+                offered: components["schemas"]["Amount"];
+            })[];
+            signature: components["schemas"]["QuoteSignature"];
+            created_at: components["schemas"]["Timestamp"];
+            valid_until: components["schemas"]["Timestamp"];
+            /** @description Admission budget of this sequence; not signed on chain. */
+            quote_size: components["schemas"]["Amount"];
+            identity_generation: components["schemas"]["Cursor"];
+            active: boolean;
+        };
+        /** @description As signed; price is `receive` on `venue` per `supply` of the order's venue. */
+        Quote: {
+            venue: components["schemas"]["VenueId"];
+            chain_id: number;
+            token: components["schemas"]["Address"];
+            recipient: components["schemas"]["Address"];
+            supply: components["schemas"]["Amount"];
+            receive: components["schemas"]["Amount"];
+            min_fill: components["schemas"]["Amount"];
+        };
+        QuoteSetInput: {
+            draft_id: components["schemas"]["Uuid"];
+            signature: components["schemas"]["QuoteSignature"];
+        };
+        /** @description Move out of the venue margin, relayed as a withdrawal. */
+        MarginMove: {
+            venue: components["schemas"]["VenueId"];
+            amount: components["schemas"]["Amount"];
+            /** @description The venue's transfer reference, if any. */
+            venue_ref: string | null;
+            state: components["schemas"]["WithdrawalState"];
+            error: string | null;
+            at: components["schemas"]["Timestamp"];
+        };
+        Transaction: {
+            /** @enum {string} */
+            kind: "fund" | "close" | "payment" | "maker_lock" | "taker_claim" | "maker_claim" | "refund_payment" | "refund_maker" | (string & {});
+            chain_id: number;
+            /** @description Null if never broadcast. */
+            hash: string | null;
+            /**
+             * @description `pending`: no finalized receipt; `replaced`: its nonce taken by a replacement, still watched; `reverted`: reverted on chain; `failed`: never broadcast (failed gas estimation included) or its nonce went to another transaction.
+             * @enum {string}
+             */
+            status: "pending" | "replaced" | "mined" | "reverted" | "failed" | (string & {});
+            error: string | null;
+            at: components["schemas"]["Timestamp"];
+        };
+        TransferInput: {
+            client_transfer_id: components["schemas"]["ClientId"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            min_out: components["schemas"]["Amount"];
+            /** @default 8 */
+            max_parts?: number;
+            /** @description The linked account on `from`. */
+            payer: components["schemas"]["Address"];
+            /** @description The linked account on `to`. */
+            recipient: components["schemas"]["Address"];
+            /** @description A route through `to`: where it ends. Its second transfer, from `to`, names this one in `previous_transfer_id`. */
+            then?: components["schemas"]["TransferThen"];
+            /** @description The transfer with `then` this one continues, from its `to` and `recipient` to its `then`, once no part of its take can deliver more: at most its `continuable`. It replaces an earlier continuation that neither took nor sent a withdrawal still in flight. */
+            previous_transfer_id?: components["schemas"]["Uuid"];
+        };
+        TransferThen: {
+            to: components["schemas"]["VenueId"];
+            /** @description The linked account on `to`. */
+            recipient: components["schemas"]["Address"];
+            /** @description What the second transfer was to pay, in the venue between's base units. */
+            amount_in: components["schemas"]["Amount"];
+            /** @description Least the route accepts on `to` for that `amount_in`; a continuation paying another amount scales it. */
+            min_out: components["schemas"]["Amount"];
+            /** @description `to`'s chain id, in an intent. */
+            readonly chain_id?: number;
+        };
+        TakeHistoryPage: {
+            data: {
+                id: components["schemas"]["Uuid"];
+                fills: components["schemas"]["Fill"][];
+            }[];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        /** @description Change counter: keep the prior observation while `revision` moves across portfolio reads or `pending` is true. */
+        PortfolioObservation: {
+            /** @description `<count>:<microseconds>`. */
+            revision: string;
+            changed_at: components["schemas"]["Timestamp"] | null;
+            pending: boolean;
+        };
+        TransferIntent: {
+            id: components["schemas"]["Uuid"];
+            client_transfer_id: components["schemas"]["ClientId"];
+            /** @description `transfer:<id>`, for the take. */
+            client_take_id: components["schemas"]["ClientId"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            min_out: components["schemas"]["Amount"];
+            max_parts: number;
+            payer: components["schemas"]["Address"];
+            recipient: components["schemas"]["Address"];
+            from_chain_id: number;
+            to_chain_id: number;
+            withdrawal_preparation: {
+                amount: components["schemas"]["Amount"];
+                typed_data: components["schemas"]["TypedData"];
+                created_at: components["schemas"]["Timestamp"];
+            } | null;
+            withdrawal: components["schemas"]["Withdrawal"] | null;
+            /** @description Returned on creation and with `funding_plan=true` while the transfer has no take and is not cancelled: before a withdrawal, or once a relayed withdrawal's funds at the wallet plus the available balance cover `amount_in`. Null otherwise, or when it cannot be computed. */
+            funding_plan: components["schemas"]["FundingPlan"] | null;
+            take_id: components["schemas"]["Uuid"] | null;
+            /** @description True once all its take's fills are final; null without a take. */
+            take_final: boolean | null;
+            then?: components["schemas"]["TransferThen"];
+            /** @description The transfer this one continues. */
+            previous_transfer_id: components["schemas"]["Uuid"] | null;
+            /** @description With `then`, once no part of its take can deliver more and unless cancelled: what a continuation may still pay, in `to` base units. What the take delivered, less what continuations may still pay or paid with their payments' fees, and less the next payment's fee on `to`; on Aster in whole millionths. Null otherwise, or while Lighter's fee is unknown. */
+            continuable: components["schemas"]["Amount"] | null;
+            cancelled_at: components["schemas"]["Timestamp"] | null;
+            created_at: components["schemas"]["Timestamp"];
+        };
+        TransferPage: {
+            data: components["schemas"]["TransferIntent"][];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        TakeInput: {
+            /** @description The venue the taker pays on. */
+            from: components["schemas"]["VenueId"];
+            /** @description The venue the taker receives on. */
+            to: components["schemas"]["VenueId"];
+            /** @description Most the taker pays, in `from` base units. */
+            amount_in: components["schemas"]["Amount"];
+            /** @description Least to reserve, in `to` base units, else `SLIPPAGE`; fills settle independently, so less may arrive. */
+            min_out: components["schemas"]["Amount"];
+            /** @description Take for this transfer: same terms and `client_take_id`, not cancelled, and any prepared withdrawal `relayed`. */
+            transfer_intent_id?: components["schemas"]["Uuid"];
+            client_take_id: components["schemas"]["ClientId"];
+            /**
+             * @description Most maker fills; part of the request's identity for retries.
+             * @default 8
+             */
+            max_parts?: number;
+        };
+        /** @description One order's share of a take, as its taker or maker sees it. */
+        Fill: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            take_id: string;
+            role: components["schemas"]["FillRole"];
+            order_id: components["schemas"]["Bytes32"];
+            /** @description Quote sequence it was accepted under. */
+            sequence: number;
+            /** @description Its quote's index (price level) in that set. */
+            quote_index: number;
+            /** @description Shared by both locks. */
+            swap_id: components["schemas"]["Bytes32"];
+            /** @description sha256 of the secret LaMarge holds until the taker's claim. */
+            hashlock: components["schemas"]["Bytes32"];
+            from_venue: components["schemas"]["VenueId"];
+            to_venue: components["schemas"]["VenueId"];
+            /** @description What the taker receives on `to_venue`. */
+            amount_out: components["schemas"]["Amount"];
+            /** @description What the taker pays on `from_venue`, `ceil(amount_out × receive / supply)`. */
+            amount_in: components["schemas"]["Amount"];
+            /** @description The taker's linked address on `from_venue`. */
+            payer: components["schemas"]["Address"];
+            /** @description The order's owner on `to_venue`. */
+            maker_owner: components["schemas"]["Address"];
+            /** @description The quote's payment recipient. */
+            maker_recipient: components["schemas"]["Address"];
+            /** @description The taker's linked address on `to_venue`. */
+            taker_recipient: components["schemas"]["Address"];
+            payment_leg: components["schemas"]["PaymentLeg"];
+            /**
+             * @description Where the maker's claimed payment was released; null until observed.
+             * @enum {string|null}
+             */
+            payment_destination: "venue" | "escrow" | null;
+            /**
+             * @description Where the taker's claimed output was released; null until observed.
+             * @enum {string|null}
+             */
+            maker_destination: "venue" | "escrow" | null;
+            /**
+             * Format: date-time
+             * @description When the taker's signatures were accepted; null before.
+             */
+            signed_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Block time of the finalized payment lock; null before it is observed, and for a payment from Lighter or Aster.
+             */
+            payment_locked_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Block time of the finalized claim releasing the taker's output; inside a venue, the accepted delivery's execution time. Null until observed or without historical timing.
+             */
+            maker_claimed_at?: string | null;
+            maker_leg: components["schemas"]["MakerLeg"];
+            state: components["schemas"]["FillState"];
+            /** @description Why the fill expired or stopped. */
+            reason: string | null;
+            /** @description Payment must lock by then. */
+            pay_by: components["schemas"]["Timestamp"];
+            /** @description The taker's claim starts only before then, unless the secret is public; otherwise both locks refund. */
+            reveal_by: components["schemas"]["Timestamp"];
+            /** @description Maker lock refund time. */
+            t1: components["schemas"]["Timestamp"];
+            /** @description Payment refund time. */
+            t2: components["schemas"]["Timestamp"];
+            /**
+             * Format: date-time
+             * @description Inside-venue delivery (`to_venue` settled `venue`): when the maker's transfer must execute. Paid and unreported ten minutes later, the maker leg is `ABANDONED` ([timeline](/market-making#active-market-making)). Null on an escrow venue.
+             */
+            deliver_by: string | null;
+            /**
+             * Format: date-time
+             * @description Inside-venue delivery: deadline to report a transfer executed by `deliver_by` (`t2` less ten minutes), unless a refund is authorized first. Null on an escrow venue.
+             */
+            report_by: string | null;
+            /** @description The taker's account on `to_venue`, where the transfer goes: a Lighter account index in decimal, an Aster address; null on an escrow venue. */
+            delivery_to: string | null;
+            /** @description The venue transaction accepted as delivery; it claims the maker leg. */
+            delivery_hash: string | null;
+            /** @description Venue fee charged to the maker's account on top of the delivery, in `to_venue` base units: as read at reservation, then the delivery's actual fee. `0` on an escrow venue. */
+            delivery_fee: components["schemas"]["Amount"];
+            /**
+             * Format: date-time
+             * @description When the server verified the locked payment; an in-venue maker transfers only once it is set.
+             */
+            payment_verified_at: string | null;
+            created_at: components["schemas"]["Timestamp"];
+            updated_at: components["schemas"]["Timestamp"];
+            /** Format: date-time */
+            settled_at: string | null;
+            /** @description Relayed transactions; each fill lists its take's `payment`. */
+            transactions: components["schemas"]["Transaction"][];
+        };
+        Withdrawal: {
+            /** Format: uuid */
+            id: string;
+            venue: components["schemas"]["VenueId"];
+            /** @description On Aster, the venue fee included. */
+            amount: components["schemas"]["Amount"];
+            /** @description Polymarket: the linked wallet, signer or deposit address; elsewhere the linked address. */
+            destination: components["schemas"]["Address"];
+            state: components["schemas"]["WithdrawalState"];
+            /** @description Polymarket's or Aster's withdrawal id once relayed; null on Hyperliquid. */
+            venue_ref: string | null;
+            error: string | null;
+            created_at: components["schemas"]["Timestamp"];
+            relayed_at: components["schemas"]["Timestamp"] | null;
+        };
+        /** Format: uuid */
+        Uuid: string;
+        /** @description Non-negative 64-bit integer as a decimal string; keep it lossless. */
+        Cursor: string;
+        /** @description Persist before the first attempt. Unique per user and resource type; reuse with other parameters returns 409 `STATE_CONFLICT`. */
+        ClientId: string;
+        /** @description Unix seconds. */
+        UnixTime: number;
+        /** @enum {string} */
+        OrderState: "preparing" | "moving" | "funding" | "live" | "closing" | "closed" | "failed" | (string & {});
+        /**
+         * @description `PAYING`: paid from Lighter or Aster, the maker locked and the transfer not yet executed; `REFUNDING` once that payment ended unexecuted.
+         * @enum {string}
+         */
+        FillState: "RESERVED" | "PAID" | "PAYING" | "LOCKED" | "CLAIMING" | "SETTLED" | "EXPIRED" | "REFUNDING" | "REFUNDED" | "MAKER_LOSS" | "TAKER_LOSS" | (string & {});
+        /**
+         * @description The taker's lock on the `from_venue` chain.
+         * @enum {string}
+         */
+        PaymentLeg: "NONE" | "LOCKED" | "CLAIMED" | "REFUNDED" | (string & {});
+        /**
+         * @description The order's slice locked on the `to_venue` chain; inside a venue, the maker's delivery, `CLAIMED` once accepted.
+         * @enum {string}
+         */
+        MakerLeg: "NONE" | "LOCKED" | "CLAIMED" | "REFUNDED" | "ABANDONED" | (string & {});
+        /**
+         * @description `relayed`: acknowledged by the venue; arrival unconfirmed. `refused`: rejected by the venue, or `queued` and unstarted after two minutes (Aster: 50 s after its envelope). `submitting` becomes `unknown` after a minute. `unknown`: maybe submitted; never resend.
+         * @enum {string}
+         */
+        WithdrawalState: "queued" | "submitting" | "unknown" | "relayed" | "refused" | (string & {});
+        ChainHealth: {
+            venue: components["schemas"]["VenueId"];
+            chain_id: number;
+            /** @description `observations_ready`, no integrity mismatch, under 32 pending transactions, none pending over 60 s. */
+            ready: boolean;
+            /** @description No watcher error; watched block is the finalized head, read within 30 s; head within the chain's finality age; operator gas at least the chain minimum. */
+            observations_ready: boolean;
+            /** @description Oldest pending relay transaction's age; null without one. */
+            oldest_pending_seconds: number | null;
+            pending_transactions: number;
+            integrity_checked_at: components["schemas"]["Timestamp"] | null;
+            integrity_completed_at: components["schemas"]["Timestamp"] | null;
+            integrity_error: string | null;
+            /** @description A latched discrepancy; blocks admission until supervised verification. */
+            integrity_mismatch: boolean;
+            block: components["schemas"]["Cursor"] | null;
+            finalized_block: components["schemas"]["Cursor"] | null;
+            checked_at: components["schemas"]["Timestamp"] | null;
+            finalized_at: components["schemas"]["Timestamp"] | null;
+            error: string | null;
+            operator_gas: components["schemas"]["Amount"] | null;
+        };
+        Info: {
+            /** @constant */
+            api_version: "v1";
+            server_time: components["schemas"]["Timestamp"];
+            operator: components["schemas"]["Address"];
+            limits: components["schemas"]["Limits"];
+            settlement: components["schemas"]["SettlementTiming"];
+            chains: components["schemas"]["DeploymentChain"][];
+            access: {
+                /**
+                 * @description `invite`: new commitments need access granted (see `AccessState`).
+                 * @enum {string}
+                 */
+                mode: "open" | "invite" | (string & {});
+                /** @description Captcha site key of the access page; null without captcha. */
+                captcha_site_key: string | null;
+            };
+        };
+        Limits: {
+            /** @description Per user's sessions or per credential, on authenticated routes. */
+            requests_per_second: number;
+            request_burst: number;
+            body_bytes: number;
+            batch_orders: number;
+            lease_seconds_min: number;
+            lease_seconds_max: number;
+            quote_validity_seconds_max: number;
+            take_parts_max: number;
+            pay_window_seconds: number;
+            /** @description Most one fill takes from one level, in millionths of a token (books' `max_fill`, in base units). */
+            fill_max: components["schemas"]["Amount"];
+        };
+        SettlementTiming: {
+            maker_timeout_seconds: number;
+            taker_timeout_seconds: number;
+            lock_cutoff_seconds: number;
+            reveal_cutoff_seconds: number;
+            /** @description Inside-venue deliveries (Lighter, Aster); null when none is enabled. Fills carry their `deliver_by` and `report_by`. */
+            delivery: null | {
+                /** @description `deliver_by` is `pay_by` plus this. */
+                window_seconds: number;
+                /** @description After `deliver_by`, when an unreported paid fill's maker leg turns `ABANDONED`. */
+                abandon_after_seconds: number;
+                /** @description `report_by` is `t2` less this. */
+                report_margin_seconds: number;
+                /**
+                 * @description Lighter status a delivery needs; null without Lighter.
+                 * @enum {integer|null}
+                 */
+                min_status: 2 | 3 | null;
+            };
+        };
+        DeploymentChain: {
+            venue: components["schemas"]["VenueId"];
+            chain_id: number;
+            token: components["schemas"]["Address"];
+            symbol: string;
+            decimals: number;
+            escrow: components["schemas"]["Address"];
+            deployment_block: components["schemas"]["Cursor"];
+        };
+        StatsAsset: {
+            venue: components["schemas"]["VenueId"];
+            /** @description Escrow chain; null inside a venue (Lighter, Aster). */
+            chain_id: number | null;
+            /** @description Escrow token; null inside a venue. */
+            token: components["schemas"]["Address"] | null;
+            symbol: string;
+            decimals: number;
+            volume_30d: components["schemas"]["Amount"];
+            taker_volume_30d: components["schemas"]["Amount"];
+            maker_volume_30d: components["schemas"]["Amount"];
+            trades_30d: number;
+        };
+        ChainObservation: {
+            block: components["schemas"]["Cursor"];
+            finalized_block: components["schemas"]["Cursor"] | null;
+            checked_at: components["schemas"]["Timestamp"];
+            finalized_at: components["schemas"]["Timestamp"] | null;
+            /** @description As `ChainHealth.observations_ready` without the gas check; null without a finalized head. */
+            current: boolean | null;
+        };
+        ExposureAsset: {
+            venue: components["schemas"]["VenueId"];
+            /** @description Escrow chain; null inside a venue (Lighter, Aster). */
+            chain_id: number | null;
+            /** @description Escrow token; null inside a venue. */
+            token: components["schemas"]["Address"] | null;
+            symbol: string;
+            decimals: number;
+            chain_observation: components["schemas"]["ChainObservation"] | null;
+            /** @description Orders' unlocked escrow, Lighter and Aster pools excluded. */
+            maker_escrow: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description `maker_escrow` + `maker_pool_inventory`, as before they split: a pool's inventory is its account's balance, never to add to the venue's equity. Removed once makers moved.
+             */
+            maker_escrow_unlocked: components["schemas"]["Amount"];
+            /** @description Lighter or Aster pool: the account's transferable balance at the last read, within the cap. Part of the venue account's equity, never added to it. */
+            maker_pool_inventory: components["schemas"]["Amount"];
+            /** @description Output of the maker's reserved or paid fills not yet locked or delivered. Not added capital; can exceed observed inventory. */
+            maker_reserved: components["schemas"]["Amount"];
+            maker_locked: components["schemas"]["Amount"];
+            /** @description Output the taker received (claim or accepted delivery) with payment still locked. */
+            maker_delivered_unpaid: components["schemas"]["Amount"];
+            maker_payment_locked: components["schemas"]["Amount"];
+            taker_payment_locked: components["schemas"]["Amount"];
+            taker_receive_locked: components["schemas"]["Amount"];
+        };
+        Exposure: {
+            assets: components["schemas"]["ExposureAsset"][];
+            server_time: components["schemas"]["Timestamp"];
+        };
+        QuoteAsk: {
+            venue: components["schemas"]["VenueId"];
+            supply: components["schemas"]["Amount"];
+            receive: components["schemas"]["Amount"];
+            /** @description At least 1 token, at most `supply`, `quote_size` and `fill_max`. */
+            min_fill: components["schemas"]["Amount"];
+        };
+        QuotePreparationInput: {
+            /** @description The order's `revision`; `STATE_CONFLICT` if it changed by preparation or publication. Omit only to replace unconditionally. */
+            expected_revision?: components["schemas"]["Cursor"];
+            /** @description Last admission time, within the next 300 s; `253402214400` (never) for a browser order. */
+            valid_until: components["schemas"]["UnixTime"];
+            /** @description Admission budget shared by this sequence's quotes, at least each `min_fill`; not signed on chain, not reset by a lease renewal. */
+            quote_size: components["schemas"]["Amount"];
+            /** @description At most 8 levels per receiving venue. */
+            quotes: components["schemas"]["QuoteAsk"][];
+        };
+        QuotePreparation: {
+            /** @description The revision this draft guards; null when unguarded. */
+            expected_revision: components["schemas"]["Cursor"] | null;
+            draft_id: components["schemas"]["Uuid"];
+            sequence: number;
+            valid_until: components["schemas"]["UnixTime"];
+            expires_at: components["schemas"]["UnixTime"];
+            /** @description Not signed on chain. */
+            quote_size: components["schemas"]["Amount"];
+            quotes: components["schemas"]["Quote"][];
+            to_sign: components["schemas"]["ToSign"][];
+        };
+        QuoteCancellation: {
+            order_id: components["schemas"]["Bytes32"];
+            cancel_epoch: components["schemas"]["Cursor"];
+        };
+        /** @description 1 to 50 distinct orders across `updates` and `cancels`. */
+        QuoteBatchInput: {
+            updates?: {
+                order_id: components["schemas"]["Bytes32"];
+                draft_id: components["schemas"]["Uuid"];
+                signature: components["schemas"]["QuoteSignature"];
+            }[];
+            cancels?: components["schemas"]["Bytes32"][];
+        };
+        QuoteBatch: {
+            results: {
+                order_id: components["schemas"]["Bytes32"];
+                cancel_epoch: components["schemas"]["Cursor"];
+                /** @description The order's sequence after the commit; null after a cancel. */
+                sequence: number | null;
+            }[];
+        };
+        /** @description Expected wallet requests from current balances and allowances; recheck each preparation before signing. */
+        FundingPlan: {
+            observed_at: components["schemas"]["Timestamp"];
+            venue: components["schemas"]["VenueId"];
+            owner: components["schemas"]["Address"];
+            amount: components["schemas"]["Amount"];
+            deposit: components["schemas"]["Amount"];
+            withdrawal_amount: components["schemas"]["Amount"];
+            /** @enum {string|null} */
+            withdrawal_to: "signer" | null;
+            /**
+             * @description `required` lists a `permit` request first: prepare it with `POST /v1/accounts/{venue}/setup/permit`, sign and submit it; take once `done`. `pending`: submitted, not yet effective. From a venue settled inside itself, `funding_plan` is null.
+             * @enum {string}
+             */
+            payment_setup: "done" | "pending" | "required" | (string & {});
+            requests: {
+                /** @enum {string} */
+                kind: "permit" | "margin_move" | "pay_take" | (string & {});
+                signer: components["schemas"]["Address"];
+                chain_id: number;
+            }[];
+        };
+        Take: {
+            /** @description First fill's id. */
+            id: components["schemas"]["Uuid"];
+            client_take_id: components["schemas"]["ClientId"];
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            fills: components["schemas"]["Fill"][];
+        };
+        TakePreparation: {
+            take: components["schemas"]["Take"];
+            /** @description Unsigned requests; empty once signatures are accepted. */
+            to_sign: (components["schemas"]["ToSign"] | components["schemas"]["LighterTransferItem"] | components["schemas"]["AsterTransferItem"])[];
+        };
+        /** @enum {string} */
+        CredentialScope: "read" | "quote" | "cancel" | (string & {});
+        CredentialInput: {
+            /** @description Not blank. */
+            name: string;
+            /** @description Nonzero. */
+            quote_signer: components["schemas"]["Address"];
+            scopes: components["schemas"]["CredentialScope"][];
+            /** @description Within the next 90 days. */
+            expires_at: components["schemas"]["UnixTime"];
+        };
+        CredentialCreated: {
+            id: components["schemas"]["Uuid"];
+            name: string;
+            quote_signer: components["schemas"]["Address"];
+            scopes: components["schemas"]["CredentialScope"][];
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description Returned once. */
+            token: string;
+        };
+        CredentialRotationInput: {
+            /** @description Within the next 90 days. */
+            expires_at: components["schemas"]["UnixTime"];
+        };
+        CredentialRotated: {
+            id: components["schemas"]["Uuid"];
+            token: string;
+            expires_at: components["schemas"]["Timestamp"];
+        };
+        LeaseInput: {
+            /** @description Ignored for a browser identity. */
+            ttl_seconds: number;
+            /** @description Optional bot-reported RTT of the most recent successful HTTP request. Supply with api_rtt_age_ms. */
+            api_rtt_ms?: number;
+            /** @description Monotonic age of the completed request sample when this lease was sent. Supply with api_rtt_ms. */
+            api_rtt_age_ms?: number;
+        };
+        Lease: {
+            identity_id: components["schemas"]["Uuid"];
+            generation: components["schemas"]["Cursor"];
+            expires_at: components["schemas"]["Timestamp"];
+        };
+        IdentityCancellation: {
+            identity_id: components["schemas"]["Uuid"];
+            generation: components["schemas"]["Cursor"];
+            orders: number;
+        };
+        /** @description `from` → `to` books changed, all when empty; reload, not a quantity delta. */
+        BookInvalidation: {
+            from?: components["schemas"]["VenueId"];
+            to?: components["schemas"]["VenueId"];
+        };
+        OrderPreview: {
+            id: components["schemas"]["Bytes32"];
+            state: components["schemas"]["OrderState"];
+            venue: components["schemas"]["VenueId"];
+            receive_venue: components["schemas"]["VenueId"] | null;
+            held: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             */
+            escrow_available: components["schemas"]["Amount"];
+            held_in: components["schemas"]["HeldIn"];
+            sequence: number | null;
+            cancel_epoch: components["schemas"]["Cursor"];
+            client_order_id: components["schemas"]["ClientId"];
+        };
+        FillPreview: {
+            id: components["schemas"]["Uuid"];
+            take_id: components["schemas"]["Uuid"];
+            order_id: components["schemas"]["Bytes32"];
+            sequence: number;
+            quote_index: number;
+            state: components["schemas"]["FillState"];
+            payment_leg: components["schemas"]["PaymentLeg"];
+            maker_leg: components["schemas"]["MakerLeg"];
+            /** @enum {string|null} */
+            payment_destination: "venue" | "escrow" | null;
+            /** @enum {string|null} */
+            maker_destination: "venue" | "escrow" | null;
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            pay_by: components["schemas"]["Timestamp"];
+            t1: components["schemas"]["Timestamp"];
+            t2: components["schemas"]["Timestamp"];
+            /** Format: date-time */
+            deliver_by: string | null;
+            /** Format: date-time */
+            report_by: string | null;
+            delivery_to: string | null;
+            delivery_hash: string | null;
+            delivery_fee: components["schemas"]["Amount"];
+            /** Format: date-time */
+            payment_verified_at: string | null;
+            reason: string | null;
+            role: components["schemas"]["FillRole"];
+        };
+        LeasePreview: {
+            id: components["schemas"]["Uuid"];
+            generation: components["schemas"]["Cursor"];
+            lease_expires_at: components["schemas"]["Timestamp"];
+            revoked_at: components["schemas"]["Timestamp"] | null;
+            credential_expires_at: components["schemas"]["Timestamp"] | null;
+            active: boolean;
+        };
+        WithdrawalPreview: {
+            id: components["schemas"]["Uuid"];
+            venue: components["schemas"]["VenueId"];
+            state: components["schemas"]["WithdrawalState"];
+            amount: components["schemas"]["Amount"];
+            venue_ref: string | null;
+        };
+        BalancePreview: {
+            venue: components["schemas"]["VenueId"];
+            read_at: components["schemas"]["Timestamp"] | null;
+            chain_read_at: components["schemas"]["Timestamp"] | null;
+            venue_available: boolean;
+            chain_available: boolean;
+        };
+        TradeEvent: {
+            id: components["schemas"]["Uuid"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            settled_at: components["schemas"]["Timestamp"];
+        };
+        BookInvalidationEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "book.changed";
+            data: components["schemas"]["BookInvalidation"];
+        };
+        OrderPreviewEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "order.changed";
+            data: components["schemas"]["OrderPreview"];
+        };
+        FillPreviewEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "fill.changed";
+            data: components["schemas"]["FillPreview"];
+        };
+        LeasePreviewEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "lease.changed";
+            data: components["schemas"]["LeasePreview"];
+        };
+        WithdrawalPreviewEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "withdrawal.changed";
+            data: components["schemas"]["WithdrawalPreview"];
+        };
+        BalancePreviewEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "balance.changed";
+            data: components["schemas"]["BalancePreview"];
+        };
+        TradeEventEvent: {
+            cursor: components["schemas"]["Cursor"];
+            resource_id: string;
+            revision: components["schemas"]["Cursor"];
+            occurred_at: components["schemas"]["Timestamp"];
+            /** @constant */
+            kind: "trade";
+            data: components["schemas"]["TradeEvent"];
+        };
+        /** @description Committed cursor order. Payloads are previews at publication, not a transition log; events can repeat, so skip applied revisions ([event kinds](/streaming#event-kinds)). */
+        Event: components["schemas"]["BookInvalidationEvent"] | components["schemas"]["OrderPreviewEvent"] | components["schemas"]["FillPreviewEvent"] | components["schemas"]["LeasePreviewEvent"] | components["schemas"]["WithdrawalPreviewEvent"] | components["schemas"]["BalancePreviewEvent"] | components["schemas"]["TradeEventEvent"];
+        EventPage: {
+            events: components["schemas"]["Event"][];
+            /** @description A journal position, not contiguous per subscriber. */
+            next_cursor: components["schemas"]["Cursor"];
+            has_more: boolean;
+            oldest_cursor: components["schemas"]["Cursor"];
+            server_time: components["schemas"]["Timestamp"];
+        };
+        SnapshotBook: {
+            order_id: components["schemas"]["Bytes32"];
+            sequence: number;
+            revision: components["schemas"]["Cursor"];
+            to: components["schemas"]["VenueId"];
+            /** @description Quotes with capacity, `available` capped at `fill_max`; a venue's levels, best price first, show at most what better ones leave of the order's `available`. */
+            quotes: (components["schemas"]["Quote"] & {
+                /** @description Position in the signed set. */
+                quote_index: number;
+                available: components["schemas"]["Amount"];
+            })[];
+            available: components["schemas"]["Amount"];
+            valid_until: components["schemas"]["Timestamp"];
+            expires_at: components["schemas"]["Timestamp"];
+        };
+        SnapshotOrder: {
+            id: components["schemas"]["Bytes32"];
+            state: components["schemas"]["OrderState"];
+            venue: components["schemas"]["VenueId"];
+            receive_venue: components["schemas"]["VenueId"] | null;
+            held: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             */
+            escrow_available: components["schemas"]["Amount"];
+            held_in: components["schemas"]["HeldIn"];
+            sequence: number | null;
+            cancel_epoch: components["schemas"]["Cursor"];
+            client_order_id: components["schemas"]["ClientId"];
+            quote_identity_id: components["schemas"]["Uuid"];
+            revision: components["schemas"]["Cursor"];
+            amount: components["schemas"]["Amount"];
+        };
+        SnapshotFill: {
+            id: components["schemas"]["Uuid"];
+            take_id: components["schemas"]["Uuid"];
+            order_id: components["schemas"]["Bytes32"];
+            sequence: number;
+            quote_index: number;
+            state: components["schemas"]["FillState"];
+            payment_leg: components["schemas"]["PaymentLeg"];
+            maker_leg: components["schemas"]["MakerLeg"];
+            /** @enum {string|null} */
+            payment_destination: "venue" | "escrow" | null;
+            /** @enum {string|null} */
+            maker_destination: "venue" | "escrow" | null;
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            pay_by: components["schemas"]["Timestamp"];
+            t1: components["schemas"]["Timestamp"];
+            t2: components["schemas"]["Timestamp"];
+            /** Format: date-time */
+            deliver_by: string | null;
+            /** Format: date-time */
+            report_by: string | null;
+            delivery_to: string | null;
+            delivery_hash: string | null;
+            delivery_fee: components["schemas"]["Amount"];
+            /** Format: date-time */
+            payment_verified_at: string | null;
+            reason: string | null;
+            role: components["schemas"]["FillRole"];
+            revision: components["schemas"]["Cursor"];
+        };
+        SnapshotIdentity: {
+            id: components["schemas"]["Uuid"];
+            generation: components["schemas"]["Cursor"];
+            lease_expires_at: components["schemas"]["Timestamp"];
+            revoked_at: components["schemas"]["Timestamp"] | null;
+            credential_expires_at: components["schemas"]["Timestamp"] | null;
+            revision: components["schemas"]["Cursor"];
+        };
+        Snapshot: {
+            cursor: components["schemas"]["Cursor"];
+            /** @description Public books; empty in a private snapshot. */
+            books: components["schemas"]["SnapshotBook"][];
+            server_time: components["schemas"]["Timestamp"];
+        };
+        PrivateSnapshot: {
+            cursor: components["schemas"]["Cursor"];
+            books: components["schemas"]["SnapshotBook"][];
+            server_time: components["schemas"]["Timestamp"];
+            orders: components["schemas"]["SnapshotOrder"][];
+            fills: components["schemas"]["SnapshotFill"][];
+            quote_identities: components["schemas"]["SnapshotIdentity"][];
+        };
+        StreamSubscription: {
+            after: components["schemas"]["Cursor"];
+            token?: string | null;
+        };
+        StreamControl: {
+            /** @enum {string} */
+            type: "resync_required" | "authentication_required" | "unavailable" | (string & {});
+            reason: string;
+        };
+        OrderHistoryRow: {
+            id: components["schemas"]["Bytes32"];
+            venue: components["schemas"]["VenueId"];
+            receive_venue: components["schemas"]["VenueId"] | null;
+            state: components["schemas"]["OrderState"];
+            amount: components["schemas"]["Amount"];
+            held: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description `held`, under its former name: deprecated, removed once makers have moved to `held`.
+             */
+            escrow_available: components["schemas"]["Amount"];
+            held_in: components["schemas"]["HeldIn"];
+            quotable: components["schemas"]["Amount"];
+            created_at: components["schemas"]["Timestamp"];
+            updated_at: components["schemas"]["Timestamp"];
+            client_order_id: components["schemas"]["ClientId"];
+            quote_identity_id: components["schemas"]["Uuid"];
+            quote_signer: components["schemas"]["Address"];
+            revision: components["schemas"]["Cursor"];
+            sequence: number | null;
+        };
+        FillHistoryRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            take_id: string;
+            role: components["schemas"]["FillRole"];
+            order_id: components["schemas"]["Bytes32"];
+            sequence: number;
+            from_venue: components["schemas"]["VenueId"];
+            to_venue: components["schemas"]["VenueId"];
+            amount_out: components["schemas"]["Amount"];
+            amount_in: components["schemas"]["Amount"];
+            payment_leg: components["schemas"]["PaymentLeg"];
+            maker_leg: components["schemas"]["MakerLeg"];
+            state: components["schemas"]["FillState"];
+            pay_by: components["schemas"]["Timestamp"];
+            reveal_by: components["schemas"]["Timestamp"];
+            t1: components["schemas"]["Timestamp"];
+            t2: components["schemas"]["Timestamp"];
+            created_at: components["schemas"]["Timestamp"];
+            updated_at: components["schemas"]["Timestamp"];
+            /** Format: date-time */
+            settled_at: string | null;
+            revision: components["schemas"]["Cursor"];
+        };
+        WithdrawalHistoryRow: {
+            /** Format: uuid */
+            id: string;
+            venue: components["schemas"]["VenueId"];
+            amount: components["schemas"]["Amount"];
+            destination: components["schemas"]["Address"];
+            state: components["schemas"]["WithdrawalState"];
+            venue_ref: string | null;
+            error: string | null;
+            created_at: components["schemas"]["Timestamp"];
+            relayed_at: components["schemas"]["Timestamp"] | null;
+            revision: components["schemas"]["Cursor"];
+        };
+        TradeHistoryRow: {
+            id: components["schemas"]["Uuid"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            settled_at: components["schemas"]["Timestamp"];
+            /** @description The initiating trader's primary wallet, not a linked venue wallet. Makers are not attributed to it. */
+            taker_address: components["schemas"]["Address"];
+        };
+        OrderHistoryPage: {
+            data: components["schemas"]["OrderHistoryRow"][];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        FillHistoryPage: {
+            data: components["schemas"]["FillHistoryRow"][];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        WithdrawalHistoryPage: {
+            data: components["schemas"]["WithdrawalHistoryRow"][];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        TradeHistoryPage: {
+            data: components["schemas"]["TradeHistoryRow"][];
+            next_cursor: string | null;
+            has_more: boolean;
+        };
+        /** @enum {string} */
+        FillRole: "taker" | "maker" | (string & {});
+    };
+    responses: {
+        /** @description `VALIDATION_ERROR`: malformed or refused input. */
+        ValidationError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `VALIDATION_ERROR`, or `BAD_SIGNATURE`: malformed, by another address, or unknown, used or expired nonce. */
+        BadSignature: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `UNAUTHENTICATED`: missing, invalid, expired or revoked bearer, or a credential on a session-only route. */
+        Unauthenticated: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `ACCESS_REQUIRED`: access not granted, or suspended. */
+        AccessRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `FORBIDDEN`: credential without the route's scope, quote identity unavailable, or admin-only route. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `ACCESS_REQUIRED`, or `FORBIDDEN`: credential without the scope, or quote identity unavailable. */
+        QuoteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `NOT_FOUND`: unknown or foreign resource. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `STATE_CONFLICT`: the resource's state forbids this, or a client id reused with other terms. */
+        StateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `ACCOUNT_IN_USE`: another user's address, or an open or quoting order, a nonfinal fill or a queued, submitting or unknown withdrawal uses the account. */
+        AccountInUse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `RESYNC_REQUIRED`: cursor outside the retained journal; take a fresh snapshot. */
+        ResyncRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `PAYLOAD_TOO_LARGE`: body over 64 KiB. */
+        PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `VENUE_DISABLED`. An unknown venue is a `VALIDATION_ERROR`. */
+        VenueDisabled: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `ACCOUNT_NOT_LINKED`: a needed venue account is unlinked or changed since preparation; `SETUP_REQUIRED` with `venue` and `step` when a setup step it needs is not done; `VENUE_DISABLED` if disabled. */
+        AccountNotLinked: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `RATE_LIMITED`: retry the same request after `Retry-After` seconds. */
+        RateLimited: {
+            headers: {
+                /** @description Seconds. */
+                "Retry-After"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `INTERNAL`: server fault; keep the request id. */
+        Internal: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `VENUE_UNAVAILABLE`: a venue or chain node did not answer; retry. */
+        VenueUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `OPERATOR_UNAVAILABLE`: chain observations, integrity, operator gas, relay queue or Hyperliquid account mode not ready for new commitments. */
+        OperatorUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description `SNAPSHOT_TOO_LARGE`: more than 1000 rows; never partial. */
+        SnapshotTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        OrderId: components["schemas"]["Bytes32"];
+        PairA: components["schemas"]["VenueId"];
+        PairB: components["schemas"]["VenueId"];
+        Id: components["schemas"]["Uuid"];
+        /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+        HistoryAfter: string;
+        Limit: number;
+        /** @description Replay strictly after this cursor; 0 when omitted. */
+        ReplayAfter: components["schemas"]["Cursor"];
+    };
+    requestBodies: never;
+    headers: never;
+    pathItems: never;
+}
+export type $defs = Record<string, never>;
+export interface operations {
+    getSiteShareImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                filename: "landing.png" | "app.png";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Social card image. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description Unknown image. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTradeShareImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Public transfer receipt image. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description Unknown or unpublished trade. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTradeShareMetadata: {
+        parameters: {
+            query?: {
+                trade?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Escaped title, description, canonical URL, Open Graph and card tags. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            400: components["responses"]["ValidationError"];
+        };
+    };
+    getVenues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every venue, enabled or not. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Venue"][];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    postAsterSigningRpc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description The JSON-RPC answer, or answers for a batch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    getBook: {
+        parameters: {
+            query: {
+                /** @description The venue the taker pays on. */
+                from: components["schemas"]["VenueId"];
+                /** @description The venue the taker receives on. */
+                to: components["schemas"]["VenueId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The book. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Book"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            422: components["responses"]["VenueDisabled"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
+    getRoute: {
+        parameters: {
+            query: {
+                /** @description The venue the taker pays on. */
+                from: components["schemas"]["VenueId"];
+                /** @description The venue the taker receives on. */
+                to: components["schemas"]["VenueId"];
+                /** @description Most the taker pays, in `from` base units. */
+                amount_in: components["schemas"]["Amount"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The route. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Route"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description `INSUFFICIENT_LIQUIDITY`: no route takes this amount. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["VenueDisabled"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            /** @description `OPERATOR_UNAVAILABLE`, retryable: settlement is not ready for new commitments; or `SNAPSHOT_TOO_LARGE`. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getTradeProof: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed maker and taker agreements. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeProof"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description `NOT_FOUND`: unknown, unsettled or unpublished trade. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["Internal"];
+        };
+    };
+    getVolume: {
+        parameters: {
+            query: {
+                a: components["parameters"]["PairA"];
+                b: components["parameters"]["PairB"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pair's 24-hour volume. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Volume"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            422: components["responses"]["VenueDisabled"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every chain is ready. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            500: components["responses"]["Internal"];
+            /** @description Not ready for new settlement commitments. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
+    getV1Info: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deployment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Info"];
+                };
+            };
+        };
+    };
+    postAuthChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The master address. */
+                    address: components["schemas"]["Address"];
+                };
+            };
+        };
+        responses: {
+            /** @description The message to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postAuthVerify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    address: components["schemas"]["Address"];
+                    nonce: string;
+                    signature: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    deleteV1AuthSessionsId: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postLinkChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    /** @description Owner of the venue account; signs its transfers. */
+                    address: components["schemas"]["Address"];
+                };
+            };
+        };
+        responses: {
+            /** @description The message to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["VenueDisabled"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getVenueSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The steps. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenueSetup"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    postVenueSetupStep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+                /** @description One of the venue's steps (`permit`, `agent`, `api_key`). */
+                step: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The prepared request's `ref`. */
+                    ref?: string;
+                    signature?: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The step. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStep"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            /** @description `NOT_FOUND`: the venue has no such step, or no such prepared permit. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `STATE_CONFLICT` once the permit expired, or `FILL_IN_PROGRESS` while a payment from Lighter may still use its key's nonce. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            /** @description `VENUE_UNAVAILABLE`, or `VENUE_REJECTED` when the venue refuses the step. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    postLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    address: components["schemas"]["Address"];
+                    /** @description From the link challenge; omitted for the master address. */
+                    nonce?: string;
+                    /** @description The link message signed by `address`; omitted for the master address. */
+                    signature?: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The linked account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedAccount"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            409: components["responses"]["AccountInUse"];
+            413: components["responses"]["PayloadTooLarge"];
+            /** @description `WALLET_NOT_FOUND` or `VENUE_DISABLED`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    deleteLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: no account linked on that venue. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["AccountInUse"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getBalances: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per linked venue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Balance"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stats. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stats"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1MeExposure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exposure. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Exposure"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    prepareMaker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MakerInput"];
+            };
+        };
+        responses: {
+            /** @description The preparation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MakerPreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `ACCESS_REQUIRED`, `FORBIDDEN` when the quote identity is unavailable, or `MAKER_NOT_APPROVED` for a venue-held pool. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `STATE_CONFLICT`, also while another funding, take payment or escrow close is pending on the venue. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    getMakerPreparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preparation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MakerPreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    cancelMakerPreparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preparation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MakerPreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    submitMakerSignatures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Signatures"];
+            };
+        };
+        responses: {
+            /** @description The preparation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MakerPreparation"];
+                };
+            };
+            /** @description `VALIDATION_ERROR`, `BAD_SIGNATURE` or `WITHDRAWAL_EXPIRED`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description `ACCESS_REQUIRED`, or `FORBIDDEN` when the quote identity changed or, with a `quote_set` item, its lease expired. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description `STATE_CONFLICT`, or `STALE_QUOTE` after the quote's `valid_until`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    getOrders: {
+        parameters: {
+            query?: {
+                /** @description Exact match: zero or one order. */
+                client_order_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The orders. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
+    getOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    putQuotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteSetInput"];
+            };
+        };
+        responses: {
+            /** @description The order with its new quote set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["QuoteForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `STALE_QUOTE`, `STALE_SEQUENCE` or `STATE_CONFLICT`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    deleteQuotes: {
+        parameters: {
+            query?: {
+                /** @description Refuse with `STATE_CONFLICT` unless the order's `revision` still equals it. */
+                expected_revision?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cancellation receipt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteCancellation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    prepareQuotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuotePreparationInput"];
+            };
+        };
+        responses: {
+            /** @description The draft to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotePreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `FORBIDDEN` without `quote` scope or for a revoked quote identity, `ACCESS_REQUIRED`, or `MAKER_NOT_APPROVED` for a venue-held pool. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postV1QuotesBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteBatchInput"];
+            };
+        };
+        responses: {
+            /** @description One result per order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteBatch"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["QuoteForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `STALE_QUOTE`, `STALE_SEQUENCE` or `STATE_CONFLICT`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    putV1QuoteIdentitiesIdLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeaseInput"];
+            };
+        };
+        responses: {
+            /** @description The lease. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lease"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["QuoteForbidden"];
+            /** @description `NOT_FOUND`: a credential named another identity. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    deleteV1QuoteIdentitiesIdQuotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cancellation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityCancellation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description `NOT_FOUND`: a credential named another identity. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postCloses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    orders: components["schemas"]["Bytes32"][];
+                };
+            };
+        };
+        responses: {
+            /** @description The close to sign, or none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Null when no order needs a signature.
+                         */
+                        id: string | null;
+                        to_sign: components["schemas"]["ToSign"][];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: an unknown, malformed or foreign order. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postCloseSignatures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Signatures"];
+            };
+        };
+        responses: {
+            /** @description The orders of the close. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        orders: components["schemas"]["Order"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: no close to sign with this id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `STATE_CONFLICT`: the close expired. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getEscrow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Orders holding funds. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EscrowOrder"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    postEscrowClosePrepare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    order_id: components["schemas"]["Bytes32"];
+                    /** @description False withdraws to the owner wallet. */
+                    to_margin: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The terms for `POST /v1/escrow/close` and the item to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        venue: components["schemas"]["VenueId"];
+                        order_id: components["schemas"]["Bytes32"];
+                        to_margin: boolean;
+                        /** @description Hyperliquid destination: `0` perps, `4294967295` spot; `0` elsewhere. */
+                        dex: number;
+                        /** @description Decimal integer. */
+                        nonce: string;
+                        /** @description Unix seconds, one hour ahead. */
+                        deadline: number;
+                        to_sign: components["schemas"]["ToSign"][];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: unknown or malformed order, or no unlocked funds. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    postEscrowClose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    order_id: components["schemas"]["Bytes32"];
+                    /** @description False withdraws to the owner wallet. */
+                    to_margin: boolean;
+                    dex: number;
+                    /** @description Decimal unsigned 64-bit integer. */
+                    nonce: string;
+                    /** @description Unix seconds, in the future and at most 3660 s ahead. */
+                    deadline: number;
+                    signature: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The order as `GET /v1/escrow` shows it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EscrowOrder"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: unknown or malformed order, or no unlocked funds. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    getTransfers: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of intents. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferInput"];
+            };
+        };
+        responses: {
+            /** @description Existing identical intent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferIntent"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferIntent"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTransfer: {
+        parameters: {
+            query?: {
+                /** @description Compute `funding_plan` from fresh balances and allowances, for a wallet review; not when polling. */
+                funding_plan?: boolean;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The intent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferIntent"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    cancelTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    prepareTransferWithdrawal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    amount: components["schemas"]["Amount"];
+                };
+            };
+        };
+        responses: {
+            /** @description The typed data to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        typed_data: components["schemas"]["TypedData"];
+                    };
+                };
+            };
+            /** @description `VALIDATION_ERROR`, or `WITHDRAWAL_EXPIRED` ten minutes after the first preparation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            /** @description `STATE_CONFLICT`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            /** @description `ACCOUNT_NOT_LINKED`, `SETUP_REQUIRED` for the payer's `permit`, or `VENUE_DISABLED`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    submitTransferWithdrawal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    signature: components["schemas"]["Signature"];
+                    envelope?: components["schemas"]["AsterEnvelope"];
+                };
+            };
+        };
+        responses: {
+            /** @description The withdrawal. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Withdrawal"];
+                };
+            };
+            /** @description `VALIDATION_ERROR`, `BAD_SIGNATURE`, or `WITHDRAWAL_EXPIRED` ten minutes after preparation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postTake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakeInput"];
+            };
+        };
+        responses: {
+            /** @description Existing take for this `client_take_id`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakePreparation"];
+                };
+            };
+            /** @description The take and the items to sign. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakePreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    getV1TakesId: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The take. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakePreparation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    deleteTake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postTakeSignatures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Signatures"];
+            };
+        };
+        responses: {
+            /** @description The take's fills. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        fills: components["schemas"]["Fill"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            /** @description `TAKE_EXPIRED`: `pay_by` passed or a fill is not `RESERVED`; take again. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    preparePaymentRefund: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consent for the payment beneficiary to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        deadline: number;
+                        to_sign: components["schemas"]["ToSign"][];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    submitPaymentRefund: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int64 */
+                    deadline: number;
+                    signature: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description Consent accepted or already recorded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid deadline or beneficiary signature. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    submitDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    tx_hash: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The fill, its maker leg claimed by the delivery. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        fill: components["schemas"]["Fill"];
+                    };
+                };
+            };
+            /** @description `VALIDATION_ERROR`: this transaction never delivers the fill. `reason`: `not_a_transfer`, `transfer_failed` (status 0 or above 3), `wrong_sender`, `wrong_recipient`, `wrong_asset` (not USDC collateral), `amount_short`, `wrong_memo`, `executed_late`, `before_fill` (an Aster transfer older than the fill) or `transfer_used` (it already delivers another fill). No `reason`: a malformed request or an escrow-settled fill. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description `FORBIDDEN`: a credential without `quote` scope; suspension does not block reports. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description `STATE_CONFLICT`, final. `reason`: `not_due` (payment not locked; fill delivered, refunded or expired), `refund_authorized` (refund consented) or `report_window_closed` (past `report_by`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            /** @description `ACCOUNT_NOT_LINKED`: the maker's venue account is unlinked. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue) or `not_final` (below the required status). */
+            425: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            /** @description `VENUE_UNAVAILABLE`: the venue did not answer, or the server's per-minute venue-read budget is spent. Report the same hash again. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fills. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Fill"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
+    postWithdrawalPrepare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    amount: components["schemas"]["Amount"];
+                    /**
+                     * @description Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer` only.
+                     * @enum {string}
+                     */
+                    to: "wallet" | "signer" | "escrow";
+                };
+            };
+        };
+        responses: {
+            /** @description The typed data to sign with `eth_signTypedData_v4`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        typed_data: components["schemas"]["TypedData"];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    postWithdrawal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    /** @description Exactly as `POST /v1/withdrawals/prepare` returned it. */
+                    typed_data: components["schemas"]["TypedData"];
+                    signature: components["schemas"]["Signature"];
+                    envelope?: components["schemas"]["AsterEnvelope"];
+                };
+            };
+        };
+        responses: {
+            /** @description The withdrawal. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Withdrawal"];
+                };
+            };
+            /** @description `VALIDATION_ERROR`, `BAD_SIGNATURE`, or `WITHDRAWAL_EXPIRED` ten minutes after preparation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            /** @description `VENUE_REJECTED`: refused by the venue or before sending; not retryable. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    postV1Credentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialInput"];
+            };
+        };
+        responses: {
+            /** @description The credential and its bearer. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialCreated"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    deleteV1CredentialsId: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    postV1CredentialsIdRotate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRotationInput"];
+            };
+        };
+        responses: {
+            /** @description The new bearer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialRotated"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1OrdersHistory: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of orders. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderHistoryPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getTakeHistory: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakeHistoryPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1FillsHistory: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of fills. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FillHistoryPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1WithdrawalsHistory: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of withdrawals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WithdrawalHistoryPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1TradesHistory: {
+        parameters: {
+            query?: {
+                /** @description `mine`: trades where you are maker or taker. */
+                scope?: "all" | "mine";
+                /** @description `next_cursor` from the same route and filters; omit for the newest page. */
+                after?: components["parameters"]["HistoryAfter"];
+                limit?: components["parameters"]["Limit"];
+                a?: components["schemas"]["VenueId"];
+                b?: components["schemas"]["VenueId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of trades. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeHistoryPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            422: components["responses"]["VenueDisabled"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1Events: {
+        parameters: {
+            query?: {
+                /** @description Replay strictly after this cursor; 0 when omitted. */
+                after?: components["parameters"]["ReplayAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            410: components["responses"]["ResyncRequired"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1Snapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Snapshot"];
+                };
+            };
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
+    getV1MeEvents: {
+        parameters: {
+            query?: {
+                /** @description Replay strictly after this cursor; 0 when omitted. */
+                after?: components["parameters"]["ReplayAfter"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            410: components["responses"]["ResyncRequired"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getV1MeSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateSnapshot"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
+    getV1Stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Upgraded to WebSocket. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a WebSocket upgrade request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `RATE_LIMITED`: connection limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+}
+
+export const routes = {
+  "getSiteShareImage": {
+    "path": "/share/v1/{filename}",
+    "method": "GET"
+  },
+  "getTradeShareImage": {
+    "path": "/share/v1/trades/{id}/image.png",
+    "method": "GET"
+  },
+  "getTradeShareMetadata": {
+    "path": "/share/trade",
+    "method": "GET"
+  },
+  "getVenues": {
+    "path": "/v1/venues",
+    "method": "GET"
+  },
+  "postAsterSigningRpc": {
+    "path": "/v1/venues/aster/rpc",
+    "method": "POST"
+  },
+  "getBook": {
+    "path": "/v1/books",
+    "method": "GET"
+  },
+  "getRoute": {
+    "path": "/v1/routes",
+    "method": "GET"
+  },
+  "getTradeProof": {
+    "path": "/v1/trades/{id}/proof",
+    "method": "GET"
+  },
+  "getVolume": {
+    "path": "/v1/volume",
+    "method": "GET"
+  },
+  "getHealth": {
+    "path": "/health",
+    "method": "GET",
+    "accept": [
+      503
+    ]
+  },
+  "getV1Info": {
+    "path": "/v1/info",
+    "method": "GET"
+  },
+  "postAuthChallenge": {
+    "path": "/v1/auth/challenge",
+    "method": "POST"
+  },
+  "postAuthVerify": {
+    "path": "/v1/auth/verify",
+    "method": "POST"
+  },
+  "deleteV1AuthSessionsId": {
+    "path": "/v1/auth/sessions/{id}",
+    "method": "DELETE"
+  },
+  "getMe": {
+    "path": "/v1/me",
+    "method": "GET"
+  },
+  "postLinkChallenge": {
+    "path": "/v1/accounts/link/challenge",
+    "method": "POST"
+  },
+  "getVenueSetup": {
+    "path": "/v1/accounts/{venue}/setup",
+    "method": "GET"
+  },
+  "postVenueSetupStep": {
+    "path": "/v1/accounts/{venue}/setup/{step}",
+    "method": "POST"
+  },
+  "postLink": {
+    "path": "/v1/accounts/link",
+    "method": "POST"
+  },
+  "deleteLink": {
+    "path": "/v1/accounts/{venue}",
+    "method": "DELETE"
+  },
+  "getBalances": {
+    "path": "/v1/balances",
+    "method": "GET"
+  },
+  "getStats": {
+    "path": "/v1/me/stats",
+    "method": "GET"
+  },
+  "getV1MeExposure": {
+    "path": "/v1/me/exposure",
+    "method": "GET"
+  },
+  "prepareMaker": {
+    "path": "/v1/maker/{venue}/prepare",
+    "method": "POST"
+  },
+  "getMakerPreparation": {
+    "path": "/v1/maker/preparations/{id}",
+    "method": "GET"
+  },
+  "cancelMakerPreparation": {
+    "path": "/v1/maker/preparations/{id}",
+    "method": "DELETE"
+  },
+  "submitMakerSignatures": {
+    "path": "/v1/maker/preparations/{id}/signatures",
+    "method": "POST"
+  },
+  "getOrders": {
+    "path": "/v1/orders",
+    "method": "GET"
+  },
+  "getOrder": {
+    "path": "/v1/orders/{id}",
+    "method": "GET"
+  },
+  "putQuotes": {
+    "path": "/v1/orders/{id}/quotes",
+    "method": "PUT"
+  },
+  "deleteQuotes": {
+    "path": "/v1/orders/{id}/quotes",
+    "method": "DELETE"
+  },
+  "prepareQuotes": {
+    "path": "/v1/orders/{id}/quotes/prepare",
+    "method": "POST"
+  },
+  "postV1QuotesBatch": {
+    "path": "/v1/quotes/batch",
+    "method": "POST"
+  },
+  "putV1QuoteIdentitiesIdLease": {
+    "path": "/v1/quote-identities/{id}/lease",
+    "method": "PUT"
+  },
+  "deleteV1QuoteIdentitiesIdQuotes": {
+    "path": "/v1/quote-identities/{id}/quotes",
+    "method": "DELETE"
+  },
+  "postCloses": {
+    "path": "/v1/closes",
+    "method": "POST"
+  },
+  "postCloseSignatures": {
+    "path": "/v1/closes/{id}/signatures",
+    "method": "POST"
+  },
+  "getEscrow": {
+    "path": "/v1/escrow",
+    "method": "GET"
+  },
+  "postEscrowClosePrepare": {
+    "path": "/v1/escrow/close/prepare",
+    "method": "POST"
+  },
+  "postEscrowClose": {
+    "path": "/v1/escrow/close",
+    "method": "POST"
+  },
+  "postTransfer": {
+    "path": "/v1/transfers",
+    "method": "POST"
+  },
+  "getTransfers": {
+    "path": "/v1/transfers",
+    "method": "GET"
+  },
+  "getTransfer": {
+    "path": "/v1/transfers/{id}",
+    "method": "GET"
+  },
+  "cancelTransfer": {
+    "path": "/v1/transfers/{id}",
+    "method": "DELETE"
+  },
+  "prepareTransferWithdrawal": {
+    "path": "/v1/transfers/{id}/withdrawal/prepare",
+    "method": "POST"
+  },
+  "submitTransferWithdrawal": {
+    "path": "/v1/transfers/{id}/withdrawal",
+    "method": "POST"
+  },
+  "postTake": {
+    "path": "/v1/takes",
+    "method": "POST"
+  },
+  "getV1TakesId": {
+    "path": "/v1/takes/{id}",
+    "method": "GET"
+  },
+  "deleteTake": {
+    "path": "/v1/takes/{id}",
+    "method": "DELETE"
+  },
+  "postTakeSignatures": {
+    "path": "/v1/takes/{id}/signatures",
+    "method": "POST"
+  },
+  "preparePaymentRefund": {
+    "path": "/v1/fills/{id}/refund/prepare",
+    "method": "POST"
+  },
+  "submitPaymentRefund": {
+    "path": "/v1/fills/{id}/refund",
+    "method": "POST"
+  },
+  "submitDelivery": {
+    "path": "/v1/fills/{id}/delivery",
+    "method": "POST"
+  },
+  "getFills": {
+    "path": "/v1/fills",
+    "method": "GET"
+  },
+  "postWithdrawalPrepare": {
+    "path": "/v1/withdrawals/prepare",
+    "method": "POST"
+  },
+  "postWithdrawal": {
+    "path": "/v1/withdrawals",
+    "method": "POST"
+  },
+  "postV1Credentials": {
+    "path": "/v1/credentials",
+    "method": "POST"
+  },
+  "deleteV1CredentialsId": {
+    "path": "/v1/credentials/{id}",
+    "method": "DELETE"
+  },
+  "postV1CredentialsIdRotate": {
+    "path": "/v1/credentials/{id}/rotate",
+    "method": "POST"
+  },
+  "getV1OrdersHistory": {
+    "path": "/v1/orders/history",
+    "method": "GET"
+  },
+  "getTakeHistory": {
+    "path": "/v1/takes/history",
+    "method": "GET"
+  },
+  "getV1FillsHistory": {
+    "path": "/v1/fills/history",
+    "method": "GET"
+  },
+  "getV1WithdrawalsHistory": {
+    "path": "/v1/withdrawals/history",
+    "method": "GET"
+  },
+  "getV1TradesHistory": {
+    "path": "/v1/trades/history",
+    "method": "GET"
+  },
+  "getV1Events": {
+    "path": "/v1/events",
+    "method": "GET"
+  },
+  "getV1Snapshot": {
+    "path": "/v1/snapshot",
+    "method": "GET"
+  },
+  "getV1MeEvents": {
+    "path": "/v1/me/events",
+    "method": "GET"
+  },
+  "getV1MeSnapshot": {
+    "path": "/v1/me/snapshot",
+    "method": "GET"
+  },
+  "getV1Stream": {
+    "path": "/v1/stream",
+    "method": "GET"
+  }
+} as const;

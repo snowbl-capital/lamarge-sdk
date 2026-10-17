@@ -1,0 +1,307 @@
+import { address, array, hex, record, required, type Verified } from "./validation.ts";
+import { ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
+/** The reviewed proxy, the same address on HyperEVM, Polygon and BSC (contracts/README.md#deployments). */
+export const ESCROW = "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6";
+/** Each venue's escrow chain, token decimals and permit domain. A venue the API enables but that is not pinned here is not traded. */
+export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string; exitEscrow?: string }> = {
+  hyperliquid: { id: 999, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6, permit: "USDC", version: "2", escrow: ESCROW },
+  polymarket: { id: 137, token: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", decimals: 6, permit: "Polymarket USD", version: "1", escrow: ESCROW },
+  // Settled inside the venue, no escrow. Quote sets and payment terms name a signing chain id,
+  // contract and token: Lighter's L2 chain id, its zkLighter contract on Ethereum and its USDC;
+  // BSC, Aster's vault and USDT. Aster's former BSC escrow only lets owners close and withdraw.
+  aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974", exitEscrow: ESCROW },
+  lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
+};
+/** Venues where the maker delivers inside the venue, read by the server, instead of an escrow lock. */
+export const VENUE_SETTLED = new Set(["lighter", "aster"]);
+/** The escrow holding a venue's commitments; for a venue now settled inside itself, its former escrow. */
+export function escrowOf(venue: string): string {
+  const chain = CHAINS[venue];
+  insist(chain, "Unknown venue");
+  return chain.exitEscrow ?? chain.escrow;
+}
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+/** Aster's BSC chain, where its approvals and withdrawals are signed. */
+export const ASTER_CHAIN_ID = 56;
+/** Chain id of Aster's signing domain for transfers between accounts; no such chain exists. */
+export const ASTER_TRANSFER_CHAIN_ID = 1666;
+/** USDT on BSC. */
+const ASTER_DECIMALS = 18;
+/** Cap on an Aster withdrawal fee: 2 USDT (Aster quoted 0.11 in October 2026). */
+const ASTER_MAX_FEE = 2n * 10n ** BigInt(ASTER_DECIMALS);
+const ASTER_APPROVAL_DAYS = 365;
+/** One agent name per environment: approving the same name from another environment's addresses revokes the other agent. */
+const ASTER_AGENT_NAMES = ["LaMarge", "LaMargeDev"];
+export const MAKER_TIMEOUT_SECONDS = 3600;
+/** The allowance a permit grants, once: the escrow spends it only on actions the owner signs. */
+export const UNLIMITED_ALLOWANCE = (1n << 256n) - 1n;
+/** Year-9999 admission sentinel for browser orders with no expiry. */
+export const NEVER_VALID_UNTIL = 253_402_214_400;
+export const TAKER_TIMEOUT_SECONDS = 7200;
+export type Typed = { types: Record<string, { name: string; type: string }[]>; primaryType: string; domain: { name: string; version?: string; chainId: number; verifyingContract: string }; message: Record<string, unknown> };
+export type SignItem = { kind: string; signer: string; typed_data: Typed; fill_id?: string | undefined };
+export function convert(types: Typed["types"], kind: string, value: unknown): unknown {
+  if (kind.endsWith("[]")) return array(value).map((item) => convert(types, kind.slice(0, -2), item));
+  const fields = types[kind];
+  if (fields) {
+    const struct = record(value);
+    return Object.fromEntries(fields.map((field) => [field.name, convert(types, field.type, struct[field.name])]));
+  }
+  if (kind === "address") return address(value);
+  if (kind === "string" && typeof value === "string" || kind === "bool" && typeof value === "boolean") return value;
+  const bytes = /^bytes(\d*)$/.exec(kind);
+  if (bytes) {
+    const data = hex(value);
+    const width = bytes[1] ? Number(bytes[1]) : null;
+    if (width !== null && (width < 1 || width > 32 || data.length !== 2 + width * 2)) throw new Error("Invalid signing bytes");
+    return data;
+  }
+  const integer = /^(u?int)(\d*)$/.exec(kind);
+  if (!integer) throw new Error("Invalid signing value");
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint"
+      || typeof value === "number" && !Number.isSafeInteger(value)
+      || typeof value === "string" && !/^-?\d+$/.test(value)) throw new Error("Invalid signing integer");
+  const width = integer[2] ? Number(integer[2]) : 256;
+  if (width < 8 || width > 256 || width % 8 !== 0) throw new Error("Invalid integer width");
+  const signed = integer[1] === "int";
+  const limit = 1n << BigInt(width - (signed ? 1 : 0));
+  const result = BigInt(value);
+  if (result < (signed ? -limit : 0n) || result >= limit) throw new Error("Signing integer out of range");
+  return result;
+}
+export const same = (a: unknown, b: unknown) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+export function insist(ok: unknown, message = "The signing request differs from your instructions"): asserts ok { if (!ok) throw new Error(message); }
+export const uint = (value: unknown): bigint => { insist(typeof value === "string" && /^\d+$/.test(value) || typeof value === "number" && Number.isSafeInteger(value) && value >= 0, "Invalid signing integer"); return BigInt(value); };
+const fields = (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
+export const EIP712Domain = fields("name:string,version:string,chainId:uint256,verifyingContract:address");
+const quote = fields("venue:string,chainId:uint256,token:address,recipient:address,supply:uint256,receive:uint256,minFill:uint256");
+const lockPayment = fields("payer:address,swapId:bytes32,recipient:address,amount:uint256,hashlock:bytes32,refundAt:uint64,deadline:uint256,orderId:bytes32,sequence:uint64,amountOut:uint256,receiveChainId:uint256,receiveToken:address,receiveEscrow:address,receiveRecipient:address,dex:uint32");
+export const schemas: Record<string, Record<string, { name: string; type: string }[]>> = {
+  RefundPayment: { RefundPayment: fields("payer:address,swapId:bytes32,deadline:uint256") },
+  FundOffer: { FundOffer: fields("owner:address,offerId:bytes32,amount:uint256,deposit:uint256,quoteSigner:address,operator:address,minQuoteSequence:uint64,nonce:uint256,deadline:uint256") },
+  QuoteSet: { QuoteSet: fields("owner:address,offerId:bytes32,sequence:uint64,expiresAt:uint64,quotes:Quote[]"), Quote: quote },
+  PayTake: { PayTake: fields("payer:address,deposit:uint256,payments:LockPayment[]"), LockPayment: lockPayment },
+  CloseOrders: { CloseOrders: fields("account:address,orders:bytes32[],nonce:uint256,deadline:uint256") },
+  CloseOffer: { CloseOffer: fields("owner:address,offerId:bytes32,toMargin:bool,dex:uint32,nonce:uint256,deadline:uint256") },
+  Permit: { Permit: fields("owner:address,spender:address,value:uint256,nonce:uint256,deadline:uint256") },
+  Withdraw: { Withdraw: fields("account:address,token:address,amount:uint256,fee:uint256,to:address,salt:uint64,ts:uint64") },
+  "HyperliquidTransaction:SendAsset": { "HyperliquidTransaction:SendAsset": fields("hyperliquidChain:string,destination:string,sourceDex:string,destinationDex:string,token:string,amount:string,fromSubAccount:string,nonce:uint64") },
+  Action: { Action: fields("type:string,destination:address,destination Chain:string,token:string,amount:string,fee:string,nonce:uint256,aster chain:string") },
+  Message: { Message: fields("msg:string") },
+};
+/** A signed take's payments, each with exactly the `LockPayment` fields. */
+export function takePayments(typed: Typed): Record<string, unknown>[] {
+  const payments = array(typed.message.payments).map(record);
+  insist(payments.length > 0 && payments.length <= 8 && payments.every(payment => Object.keys(payment).length === lockPayment.length), "Unexpected signing fields");
+  return payments;
+}
+function checkTypes(typed: Typed) {
+  const schema = schemas[typed.primaryType];
+  insist(schema, "Unsupported signing request");
+  const expected = { EIP712Domain: EIP712Domain, ...schema };
+  insist(Object.keys(typed.types).length === Object.keys(expected).length && Object.entries(expected).every(([name, fields]) => JSON.stringify(typed.types[name]) === JSON.stringify(fields)), "Unexpected signing types");
+  insist(Object.keys(typed.message).length === required(schema[typed.primaryType]).length, "Unexpected signing fields");
+}
+/** Exact EIP-712 field types and pinned domain, before any wallet prompt. */
+export function checkEscrowTyped(typed: Typed, venue: string): void {
+  const chain = CHAINS[venue];
+  insist(chain, "Unknown venue");
+  // A venue settled inside itself signs quote sets in its own domain; its former escrow only
+  // accepts closes and refunds.
+  const exit = chain.exitEscrow !== undefined && ["CloseOffer", "RefundPayment"].includes(typed.primaryType);
+  insist(chain.exitEscrow === undefined || exit || typed.primaryType === "QuoteSet", "Unexpected signing request");
+  checkEscrowTypedAt(typed, venue, exit ? escrowOf(venue) : chain.escrow);
+}
+/** Proof verification accepts the current protocol on reviewed deployments only. */
+export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: DeploymentManifest = ESCROW_PROOF_DEPLOYMENTS): EscrowDeployment {
+  insist(["QuoteSet", "FundOffer", "PayTake"].includes(typed.primaryType), "Unexpected signed agreement");
+  const escrow = typed.domain.verifyingContract;
+  const chain = CHAINS[venue];
+  const deployment = chain && escrowDeployment(chain.id, escrow, manifest);
+  insist(deployment && deployment.version === 5, "Unexpected signing domain");
+  checkEscrowTypedAt(typed, venue, escrow);
+  return deployment;
+}
+function checkEscrowTypedAt(typed: Typed, venue: string, escrow: string): void {
+  checkTypes(typed);
+  const chain = CHAINS[venue];
+  insist(chain && !["Withdraw", "HyperliquidTransaction:SendAsset", "Action", "Message"].includes(typed.primaryType));
+  const permit = typed.primaryType === "Permit";
+  if (permit) insist(chain.permit !== undefined && chain.version !== undefined, "The token has no permit");
+  insist(typed.domain.chainId === chain.id && same(typed.domain.verifyingContract, permit ? chain.token : escrow) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
+  if (permit) insist(same(typed.message.spender, escrow), "Unexpected permit spender");
+}
+export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string }) {
+  const known = CHAINS[venue];
+  insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && same(chain.escrow, known.escrow), "API deployment differs from the reviewed deployment");
+}
+export function checkDeadline(value: unknown, seconds: number, now = Date.now() / 1000) {
+  const at = Number(uint(value));
+  insist(at > now && at <= now + seconds + 30, "Signing deadline is expired or too long");
+}
+export function checkPermit(item: SignItem, venue: string, owner: string, maxSeconds = 600): asserts item is SignItem & { typed_data: Verified<Typed> } {
+  checkEscrowTyped(item.typed_data, venue);
+  const m = item.typed_data.message;
+  insist(item.kind === "permit" && item.typed_data.primaryType === "Permit" && same(item.signer, owner) && same(m.owner, owner) && uint(m.value) === UNLIMITED_ALLOWANCE, "Unexpected token allowance");
+  checkDeadline(m.deadline, maxSeconds);
+}
+/** A decimal amount with at most six decimals, in base units of a token with `decimals`. */
+export function decimalUnits(value: unknown, decimals: number): bigint {
+  insist(typeof value === "string" && /^\d+(\.\d{1,6})?$/.test(value), "Invalid decimal amount");
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(required(whole)) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0"));
+}
+export function decimalsOf(venue: string): number {
+  const chain = CHAINS[venue];
+  insist(chain, "Unknown venue");
+  return chain.decimals;
+}
+/** One millionth of `venue`'s token: venues carry six decimals at most. */
+export const venueStep = (venue: string): bigint => 10n ** BigInt(Math.max(decimalsOf(venue) - 6, 0));
+/** `value` rounded up to whole millionths: what `venue` moves for it. */
+export function venueUnits(value: bigint, venue: string): bigint {
+  const step = venueStep(venue);
+  return (value + step - 1n) / step * step;
+}
+/** What `venue` moves for `held` to reach `needed`: an 18-decimal wallet keeps the dust past the shortfall. Never above `needed`. */
+export function shortfall(needed: bigint, held: bigint, venue: string): bigint {
+  if (held >= needed) return 0n;
+  const rounded = venueUnits(needed - held, venue);
+  return rounded < needed ? rounded : needed;
+}
+/** One token in native units, the automatic deposit sweep threshold. */
+export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(venue));
+/** Venue withdrawals can only move this amount to the reviewed destination. */
+export function checkWithdrawal(typed: Typed, venue: string, signer: string, destination: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<Typed> {
+  checkTypes(typed);
+  const m = typed.message, d = typed.domain;
+  insist(amount > 0n);
+  if (venue === "hyperliquid") {
+    insist(typed.primaryType === "HyperliquidTransaction:SendAsset" && d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, "0x0000000000000000000000000000000000000000"));
+    insist(same(destination, signer) && m.hyperliquidChain === "Mainnet" && same(m.destination, "0x2000000000000000000000000000000000000000") && ["", "spot"].includes(String(m.sourceDex)) && m.destinationDex === "spot" && m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054" && m.fromSubAccount === "" && decimalUnits(m.amount, decimalsOf(venue)) === amount);
+    insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale withdrawal nonce");
+  } else if (venue === "aster") {
+    // Aster takes the fee out of the signed amount: `amount` is what arrives on BSC.
+    insist(typed.primaryType === "Action" && d.name === "Aster" && d.version === "1" && d.chainId === ASTER_CHAIN_ID && same(d.verifyingContract, ZERO_ADDRESS));
+    const decimals = decimalsOf(venue);
+    const fee = decimalUnits(m.fee, decimals);
+    insist(same(destination, signer) && m.type === "Withdraw" && same(m.destination, signer) && m["destination Chain"] === "BSC" && m.token === "USDT" && m["aster chain"] === "Mainnet" && fee <= ASTER_MAX_FEE && decimalUnits(m.amount, decimals) === amount + fee);
+    insist(Math.abs(Number(uint(m.nonce)) / 1_000_000 - now) <= 60, "Stale withdrawal nonce");
+  } else {
+    insist(venue === "polymarket" && typed.primaryType === "Withdraw" && d.name === "Polymarket" && d.version === "1" && d.chainId === 137 && same(d.verifyingContract, "0xdca4af75705dbb50f62437045aff9921947917d2"));
+    insist(same(m.account, signer) && same(m.token, required(CHAINS.polymarket).token) && same(m.to, destination) && uint(m.amount) === amount && uint(m.fee) === 0n && uint(m.salt) <= 0xffffffffffffffffn);
+    insist(Math.abs(Number(uint(m.ts)) - now) <= 60, "Stale withdrawal timestamp");
+  }
+}
+/** What a venue withdrawal moves out of the margin for `amount` to arrive: Aster adds its fee. */
+export function withdrawalCost(venue: string, typed: Typed): bigint {
+  const m = typed.message;
+  if (venue === "hyperliquid") return decimalUnits(m.amount, decimalsOf(venue));
+  if (venue === "aster") return decimalUnits(m.amount, decimalsOf(venue)) - decimalUnits(m.fee, decimalsOf(venue));
+  return uint(m.amount);
+}
+export type AsterChallenge = { message: string; nonce: string; expires_at: string; typed_data?: Typed | undefined };
+/** `Message{msg}` in Aster's signing domain at `chainId`: its transfers' chain, or BSC's for agent approvals and withdrawals. */
+export const asterRequest = (msg: string, chainId: number): Typed => ({
+  types: { EIP712Domain, ...schemas.Message }, primaryType: "Message",
+  domain: { name: "AsterSignTransaction", version: "1", chainId, verifyingContract: ZERO_ADDRESS }, message: { msg },
+});
+export function checkAsterRequest(typed: Typed, chainId: number): asserts typed is Verified<Typed> {
+  checkTypes(typed);
+  const d = typed.domain;
+  insist(typed.primaryType === "Message" && d.name === "AsterSignTransaction" && d.version === "1" && d.chainId === chainId && same(d.verifyingContract, ZERO_ADDRESS) && typeof typed.message.msg === "string", "Unexpected Aster request");
+}
+function asterMessage(typed: Typed, chainId: number): string {
+  checkAsterRequest(typed, chainId);
+  return String(typed.message.msg);
+}
+/** An Aster request's query string, its values by position under exactly `names`. */
+function asterFields(msg: string, names: string[], message: string): string[] {
+  const pairs = msg.split("&").map(pair => pair.split("="));
+  insist(pairs.length === names.length && pairs.every((pair, index) => pair.length === 2 && pair[0] === names[index]), message);
+  return pairs.map(pair => required(pair[1]));
+}
+/**
+ * The agent approval an Aster account signs to link: LaMarge's agent for this address, valid one
+ * year, on BSC, with only `canPerpTrade`, which can move margin only to the account's own Spot
+ * wallet. The agent name must be one of the environments' names; every other field is fixed.
+ */
+export function checkAsterApproval(challenge: AsterChallenge, address: string, now = Date.now()): asserts challenge is AsterChallenge & { typed_data: Verified<Typed> } {
+  insist(challenge.typed_data, "Missing agent approval");
+  const msg = asterMessage(challenge.typed_data, ASTER_CHAIN_ID);
+  const names = ["user", "nonce", "agentName", "agentAddress", "expired", "signatureChainId", "canSpotTrade", "canPerpTrade", "canWithdraw"];
+  const whitelisted = msg.split("&").length > names.length;
+  const [user, nonce, name, agent, expired, chain, spot, perp, withdraw, ips] = asterFields(msg, whitelisted ? [...names, "ipWhitelist"] : names, "Unexpected agent approval");
+  insist(msg === challenge.message, "Unexpected agent approval");
+  insist(same(user, address), "The approval names another account");
+  insist(nonce === challenge.nonce && /^\d{16}$/.test(nonce) && Math.abs(Number(nonce) / 1_000_000 - now / 1000) <= 60, "Stale agent approval");
+  insist(ASTER_AGENT_NAMES.includes(required(name)) && /^0x[0-9a-fA-F]{40}$/.test(required(agent)) && !same(agent, address), "Unexpected agent");
+  insist(BigInt(required(expired)) === BigInt(nonce) / 1000n + BigInt(ASTER_APPROVAL_DAYS) * 86_400_000n, "Unexpected approval expiry");
+  insist(chain === String(ASTER_CHAIN_ID) && spot === "false" && perp === "true" && withdraw === "false" && ips !== "", "The agent may only move margin to Spot");
+}
+/** A transfer of USDT between Aster accounts the payer's wallet signs: its decimal amount, recipient, id, microsecond nonce and payer. */
+export function asterTransfer(typed: Typed) {
+  const msg = asterMessage(typed, ASTER_TRANSFER_CHAIN_ID);
+  const [asset, amount, to, id, nonce, user] = asterFields(msg, ["asset", "amount", "toAddress", "clientTranId", "nonce", "user"], "Unexpected Aster transfer");
+  insist(asset === "USDT" && /^\d{16}$/.test(required(nonce)), "Unexpected Aster transfer");
+  return { msg, amount: decimalUnits(amount, ASTER_DECIMALS), to: address(to), id: required(id), nonce: Number(nonce) / 1_000_000, user: address(user) };
+}
+/** The id a fill's Aster transfer carries: its UUID without dashes, 32 lowercase hex digits. A repeated request with it moves nothing more. */
+export const asterClientId = (fillId: string) => fillId.replaceAll("-", "").toLowerCase();
+/** Base units of USDT as Aster takes them: a decimal amount of six decimals at most, rounded up, so the recipient never gets less. */
+export const asterAmount = (units: bigint): string => {
+  const rounded = venueUnits(units, "aster"), unit = 10n ** BigInt(ASTER_DECIMALS);
+  const fraction = (rounded % unit).toString().padStart(ASTER_DECIMALS, "0").replace(/0+$/, "");
+  return fraction ? `${rounded / unit}.${fraction}` : String(rounded / unit);
+};
+/** The transfer pays `amount_in`, as Aster carries it in six decimals rounded up, from `payer` to the maker's `recipient`, under the fill id. */
+export function checkAsterTransfer(transfer: ReturnType<typeof asterTransfer>, fill: { id: string; amount_in: string; payer: string; maker_recipient: string }) {
+  const owed = BigInt(fill.amount_in);
+  insist(transfer.amount >= owed && transfer.amount < owed + venueStep("aster") && same(transfer.to, fill.maker_recipient) && same(transfer.user, fill.payer) && transfer.id === asterClientId(fill.id), "The Aster transfer differs from the take");
+}
+export type QuoteIntent = { venue: string; recipient: string; supply: string; receive: string; min_fill: string };
+type QuoteOrder = { id: string; venue: string; owner_address: string; quote_signer: string };
+export type PreparedQuote = { draft_id: string; sequence: number; valid_until: number; quote_size: string; expires_at: number; quotes: QuoteIntent[]; to_sign: SignItem[] };
+/** The published draft metadata and signed quote must both match the requested terms. */
+export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & { last_sequence: number }, requested: QuoteIntent | QuoteIntent[], validUntil: number, size: string): asserts prepared is PreparedQuote & { to_sign: Verified<SignItem[]> } {
+  const quotes = Array.isArray(requested) ? requested : [requested];
+  insist(quotes.length > 0);
+  insist(prepared.valid_until === validUntil && prepared.quote_size === size && prepared.expires_at === validUntil + MAKER_TIMEOUT_SECONDS + 1);
+  insist(Number.isSafeInteger(prepared.sequence) && prepared.sequence > order.last_sequence && prepared.to_sign.length === 1 && prepared.quotes.length === quotes.length);
+  quotes.forEach((quote, index) => {
+    const received = required(prepared.quotes[index]);
+    insist(received.venue === quote.venue && same(received.recipient, quote.recipient) && received.supply === quote.supply && received.receive === quote.receive && received.min_fill === quote.min_fill);
+  });
+  checkSignedQuote(required(prepared.to_sign[0]), order, quotes, prepared.sequence, prepared.expires_at);
+}
+/** The entire replacement set is reviewed, in order: no extra route, recipient or amount may be
+ * added, and each position is the quote index a fill names. */
+export function checkSignedQuote(item: SignItem, order: QuoteOrder, asked: QuoteIntent | QuoteIntent[], sequence: number, expires: number) {
+  const requested = Array.isArray(asked) ? asked : [asked];
+  checkEscrowTyped(item.typed_data, order.venue);
+  const m = item.typed_data.message;
+  const quotes = array(m.quotes).map(record);
+  insist(item.kind === "quote_set" && item.typed_data.primaryType === "QuoteSet" && same(item.signer, order.quote_signer) && same(m.owner, order.owner_address) && same(m.offerId, order.id) && uint(m.sequence) === BigInt(sequence) && uint(m.expiresAt) === BigInt(expires));
+  insist(requested.length > 0 && quotes.length === requested.length);
+  for (const [index, expected] of requested.entries()) {
+    const q = required(quotes[index]), chain = CHAINS[expected.venue];
+    insist(chain && q.venue === expected.venue && Object.keys(q).length === quote.length && expected.venue !== order.venue && uint(q.chainId) === BigInt(chain.id) && same(q.token, chain.token) && same(q.recipient, expected.recipient) && uint(q.supply) === BigInt(expected.supply) && uint(q.receive) === BigInt(expected.receive) && uint(q.minFill) === BigInt(expected.min_fill));
+    insist(uint(q.supply) > 0n && uint(q.receive) > 0n && uint(q.minFill) <= uint(q.supply));
+  }
+}
+export function checkCloseOrders(items: SignItem[], ids: string[], master: string): asserts items is Verified<SignItem[]> {
+  insist(items.length === 1);
+  const item = required(items[0]), m = item.typed_data.message;
+  // CloseOrders is an off-chain operator authorization in the HyperEVM domain.
+  checkEscrowTyped(item.typed_data, "hyperliquid");
+  const orders = array(m.orders);
+  insist(item.kind === "close_orders" && item.typed_data.primaryType === "CloseOrders" && same(item.signer, master) && same(m.account, master) && orders.length > 0 && new Set(orders).size === orders.length && orders.every(id => ids.some(asked => same(id, asked))));
+  checkDeadline(m.deadline, 3600);
+}
+/** SIWE intent pinned to `origin`, tolerating two minutes of local clock skew. */
+export function checkLoginChallenge(challenge: { message: string; nonce: string; expires_at: string; address: string }, origin: string, now = Date.now()): void {
+  const lines = challenge.message.split("\n");
+  const issued = Date.parse(lines[9]?.slice("Issued At: ".length) ?? "");
+  const expires = Date.parse(challenge.expires_at);
+  insist(lines.length === 11 && lines[0] === `${new URL(origin).host} wants you to sign in with your Ethereum account:` && same(lines[1], challenge.address) && lines[2] === "" && lines[3] === "Sign in to LaMarge." && lines[4] === "" && lines[5] === `URI: ${origin}` && lines[6] === "Version: 1" && lines[7] === "Chain ID: 1" && lines[8] === `Nonce: ${challenge.nonce}` && lines[9]?.startsWith("Issued At: ") && lines[10] === `Expiration Time: ${challenge.expires_at}` && issued <= now + 120_000 && expires > now - 120_000 && expires > issued && expires - issued <= 600_000, "Unexpected sign-in challenge");
+}

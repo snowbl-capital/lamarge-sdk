@@ -51,6 +51,8 @@ test("take validates total spend, slippage, one payment per fill, deadlines and 
   expect(()=>check([{...payTake(),fill_id:"another-take"}])).toThrow();
   const missingId = payTake(); delete missingId.fill_id;
   expect(()=>check([missingId])).toThrow();
+  expect(()=>check([payTake()],[{...fill,delivery_to:null}])).not.toThrow();
+  expect(()=>check([payTake()],[{...fill,delivery_to:"42"}])).toThrow("another account than yours");
 });
 test("a take deposits only its payer's shortfall with a reusable allowance",()=>{
   const check=(items:SignItem[])=>checkTakeIntent(items,[fill],take,owner,owner,now);

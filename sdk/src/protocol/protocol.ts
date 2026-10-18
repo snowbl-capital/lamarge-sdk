@@ -131,19 +131,21 @@ function checkEscrowTypedAt(typed: Typed, venue: string, escrow: string): void {
   insist(typed.domain.chainId === chain.id && same(typed.domain.verifyingContract, permit ? chain.token : escrow) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
   if (permit) insist(same(typed.message.spender, escrow), "Unexpected permit spender");
 }
-export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string }) {
-  const known = CHAINS[venue];
-  insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && same(chain.escrow, known.escrow), "API deployment differs from the reviewed deployment");
+/** A venue's chain as the API lists it: the pinned chain, token, decimals and escrow, and, when it says one, the token's permit domain, none on a venue settled inside itself. */
+export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined }) {
+  const known = CHAINS[venue], permit = chain.permit;
+  insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && same(chain.escrow, known.escrow)
+    && (permit === undefined || (permit === null ? known.permit === undefined : permit.name === known.permit && permit.version === known.version)), "API deployment differs from the reviewed deployment");
 }
 export function checkDeadline(value: unknown, seconds: number, now = Date.now() / 1000) {
   const at = Number(uint(value));
   insist(at > now && at <= now + seconds + 30, "Signing deadline is expired or too long");
 }
-export function checkPermit(item: SignItem, venue: string, owner: string, maxSeconds = 600): asserts item is SignItem & { typed_data: Verified<Typed> } {
+export function checkPermit(item: SignItem, venue: string, owner: string, maxSeconds = 600, now = Date.now() / 1000): asserts item is SignItem & { typed_data: Verified<Typed> } {
   checkEscrowTyped(item.typed_data, venue);
   const m = item.typed_data.message;
   insist(item.kind === "permit" && item.typed_data.primaryType === "Permit" && same(item.signer, owner) && same(m.owner, owner) && uint(m.value) === UNLIMITED_ALLOWANCE, "Unexpected token allowance");
-  checkDeadline(m.deadline, maxSeconds);
+  checkDeadline(m.deadline, maxSeconds, now);
 }
 /** A decimal amount with at most six decimals, in base units of a token with `decimals`. */
 export function decimalUnits(value: unknown, decimals: number): bigint {
@@ -221,12 +223,37 @@ function asterFields(msg: string, names: string[], message: string): string[] {
   insist(pairs.length === names.length && pairs.every((pair, index) => pair.length === 2 && pair[0] === names[index]), message);
   return pairs.map(pair => required(pair[1]));
 }
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+/**
+ * Where an agent may be used from, as Aster's `ipWhitelist` lists it, comma- or space-separated:
+ * at most eight addresses, or ranges no wider than an IPv4 /24 or an IPv6 /64, in public IPv4
+ * space (first octet 1 to 223) or IPv6 global unicast (2000::/3). No set of them covers every
+ * address, and no form hides another (IPv4 inside IPv6, a zone).
+ */
+function narrowAddresses(list: string): boolean {
+  const entries = list.split(/[ ,]/);
+  return entries.length <= 8 && entries.every(entry => {
+    const [host = "", prefix, ...rest] = entry.split("/");
+    if (rest.length || prefix !== undefined && !/^(0|[1-9]\d{0,2})$/.test(prefix)) return false;
+    const width = prefix === undefined ? null : Number(prefix);
+    if (IPV4.test(host)) {
+      const first = Number(host.split(".")[0]);
+      return first >= 1 && first <= 223 && (width === null || width >= 24 && width <= 32);
+    }
+    const halves = host.split("::"), groups = halves.flatMap(half => half === "" ? [] : half.split(":"));
+    const first = parseInt(host.split(":")[0] ?? "", 16);
+    return halves.length <= 2 && groups.every(group => /^[0-9a-f]{1,4}$/i.test(group)) && (halves.length === 2 ? groups.length < 8 : groups.length === 8)
+      && first >= 0x2000 && first <= 0x3fff && (width === null || width >= 64 && width <= 128);
+  });
+}
 /**
  * The agent approval an Aster account signs to link: LaMarge's agent for this address, valid one
  * year, on BSC, with only `canPerpTrade`, which can move margin only to the account's own Spot
- * wallet. The agent name must be one of the environments' names; every other field is fixed.
+ * wallet, and usable only from a few addresses when it lists them. The agent name must be one of
+ * the environments' names, or `agentName`, the deployment's own, when given: approving another
+ * environment's name revokes that environment's agent. Every other field is fixed.
  */
-export function checkAsterApproval(challenge: AsterChallenge, address: string, now = Date.now()): asserts challenge is AsterChallenge & { typed_data: Verified<Typed> } {
+export function checkAsterApproval(challenge: AsterChallenge, address: string, now = Date.now(), agentName?: string): asserts challenge is AsterChallenge & { typed_data: Verified<Typed> } {
   insist(challenge.typed_data, "Missing agent approval");
   const msg = asterMessage(challenge.typed_data, ASTER_CHAIN_ID);
   const names = ["user", "nonce", "agentName", "agentAddress", "expired", "signatureChainId", "canSpotTrade", "canPerpTrade", "canWithdraw"];
@@ -235,9 +262,10 @@ export function checkAsterApproval(challenge: AsterChallenge, address: string, n
   insist(msg === challenge.message, "Unexpected agent approval");
   insist(same(user, address), "The approval names another account");
   insist(nonce === challenge.nonce && /^\d{16}$/.test(nonce) && Math.abs(Number(nonce) / 1_000_000 - now / 1000) <= 60, "Stale agent approval");
-  insist(ASTER_AGENT_NAMES.includes(required(name)) && /^0x[0-9a-fA-F]{40}$/.test(required(agent)) && !same(agent, address), "Unexpected agent");
+  insist(ASTER_AGENT_NAMES.includes(required(name)) && (agentName === undefined || name === agentName) && /^0x[0-9a-fA-F]{40}$/.test(required(agent)) && !same(agent, address), "Unexpected agent");
   insist(BigInt(required(expired)) === BigInt(nonce) / 1000n + BigInt(ASTER_APPROVAL_DAYS) * 86_400_000n, "Unexpected approval expiry");
   insist(chain === String(ASTER_CHAIN_ID) && spot === "false" && perp === "true" && withdraw === "false" && ips !== "", "The agent may only move margin to Spot");
+  insist(ips === undefined || narrowAddresses(ips), "The agent may be used from too many addresses, or too wide a range");
 }
 /** A transfer of USDT between Aster accounts the payer's wallet signs: its decimal amount, recipient, id, microsecond nonce and payer. */
 export function asterTransfer(typed: Typed) {

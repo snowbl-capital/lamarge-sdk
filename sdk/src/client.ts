@@ -44,8 +44,13 @@ export interface Request {
 
 export interface Transport {
   apiUrl: string;
+  /** Every request goes through it, Lighter's reads included. */
   fetch?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
+  /** False: a 429 is thrown at once, for a caller that keeps its own request budget. */
+  retryRateLimited?: boolean | undefined;
+  /** The most of an answer that is read; a longer one is refused. Unbounded unless set. */
+  maxAnswerBytes?: number | undefined;
 }
 
 const text = (value: unknown) => typeof value === "string" ? value : undefined;
@@ -73,6 +78,24 @@ export function wait(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** An answer's JSON, read up to `max` bytes; null when it isn't JSON. */
+async function answerBody(response: Response, max: number | undefined): Promise<unknown> {
+  if (max === undefined || !response.body) return response.json().catch(() => null);
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let size = 0;
+  for (let read = await reader.read(); !read.done; read = await reader.read()) {
+    size += read.value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      throw new LaMargeError(response.status, "UNKNOWN", `Answer over ${max} bytes`);
+    }
+    chunks.push(read.value);
+  }
+  const bytes = new Uint8Array(size);
+  chunks.reduce((offset, chunk) => { bytes.set(chunk, offset); return offset + chunk.byteLength; }, 0);
+  try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return null; }
+}
+
 /** One HTTP exchange with the API: the answer's status and decoded JSON, or a `LaMargeError`. */
 export async function exchange(transport: Transport, request: Request): Promise<{ status: number; body: unknown }> {
   const path = request.path.replace(/\{([^}]+)\}/g, (_match: string, key: string) => encodeURIComponent(required(request.params?.[key], `Missing path parameter ${key}`)));
@@ -89,13 +112,13 @@ export async function exchange(transport: Transport, request: Request): Promise<
     try {
       const signal = request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
       const response = await (transport.fetch ?? globalThis.fetch)(url, { method: request.method, headers, signal, ...(body === undefined ? {} : { body }) });
-      const raw: unknown = response.status === 204 ? null : await response.json().catch(() => null);
+      const raw: unknown = response.status === 204 ? null : await answerBody(response, transport.maxAnswerBytes);
       if (!response.ok && !request.accept?.includes(response.status)) throw refusal(response.status, raw, response.headers);
       return { status: response.status, body: raw };
     } catch (error) {
       request.signal?.throwIfAborted();
       // The server says what may be retried; an answer without its envelope, from a proxy, only for a 429 or 5xx.
-      const transient = !(error instanceof LaMargeError) || (error.retryable ?? (error.status === 429 || error.status >= 500));
+      const transient = !(error instanceof LaMargeError) || (error.status === 429 && transport.retryRateLimited === false ? false : error.retryable ?? (error.status === 429 || error.status >= 500));
       if (!request.retry || attempt >= 2 || !transient) throw error;
       const delay = error instanceof LaMargeError && error.retryAfterMs !== undefined ? error.retryAfterMs : 250 * 2 ** attempt;
       await wait(delay, request.signal);
@@ -125,6 +148,8 @@ export interface ClientConfig extends Transport {
 
 export interface Client {
   readonly apiUrl: string;
+  /** The transport's own, for the reads a flow makes beside the API, as Lighter's. */
+  readonly fetch: typeof fetch | undefined;
   token: string | undefined;
   /** Any public operation by its `operationId`, typed by the API reference. Answers are typed, not validated:
    * what gets signed is checked by `@lamarge/sdk/protocol`. */
@@ -151,6 +176,6 @@ export function createClient(config: ClientConfig): Client {
     });
     return answer.body;
   }
-  const client: Client = { apiUrl: config.apiUrl, token: config.token, call };
+  const client: Client = { apiUrl: config.apiUrl, fetch: config.fetch, token: config.token, call };
   return client;
 }

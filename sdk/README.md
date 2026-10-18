@@ -33,10 +33,11 @@ const fills = await transfer(client, account, {
 
 | Flow | Does |
 | --- | --- |
-| `signIn`, `checkDeployment` | SIWE for the app's origin, after checking every chain the API names against the pinned deployment |
+| `signIn`, `checkDeployment` | SIWE for the app's origin, after checking every chain the API names, its permit and its settlement against the pinned deployment |
 | `linkAccount`, `setUpVenue` | Links an account, by the link message when it is not the master's; runs its setup steps (permit, Aster agent, Lighter key) |
 | `transfer` | Funding, the take, its payment; recovery by client id; `TransferPending` when funds or a permit have not arrived yet |
 | `take` | Reserves quotes, checks and signs the payment (escrow, Aster or Lighter), submits it |
+| `route` | A route of two takes through a venue between, as `GET /v1/routes` plans it: two transfers, the second continuing what the first delivered |
 | `changes` | Snapshot, then every page of events over the WebSocket, HTTP replay between connections, `{ resync }` when the journal moved on |
 
 Making a market takes two keys on two hosts. `Maker` holds the financial key and only provisions and releases capital; `Quoter` holds a scoped credential (`mk_`) and the quote key, and only quotes, cancels and reports deliveries.
@@ -70,4 +71,4 @@ bun run api:generate
 
 `src/generated/api.ts` comes from `docs/api/api-reference/openapi.yaml`, the API's public contract. The SDK is developed in LaMarge's repository, next to the server, the app and that contract; [snowbl-capital/lamarge-sdk](https://github.com/snowbl-capital/lamarge-sdk) mirrors each release, with the public contract and the Lighter test vectors its checks need. Changes are made upstream; issues are welcome there.
 
-Each release `sdk-vX.Y.Z` is cut from the commit production runs, so the server keeps every operation and field it uses. Before 1.0 a minor release may break.
+Each release `sdk-vX.Y.Z` is cut from LaMarge's `main`, apart from the server's releases: it may call what production doesn't serve yet, which works once a server release ships it. Before 1.0 a minor release may break.

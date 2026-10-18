@@ -56,11 +56,12 @@ test("Aster signs quote sets in its own domain; its former escrow only ends what
 test("a take into Aster names its own escrow", () => {
   const chain = pinned();
   const hyper = required(CHAINS.hyperliquid);
-  const fill: TakeFill = { id: "fill-1", order_id: `0x${"cd".repeat(32)}`, sequence: 1, role: "taker", from_venue: "hyperliquid", to_venue: "aster", amount_in: "1000000", amount_out: USDT.toString(), payer: owner, maker_recipient: agent, taker_recipient: owner, swap_id: `0x${"ef".repeat(32)}`, hashlock: `0x${"bb".repeat(32)}`, pay_by: new Date((now + 45) * 1000).toISOString(), t1: new Date((now + 3600) * 1000).toISOString(), t2: new Date((now + 7200) * 1000).toISOString() };
+  const fill: TakeFill = { id: "fill-1", order_id: `0x${"cd".repeat(32)}`, sequence: 1, role: "taker", from_venue: "hyperliquid", to_venue: "aster", amount_in: "1000000", amount_out: USDT.toString(), payer: owner, maker_recipient: agent, taker_recipient: owner, swap_id: `0x${"ef".repeat(32)}`, hashlock: `0x${"bb".repeat(32)}`, pay_by: new Date((now + 45) * 1000).toISOString(), t1: new Date((now + 3600) * 1000).toISOString(), t2: new Date((now + 7200) * 1000).toISOString() , delivery_to: owner };
   const payment = (escrow: string): SignItem => ({ kind: "pay_take", fill_id: fill.id, signer: owner, typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: hyper.id, verifyingContract: hyper.escrow }, message: { payer: owner, deposit: "1000000", payments: [{ payer: owner, swapId: fill.swap_id, recipient: agent, amount: "1000000", hashlock: fill.hashlock, refundAt: now + 7200, deadline: now + 45, orderId: fill.order_id, sequence: 1, amountOut: USDT.toString(), receiveChainId: chain.id, receiveToken: chain.token, receiveEscrow: escrow, receiveRecipient: owner, dex: 0 }] } } });
   const take = { from: "hyperliquid", to: "aster", amount_in: "1000000", min_out: USDT.toString() };
   expect(() => checkTakeIntent([payment(chain.escrow)], [fill], take, owner, owner, now)).not.toThrow();
   expect(() => checkTakeIntent([payment(agent)], [fill], take, owner, owner, now)).toThrow();
+  for (const delivery_to of [agent, null, undefined]) expect(() => checkTakeIntent([payment(chain.escrow)], [{ ...fill, delivery_to }], take, owner, owner, now)).toThrow("another account than yours");
 });
 
 test("an agent approval is LaMarge's, for this address, only moving margin to Spot, for a year", () => {
@@ -85,6 +86,23 @@ test("an agent approval is LaMarge's, for this address, only moving margin to Sp
   elsewhere.typed_data.domain.chainId = 42161;
   expect(() => checkAsterApproval(elsewhere, owner, now * 1000)).toThrow();
   expect(() => checkAsterApproval({ ...challenge(message()), typed_data: undefined }, owner, now * 1000)).toThrow();
+  // Bound to the deployment's own name, the other environment's agent is refused: approving it would revoke that agent.
+  expect(() => checkAsterApproval(challenge(message()), owner, now * 1000, "LaMarge")).not.toThrow();
+  expect(() => checkAsterApproval(challenge(message({ agentName: "LaMargeDev" })), owner, now * 1000, "LaMarge")).toThrow("Unexpected agent");
+});
+
+test("an agent approval that lists addresses lists a few, narrow, public ones", () => {
+  const nonce = String(BigInt(now) * 1_000_000n + 42n);
+  const expired = String(BigInt(now) * 1000n + 365n * 86_400_000n);
+  const listing = (ips: string) => {
+    const msg = `user=${owner}&nonce=${nonce}&agentName=LaMarge&agentAddress=${agent}&expired=${expired}&signatureChainId=56&canSpotTrade=false&canPerpTrade=true&canWithdraw=false&ipWhitelist=${ips}`;
+    return { message: msg, nonce, expires_at: "2026-10-05T18:00:00Z", typed_data: asterRequest(msg, ASTER_CHAIN_ID) };
+  };
+  for (const ips of ["203.0.113.7", "203.0.113.7,198.51.100.0/24", "1.2.3.4 10.0.0.0/24", "2001:db8::1", "2001:db8:1:2::/64", "2001:db8:0:0:0:0:0:1/128", Array(8).fill("203.0.113.7").join(",")])
+    expect(() => checkAsterApproval(listing(ips), owner, now * 1000)).not.toThrow();
+  for (const ips of ["0.0.0.0/0", "203.0.113.0/23", "0.1.2.3", "224.0.0.1", "255.255.255.255", "::/0", "::1", "::ffff:1.2.3.4", "fe80::1", "2001:db8::/63", "2001:db8::1%eth0",
+    "1.2.3", "203.0.113.7/024", "203.0.113.7/24/1", Array(9).fill("203.0.113.7").join(","), "2001:db8::1::2", "4001::1"])
+    expect(() => checkAsterApproval(listing(ips), owner, now * 1000)).toThrow("too many addresses, or too wide a range");
 });
 
 test("a take paid from Aster signs one transfer of its amount to the maker, under its fill id, its nonce about a minute ahead", () => {

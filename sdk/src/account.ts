@@ -1,10 +1,10 @@
 import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
-import { checkLinkChallenge } from "./protocol/consents.ts";
+import { checkLinkChallenge, checkSetupKind } from "./protocol/consents.ts";
 import { requireV5Deployment } from "./protocol/deployments.ts";
-import { fromHex, registrationMessage, TAKER_API_KEY } from "./protocol/lighter.ts";
+import { fromHex, lighterAccountOwner, registrationMessage, TAKER_API_KEY } from "./protocol/lighter.ts";
 import { CHAINS, checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
-import { signTyped, type Signer } from "./signer.ts";
+import { signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 
 type SetupStep = Answer<"postVenueSetupStep">;
 /**
@@ -15,7 +15,7 @@ export async function linkAccount(client: Client, master: Pick<Signer, "address"
   let proof: { nonce: string; signature: string } | undefined;
   if (!same(owner.address, master.address)) {
     const challenge = await client.call("postLinkChallenge", { body: { venue, address: owner.address }, signal });
-    checkLinkChallenge(challenge, owner.address, master.address);
+    checkLinkChallenge(challenge, owner.address, master.address, venue);
     proof = { nonce: challenge.nonce, signature: await owner.signMessage({ message: challenge.message }) };
   }
   const linked = await client.call("postLink", { body: { venue, address: owner.address, ...proof }, signal, retry: true });
@@ -24,36 +24,43 @@ export async function linkAccount(client: Client, master: Pick<Signer, "address"
 }
 
 /** A prepared step's request, checked against what LaMarge may ask of the account, then signed. */
-async function signStep(step: SetupStep, venue: string, owner: Signer, wallet: string | null) {
+async function signStep(step: SetupStep, venue: string, owner: Signer, wallet: string | null, now: () => number, signal?: AbortSignal, agentName?: string, before?: BeforeSigning) {
   const request = required(step.to_sign, "Prepare the setup again");
   insist(same(request.signer, owner.address), "Setup asks another account to sign");
+  checkSetupKind(step.step, request.kind);
   if (request.kind === "permit") {
     const chain = required(CHAINS[venue]);
     requireV5Deployment(chain.id, chain.escrow);
     const item = { kind: request.kind, signer: request.signer, typed_data: required(request.typed_data) };
-    checkPermit(item, venue, owner.address);
+    checkPermit(item, venue, owner.address, 600, now() / 1000);
+    await before?.({ kind: "setup", venue, step });
     return signTyped(owner, item.typed_data);
   }
   if (request.kind === "aster_approval") {
     const typed = required(request.typed_data);
     const approval = { message: String(typed.message.msg), nonce: request.ref, expires_at: required(request.expires_at), typed_data: typed };
-    checkAsterApproval(approval, owner.address);
+    checkAsterApproval(approval, owner.address, now(), agentName);
+    await before?.({ kind: "setup", venue, step });
     return signTyped(owner, approval.typed_data);
   }
   // Lighter's own owner message: LaMarge's key at its index, for the linked account, at the key's nonce.
+  // The account is an index: Lighter itself says whose it is, LaMarge's record of the link doesn't.
   const message = required(request.message);
+  const account = Number(required(wallet, "Link the Lighter account again"));
   const key = /^Register Lighter Account\n\npubkey: 0x([0-9a-f]{80})\n/.exec(message)?.[1];
-  insist(key && message === registrationMessage({ account: Number(required(wallet, "Link the Lighter account again")), apiKey: TAKER_API_KEY, publicKey: fromHex(key), nonce: Number(request.ref) }), "Unexpected Lighter key registration");
+  insist(key && message === registrationMessage({ account, apiKey: TAKER_API_KEY, publicKey: fromHex(key), nonce: Number(request.ref) }), "Unexpected Lighter key registration");
+  insist(same(await lighterAccountOwner(account, signal), owner.address), "The Lighter key registration names another account than yours");
+  await before?.({ kind: "setup", venue, step });
   return owner.signMessage({ message });
 }
 
 /** Prepares and, when it is still required, signs and submits one step; an unanswered submission is sent again unchanged. */
-async function runStep(client: Client, venue: string, step: string, owner: Signer, wallet: string | null, signal?: AbortSignal): Promise<SetupStep> {
+async function runStep(client: Client, venue: string, step: string, owner: Signer, wallet: string | null, now: () => number, signal?: AbortSignal, agentName?: string, before?: BeforeSigning): Promise<SetupStep> {
   // Signed once: a stale Aster approval is the only one prepared and signed again.
   for (let retried = false; ; retried = true) {
     const prepared = await client.call("postVenueSetupStep", { path: { venue, step }, body: {}, signal });
     if (prepared.status !== "required") return prepared;
-    const body = { ref: required(prepared.to_sign).ref, signature: await signStep(prepared, venue, owner, wallet) };
+    const body = { ref: required(prepared.to_sign).ref, signature: await signStep(prepared, venue, owner, wallet, now, signal, agentName, before) };
     try {
       for (let attempt = 1; ; attempt++) {
         try { return await client.call("postVenueSetupStep", { path: { venue, step }, body, signal }); } catch (error) {
@@ -73,16 +80,17 @@ async function runStep(client: Client, venue: string, step: string, owner: Signe
  * approval, Lighter's key) and waits until the venue shows it. A step submitted before is awaited,
  * never signed twice. `owner` is the account linked on `venue`; `steps` limits the run to those
  * steps, as a maker pool needs only Aster's agent and none of a taker's payment setup.
+ * `asterAgentName`, the deployment's own (`LaMarge` in production), refuses another environment's agent.
  */
-export async function setUpVenue(client: Client, venue: string, owner: Signer, options: { steps?: readonly string[] | undefined; signal?: AbortSignal | undefined } = {}) {
-  const { steps, signal } = options;
+export async function setUpVenue(client: Client, venue: string, owner: Signer, options: { steps?: readonly string[] | undefined; signal?: AbortSignal | undefined; asterAgentName?: string | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}) {
+  const { steps, signal, asterAgentName, beforeSigning, now = Date.now } = options;
   // Lighter's key registration names the linked account's index.
   let [setup, wallet] = await Promise.all([client.call("getVenueSetup", { path: { venue }, signal }),
     venue === "lighter" ? client.call("getBalances", { signal }).then(rows => rows.find(row => row.venue === venue)?.venue_wallet ?? null) : null]);
   insist(same(setup.address, owner.address), "Setup returned another account");
   const todo = setup.steps.filter(row => row.status !== "done" && (!steps || steps.includes(row.step)));
   for (const { step } of todo) {
-    let current: { status: string } = await runStep(client, venue, step, owner, wallet, signal);
+    let current: { status: string } = await runStep(client, venue, step, owner, wallet, now, signal, asterAgentName, beforeSigning);
     for (let read = 0; current.status === "pending"; read++) {
       insist(read < 60, "Setup is awaiting the venue's confirmation. Check again.");
       await wait(2_000, signal);
@@ -96,9 +104,9 @@ export async function setUpVenue(client: Client, venue: string, owner: Signer, o
   return setup;
 }
 
-/** The permit a transfer from wallet funds asks for; one already submitted or final needs nothing. */
-export async function submitPermit(client: Client, venue: string, owner: Signer, signal?: AbortSignal): Promise<void> {
-  await runStep(client, venue, "permit", owner, null, signal);
+/** The permit a transfer from wallet funds asks for; one already submitted or final needs nothing. One the relay refused at once stops here, before any margin moves for it. */
+export async function submitPermit(client: Client, venue: string, owner: Signer, signal?: AbortSignal, beforeSigning?: BeforeSigning, now: () => number = Date.now): Promise<void> {
+  insist((await runStep(client, venue, "permit", owner, null, now, signal, undefined, beforeSigning)).status !== "required", "Payment authorization failed");
 }
 
 /** Whether the account's submitted permit is final; a failed one stops the transfer. */

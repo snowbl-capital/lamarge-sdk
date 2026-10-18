@@ -1,7 +1,7 @@
 export { createClient, exchange, LaMargeError, type Answer, type CallArguments, type CallOptions, type OperationAnswer, type OperationInput, type Client, type ClientConfig, type Request, type Transport } from "./client.ts";
 export { retryAfterMs } from "./retry-after.ts";
 export { checkDeployment, signIn, signOut } from "./session.ts";
-export { signItems, signTyped, typedDataRequest, type Hex, type SignedItem, type Signer, type TypedDataRequest } from "./signer.ts";
+export { signItems, signTyped, typedDataRequest, type BeforeSigning, type Hex, type SignedItem, type Signer, type Signing, type TypedDataRequest } from "./signer.ts";
 export type { components, operations, paths } from "./generated/api.ts";
 export { linkAccount, permitDone, setUpVenue, submitPermit } from "./account.ts";
 export { changes, type Change, type ChangeOptions, type EventPage, type Snapshot, type SocketConstructor } from "./events.ts";
@@ -13,3 +13,4 @@ export { transfer, TransferPending, unsignedReservation, type Funding, type Tran
 export { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type Order, type QuoteSigner } from "./maker.ts";
 export { checkEscrowLocks, refundPayment, withdraw, type ChainReaders, type RefundFill, type Withdrawal, type WithdrawalRequest } from "./withdraw.ts";
+export { route, type RouteOptions, type RouteRequest, type RouteStage } from "./route.ts";

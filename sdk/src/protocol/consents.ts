@@ -2,12 +2,23 @@ import { requireV5Deployment } from "./deployments.ts";
 import { CHAINS, checkDeadline, checkEscrowTyped, checkRegistry, insist, same, type SignItem } from "./protocol.ts";
 import { required, type Verified } from "./validation.ts";
 
-/** The message `address` signs to be linked under `master`: six lines, naming both, valid ten minutes at most. */
-export function checkLinkChallenge(challenge: { message: string; nonce: string; expires_at: string }, address: string, master: string, now = Date.now()): void {
+/** Each venue's name, as the link message names it. */
+const VENUE_NAMES: Record<string, string> = { hyperliquid: "Hyperliquid", polymarket: "Polymarket Perps", lighter: "Lighter", aster: "Aster" };
+
+/** The message `address` signs to be linked on `venue` under `master`: six lines, naming all three, valid ten minutes at most. */
+export function checkLinkChallenge(challenge: { message: string; nonce: string; expires_at: string }, address: string, master: string, venue: string, now = Date.now()): void {
   const lines = challenge.message.split("\n");
   const expires = Date.parse(challenge.expires_at);
-  insist(lines.length === 6 && lines[0]?.startsWith("LaMarge: link a ") && same(lines[2], `Account: ${address}`) && same(lines[3], `Master account: ${master}`)
+  insist(lines.length === 6 && VENUE_NAMES[venue] !== undefined && lines[0] === `LaMarge: link a ${VENUE_NAMES[venue]} account` && lines[1] === "" && same(lines[2], `Account: ${address}`) && same(lines[3], `Master account: ${master}`)
     && lines[4] === `Nonce: ${challenge.nonce}` && lines[5] === `Expires: ${challenge.expires_at}` && expires > now && expires <= now + 10 * 60_000, "Unexpected account-link challenge");
+}
+
+/** The one kind of request each setup step signs. */
+const SETUP_KINDS: Record<string, string> = { permit: "permit", agent: "aster_approval", api_key: "lighter_api_key" };
+
+/** A prepared setup step's request asks the kind of signature its step does, and nothing else. */
+export function checkSetupKind(step: string, kind: string): void {
+  insist(SETUP_KINDS[step] === kind, "The setup step asks another kind of signature");
 }
 
 type FundingRequest = { kind: string; signer: string; chain_id: number };

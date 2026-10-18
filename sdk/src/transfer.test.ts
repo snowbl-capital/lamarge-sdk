@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { createClient } from "./client.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas } from "./protocol/protocol.ts";
 import { record, required } from "./protocol/validation.ts";
+import type { Signing } from "./signer.ts";
 import { memoryStore } from "./store.ts";
+import { take } from "./take.ts";
 import { transfer, type TransferRequest } from "./transfer.ts";
 
 const payer = `0x${"11".repeat(20)}` as const, maker = `0x${"22".repeat(20)}`, id = `0x${"aa".repeat(32)}`;
@@ -11,9 +13,11 @@ const at = (seconds: number) => new Date((now() + seconds) * 1000).toISOString()
 
 /** The API as a taker sees it for one Hyperliquid to Polymarket transfer of 1 USDC. */
 function api(options: { chainBalance?: string; withdrawalAmount?: string; recipient?: string; linkedRecipient?: string; failSubmissions?: number;
-  permit?: boolean; levels?: unknown[]; stalePreparation?: boolean; loseCancel?: boolean; refuseCancel?: boolean; takeId?: string } = {}) {
+  permit?: boolean; levels?: unknown[]; stalePreparation?: boolean; loseCancel?: boolean; refuseCancel?: boolean; takeId?: string; answered?: Record<string, unknown>;
+  unreadable?: number } = {}) {
   const calls: string[] = [];
   let failures = options.failSubmissions ?? 0;
+  let unreadable = options.unreadable ?? 0;
   const intent = {
     id: "transfer-1", client_transfer_id: "move-1", client_take_id: "take-client-1", from: "hyperliquid", to: "polymarket", amount_in: "1000000", min_out: "1000000",
     max_parts: 8, payer, recipient: payer, from_chain_id: 999, to_chain_id: 137, withdrawal: null, take_id: (options.takeId ?? null) as string | null,
@@ -37,7 +41,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     "POST /v1/transfers": body => {
       const id = String(record(body).client_transfer_id);
       if (id.startsWith("renew:")) { Object.assign(intent, { id: "transfer-2", client_transfer_id: id, cancelled_at: null, withdrawal_preparation: null }); }
-      return intent;
+      return { ...intent, ...options.answered };
     },
     "GET /v1/transfers/transfer-1": () => intent.id === "transfer-1" ? intent : { ...intent, id: "transfer-1", cancelled_at: at(0) },
     "GET /v1/transfers/transfer-2": () => intent,
@@ -55,6 +59,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     "GET /v1/takes/take-1": () => prepared(),
     "POST /v1/takes/take-1/signatures": () => {
       if (failures-- > 0) throw new TypeError("connection reset");
+      if (unreadable-- > 0) return {};
       return { fills: [{ ...fill, state: "PAID", signed_at: at(0) }] };
     },
   };
@@ -68,7 +73,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     const answer = handler(body);
     return answer instanceof Response ? answer : answer === null ? new Response(null, { status: 204 }) : Response.json(answer);
   }, { preconnect: globalThis.fetch.preconnect });
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls };
+  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, fill, payment };
 }
 
 const counting = () => {
@@ -115,6 +120,48 @@ test("after a lost submission, running it again submits the stored signature ins
   expect(signer.signed).toBe(1);
 });
 
+test("an unreadable answer to the payment keeps its signature, submitted again as signed", async () => {
+  const { client } = api({ unreadable: 1 });
+  const signer = counting();
+  const store = memoryStore();
+  await expect(transfer(client, signer, request, { store })).rejects.toThrow("Unreadable answer to the payment");
+  expect(await store.load("take:take-1")).toBeDefined();
+  expect((await transfer(client, signer, { ...request, transfer_id: "transfer-1" }, { store })).map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.signed).toBe(1);
+});
+
+test("the caller's own checks see each request once it is checked, before it is first signed, and can stop it", async () => {
+  const seen: string[] = [];
+  const watched = (refuse: boolean) => (signing: Signing) => {
+    seen.push(signing.kind === "take" ? `take ${signing.prepared.take.id} ${signing.input.amount_in}` : signing.kind);
+    if (refuse) throw new Error("over my own limit");
+  };
+  const refused = counting();
+  await expect(transfer(api().client, refused, request, { beforeSigning: watched(true) })).rejects.toThrow("over my own limit");
+  expect(refused.signed).toBe(0);
+  expect(seen).toEqual(["take take-1 1000000"]);
+  // A stored signature submitted again is no new signature: nothing to check.
+  seen.length = 0;
+  const { client } = api({ failSubmissions: 3 });
+  const signer = counting();
+  const store = memoryStore();
+  let transferId: string | undefined;
+  await expect(transfer(client, signer, request, { store, beforeSigning: watched(false), onIntent: intent => { transferId = intent.id; } })).rejects.toThrow("connection reset");
+  await transfer(client, signer, { ...request, transfer_id: transferId }, { store, beforeSigning: watched(false) });
+  expect(seen).toEqual(["take take-1 1000000"]);
+  expect(signer.signed).toBe(1);
+});
+
+test("a signature stored by an earlier release, without its request, is still submitted", async () => {
+  const { client } = api({ takeId: "take-1" });
+  const store = memoryStore();
+  await store.save("take:take-1", [{ kind: "pay_take", fill_id: "fill-1", signature: "0x00" }]);
+  const signer = counting();
+  const fills = await transfer(client, signer, { ...request, transfer_id: "transfer-1" }, { store });
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.signed).toBe(0);
+});
+
 test("a resumed take never pays an account other than the transfer's recipient", async () => {
   const { client } = api({ takeId: "take-1", recipient: maker, linkedRecipient: maker });
   const signer = counting();
@@ -142,6 +189,14 @@ test("margin leaves the venue only for a take the book can execute", async () =>
   const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000", levels: [] });
   const signer = counting();
   await expect(transfer(client, signer, { ...request, funding: "venue" })).rejects.toThrow("No executable price available");
+  expect(signer.signed).toBe(0);
+  expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
+});
+
+test("the book is priced at the caller's clock: a level past its validity there funds nothing", async () => {
+  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000" });
+  const signer = counting();
+  await expect(transfer(client, signer, { ...request, funding: "venue" }, { now: () => Date.now() + 90_000 })).rejects.toThrow("No executable price available");
   expect(signer.signed).toBe(0);
   expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
 });
@@ -174,6 +229,26 @@ test("a replacement recorded as funded is never funded again, even when the bala
   await transfer(client, signer, { ...request, funding: "venue", transfer_id: "transfer-1" }, { store });
   expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
   expect(calls).toContain("POST /v1/takes");
+});
+
+test("a transfer answered under another client id, or between other chains, is never paid", async () => {
+  for (const answered of [{ client_transfer_id: "move-2" }, { to_chain_id: 56 }, { from_chain_id: 137 }]) {
+    const { client, calls } = api({ answered });
+    const signer = counting();
+    await expect(transfer(client, signer, request)).rejects.toThrow(/another transfer|Transfer terms changed/);
+    expect(signer.signed).toBe(0);
+    expect(calls.some(call => call.startsWith("POST /v1/takes"))).toBe(false);
+  }
+});
+
+test("a take checks its payment window against the caller's clock", async () => {
+  const input = { from: "hyperliquid", to: "polymarket", amount_in: "1000000", min_out: "1000000", client_take_id: "take-client-1" };
+  const late = counting();
+  await expect(take(api().client, late, input, { now: () => Date.now() + 120_000 })).rejects.toThrow();
+  expect(late.signed).toBe(0);
+  const signer = counting();
+  expect((await take(api().client, signer, input, { now: () => Date.now() })).map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.signed).toBe(1);
 });
 
 test("a refused cancellation leaves no replacement owed", async () => {

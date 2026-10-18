@@ -20,12 +20,15 @@ export function makerKeySlot(value = "4"): number {
 }
 /** A taker's transfer moves USDC between collateral routes. */
 export const USDC_ASSET = 3;
+/** The most Lighter may charge a taker's account on top of a transfer, in USDC base units: it charges 0 or 1 USDC. */
+export const LIGHTER_MAX_TAKER_FEE = 1_000_000n;
 export const COLLATERAL_ROUTE = 0;
 /** Lighter's public API, read directly so account data does not depend on LaMarge. */
 export const LIGHTER_API = "https://mainnet.zklighter.elliot.ai";
 
 /** The address owning Lighter account `index`, as Lighter's public API reads it. */
-export async function lighterAccountOwner(index: number, signal?: AbortSignal, fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch): Promise<string> {
+export async function lighterAccountOwner(index: number, signal?: AbortSignal, fetcher: ((url: string, init: RequestInit) => Promise<Response>) | undefined = fetch): Promise<string> {
+  fetcher ??= fetch;
   const response = await fetcher(`${LIGHTER_API}/api/v1/account?by=index&value=${index}`, signal ? { signal } : {});
   const body: unknown = response.ok ? await response.json() as unknown : undefined;
   const accounts: unknown = typeof body === "object" && body !== null ? Reflect.get(body, "accounts") : undefined;

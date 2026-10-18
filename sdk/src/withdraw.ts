@@ -3,7 +3,7 @@ import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
 import { CHAINS, checkWithdrawal, escrowOf, insist, same, type Typed } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
-import { signItems, signTyped, type Signer } from "./signer.ts";
+import { signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 import { exclusive, memoryStore, typedData, type SignatureStore } from "./store.ts";
 
 export type Withdrawal = components["schemas"]["Withdrawal"];
@@ -15,14 +15,16 @@ export type Withdrawal = components["schemas"]["Withdrawal"];
  */
 export async function submitWithdrawal(options: {
   key: string; context?: Record<string, unknown>; venue: string; signer: Signer; destination: string; amount: bigint; store: SignatureStore; signal?: AbortSignal | undefined;
-  prepare: () => Promise<Typed>; submit: (typed: Typed, signature: `0x${string}`) => Promise<Withdrawal>;
+  prepare: () => Promise<Typed>; submit: (typed: Typed, signature: `0x${string}`) => Promise<Withdrawal>; beforeSigning?: BeforeSigning | undefined;
+  now?: (() => number) | undefined;
 }): Promise<{ result: Withdrawal; saved: Record<string, unknown> }> {
   const { key, venue, signer, destination, amount, store, signal } = options;
   const stored: unknown = await store.load(key);
   let saved = stored === undefined || record(stored).typed === undefined ? undefined : { typed: typedData(record(stored).typed), signature: hex(record(stored).signature) };
   if (!saved) {
     const typed = await options.prepare();
-    checkWithdrawal(typed, venue, signer.address, destination, amount);
+    checkWithdrawal(typed, venue, signer.address, destination, amount, (options.now ?? Date.now)() / 1000);
+    await options.beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
     saved = { typed, signature: await signTyped(signer, typed) };
     signal?.throwIfAborted();
     await store.save(key, { ...options.context, ...saved });
@@ -61,7 +63,7 @@ export interface WithdrawalRequest {
  * second envelope this flow does not sign yet.
  */
 export async function withdraw(client: Client, signer: Signer, request: WithdrawalRequest,
-  options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined } = {}): Promise<Withdrawal> {
+  options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}): Promise<Withdrawal> {
   const { id, venue, amount, to } = request;
   const { store = memoryStore(), signal } = options;
   insist(venue === "hyperliquid" || venue === "polymarket", `Withdrawals from ${venue} are not supported here`);
@@ -82,7 +84,7 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
     const destination = required(to === "wallet" ? balance.venue_wallet : signer.address, "No linked destination wallet");
     try {
       const { result, saved } = await submitWithdrawal({
-        key, context, venue, signer, destination, amount, store, signal,
+        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now,
         prepare: async () => (await client.call("postWithdrawalPrepare", { body: { venue, amount: amount.toString(), to }, signal })).typed_data,
         submit: (typed, signature) => client.call("postWithdrawal", { body: { venue, typed_data: typed, signature }, signal, retry: true }),
       });

@@ -61,6 +61,35 @@ test("a withdrawal signs only the exact amount to the signer, and a lost answer 
   await expect(withdraw(client, signer, { id: "w-1", venue: "polymarket", amount: 2_000_000n, to: "signer" }, { store })).rejects.toThrow("names another withdrawal");
 });
 
+test("a withdrawal shows the caller's own checks what it is about to sign, once checked, and signs nothing they refuse", async () => {
+  const { client, calls } = fake({
+    "GET /v1/balances": () => [{ venue: "polymarket", address: owner, venue_wallet: other }],
+    "POST /v1/withdrawals/prepare": () => ({ typed_data: polymarketWithdrawal(owner) }),
+  });
+  const signer = counting();
+  const seen: unknown[] = [];
+  await expect(withdraw(client, signer, { id: "w-2", venue: "polymarket", amount: 1_000_000n, to: "signer" }, {
+    beforeSigning: signing => { seen.push(signing.kind === "withdrawal" ? [signing.venue, signing.destination, signing.amount] : signing.kind); throw new Error("not today"); },
+  })).rejects.toThrow("not today");
+  expect(seen).toEqual([["polymarket", owner, 1_000_000n]]);
+  expect(signer.signed).toBe(0);
+  expect(calls).not.toContain("POST /v1/withdrawals");
+});
+
+test("a withdrawal is checked against the caller's clock, never the machine's", async () => {
+  const later = (now() + 30 * 86_400) * 1000;
+  const { client } = fake({
+    "GET /v1/balances": () => [{ venue: "polymarket", address: owner, venue_wallet: other }],
+    "POST /v1/withdrawals/prepare": () => ({ typed_data: { ...polymarketWithdrawal(owner), message: { ...polymarketWithdrawal(owner).message, ts: later / 1000 } } }),
+    "POST /v1/withdrawals": () => ({ id: "w3", venue: "polymarket", amount: "1000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null }),
+  });
+  const signer = counting();
+  await expect(withdraw(client, signer, { id: "w-3", venue: "polymarket", amount: 1_000_000n, to: "signer" })).rejects.toThrow();
+  expect(signer.signed).toBe(0);
+  expect(await withdraw(client, signer, { id: "w-4", venue: "polymarket", amount: 1_000_000n, to: "signer" }, { now: () => later })).toMatchObject({ state: "relayed" });
+  expect(signer.signed).toBe(1);
+});
+
 test("an Aster withdrawal is refused before any request", async () => {
   const { client, calls } = fake({});
   await expect(withdraw(client, counting(), { id: "w-2", venue: "aster", amount: 1n, to: "signer" })).rejects.toThrow("not supported");

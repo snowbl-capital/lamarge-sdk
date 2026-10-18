@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { createClient, exchange, LaMargeError, type CallArguments } from "./client.ts";
 
 const send = async (...args: Parameters<typeof exchange>) => (await exchange(...args)).body;
-import { CHAINS } from "./protocol/protocol.ts";
+import { CHAINS, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { required } from "./protocol/validation.ts";
 import { signIn } from "./session.ts";
 
 const answering = (...answers: (() => Response)[]) => {
@@ -41,6 +42,24 @@ test("only a request marked retryable is repeated, with the identical body", asy
   expect(await Promise.all(retried.seen.map(request => request.text()))).toEqual(['{"tx_hash":"0x1"}', '{"tx_hash":"0x1"}']);
 });
 
+test("a caller keeping its own request budget gets a 429 at once, never retried", async () => {
+  const limited = () => Response.json({ error: { code: "RATE_LIMITED", message: "", request_id: "r", retryable: true } }, { status: 429, headers: { "retry-after": "0" } });
+  const { fetch, seen } = answering(limited, () => Response.json({ ok: true }));
+  await expect(send({ apiUrl: "http://localhost:8080", fetch, retryRateLimited: false }, { method: "GET", path: "/v1/orders", retry: true })).rejects.toMatchObject({ status: 429, code: "RATE_LIMITED" });
+  expect(seen).toHaveLength(1);
+});
+
+test("an answer longer than the caller reads is refused, not read whole", async () => {
+  const long = () => Response.json({ padding: "x".repeat(10_000) });
+  await expect(send({ apiUrl: "http://localhost:8080", fetch: answering(long).fetch, maxAnswerBytes: 1_000 }, { method: "GET", path: "/v1/orders" })).rejects.toThrow("Answer over 1000 bytes");
+  expect(JSON.stringify(await send({ apiUrl: "http://localhost:8080", fetch: answering(long).fetch, maxAnswerBytes: 20_000 }, { method: "GET", path: "/v1/orders" }))).toHaveLength(10_014);
+});
+
+test("the client carries its transport's fetch for the reads a flow makes beside the API", () => {
+  const { fetch } = answering();
+  expect(createClient({ apiUrl: "http://localhost:8080", fetch }).fetch).toBe(fetch);
+});
+
 test("a client refusal is never retried", async () => {
   const { fetch, seen } = answering(() => Response.json({ error: { code: "VALIDATION_ERROR", message: "", request_id: "r", retryable: false } }, { status: 400 }));
   await expect(send({ apiUrl: "http://localhost:8080", fetch }, { method: "GET", path: "/v1/orders", retry: true })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
@@ -55,7 +74,9 @@ test("the client refuses plain HTTP outside localhost and carries its token", as
   expect(seen[0]?.headers.get("authorization")).toBe("Bearer mk_scoped");
 });
 
-const venues = () => Response.json(Object.entries(CHAINS).map(([id, chain]) => ({ id, chain: { id: chain.id, token: chain.token, decimals: chain.decimals, escrow: chain.escrow } })));
+const listed = () => Object.entries(CHAINS).map(([id, chain]) => ({ id, enabled: true, settlement: VENUE_SETTLED.has(id) ? "venue" : "escrow",
+  chain: { id: chain.id, token: chain.token, decimals: chain.decimals, escrow: chain.escrow, permit: chain.permit ? { name: chain.permit, version: chain.version } : null } }));
+const venues = () => Response.json(listed());
 const signer = { address: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A" as const, signMessage: async () => { signed++; return "0x00" as const; } };
 let signed = 0;
 
@@ -65,6 +86,27 @@ test("sign-in checks the deployment before signing anything", async () => {
   const { fetch } = answering(() => Response.json({ message: "", nonce: "n1", expires_at: "" }), () => Response.json([{ id: "polymarket", chain: { ...CHAINS.polymarket, escrow: "0x0000000000000000000000000000000000000001" } }]));
   await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("reviewed deployment");
   expect(signed).toBe(0);
+});
+
+test("sign-in refuses a venue settled otherwise than pinned, another permit, or an enabled venue without its chain", async () => {
+  signed = 0;
+  const changed = [
+    (rows: ReturnType<typeof listed>) => { required(rows[2]).settlement = "escrow"; },
+    (rows: ReturnType<typeof listed>) => { required(rows[0]).chain.permit = { name: "USDC", version: "1" }; },
+    (rows: ReturnType<typeof listed>) => { required(rows[3]).chain.permit = { name: "USDC", version: "2" }; },
+    (rows: ReturnType<typeof listed>) => { Object.assign(required(rows[1]), { chain: null }); },
+  ];
+  for (const change of changed) {
+    const rows = listed();
+    change(rows);
+    const { fetch } = answering(() => Response.json({ message: "", nonce: "n1", expires_at: "" }), () => Response.json(rows));
+    await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("reviewed deployment");
+  }
+  expect(signed).toBe(0);
+  // A disabled venue names no chain.
+  const rows = [...listed(), { id: "grvt", enabled: false, settlement: null, chain: null }];
+  const { fetch } = answering(() => Response.json({ message: "", nonce: "n1", expires_at: "" }), () => Response.json(rows));
+  await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("sign-in challenge");
 });
 
 test("sign-in refuses a challenge for another origin, then signs only the expected one", async () => {

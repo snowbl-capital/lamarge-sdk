@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * Get the best route
-         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no direct take is possible (Lighter and Aster) or finds nothing, or when two pay at least 10 bps more and spend no less. The second take pays what the first delivers, less the Lighter account's transfer fee, rounded down to millionths; where it carries less, the first shrinks to fit. `capped`: the route spends less than `amount_in`. Takes are admitted as `POST /v1/takes` admits them, your own orders excluded; no route goes through Lighter without a linked account and a known fee. The error is what refuses the direct take, or every route; an unusable venue between only drops its routes. Nothing is reserved.
+         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no direct take is possible (Lighter and Aster) or finds nothing, or when two pay at least 10 bps more and spend no less. The second take pays what the first delivers, less the Lighter account's transfer fee, rounded down to millionths; where it carries less, the first shrinks to fit. With `min_out`, a route delivering under that price for its amount shrinks to the largest amount that meets it, rather than none. `capped`: the route spends less than `amount_in`. Takes are admitted as `POST /v1/takes` admits them, your own orders excluded; no route goes through Lighter without a linked account and a known fee. The error is what refuses the direct take, or every route; an unusable venue between only drops its routes. Nothing is reserved.
          */
         get: operations["getRoute"];
         put?: never;
@@ -3154,6 +3154,8 @@ export interface operations {
                 to: components["schemas"]["VenueId"];
                 /** @description Most the taker pays, in `from` base units. */
                 amount_in: components["schemas"]["Amount"];
+                /** @description Least the taker receives for `amount_in`, in `to` base units: the worst price it takes. A smaller amount is held to the same price, in proportion. */
+                min_out?: components["schemas"]["Amount"];
             };
             header?: never;
             path?: never;

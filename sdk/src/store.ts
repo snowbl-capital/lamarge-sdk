@@ -1,5 +1,5 @@
 import type { Typed } from "./protocol/protocol.ts";
-import { array, hex, record } from "./protocol/validation.ts";
+import { array, hex, isRecord, record } from "./protocol/validation.ts";
 import type { SignedItem } from "./signer.ts";
 
 /**
@@ -13,6 +13,10 @@ export interface SignatureStore {
   save(key: string, value: unknown): void | Promise<void>;
   delete(key: string): void | Promise<void>;
 }
+
+/** The same JSON whatever its keys' order: what a request is, to compare it with the one signed. */
+export const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_key, field: unknown) => isRecord(field) ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => a < b ? -1 : 1)) : field);
 
 /** A stored bundle of signed items, read back as such or refused. */
 export function signedItems(value: unknown): SignedItem[] | undefined {

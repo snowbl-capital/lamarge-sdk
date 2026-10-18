@@ -1,6 +1,6 @@
-import { fillMemo } from "./lighter.ts";
+import { fillMemo, LIGHTER_MAX_TAKER_FEE } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
 /** `replace` names a position in the current set; without it, the quote adds a price level on `receive_venue`. */
 export type MakerQuoteIntent = { receive_venue: string; receive: string; min_fill: string; quote_validity_seconds?: number | null | undefined; replace?: { sequence: number; index: number } | undefined };
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
@@ -89,10 +89,15 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
   }
 }
 type TakeIntent = { from: string; to: string; amount_in: string; min_out: string; max_parts?: number };
-export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string };
+export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined };
 /** What a take from `venue` signs to pay: a transfer inside Aster or Lighter, an escrow `pay_take` elsewhere. */
 export const takePaymentKind = (venue: string): string => venue === "aster" ? "aster_transfer" : venue === "lighter" ? "lighter_transfer" : "pay_take";
-type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { from_account_index: number; amount: string; memo: string } };
+type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { from_account_index: number; amount: string; usdc_fee: string; memo: string } };
+/** Delivered inside a venue, a fill goes to the taker's own account there: its Aster address, or its Lighter index, whose owner only Lighter can confirm. Through an escrow, to none. */
+function checkDelivery(fill: TakeFill, recipient: string) {
+  const to = fill.delivery_to;
+  insist(VENUE_SETTLED.has(fill.to_venue) ? typeof to === "string" && (fill.to_venue === "aster" ? same(to, recipient) : /^\d+$/.test(to)) : to === null || to === undefined, "The take delivers to another account than yours");
+}
 /** A take's whole signing batch, as the API sends it. */
 type TakeItems = readonly (SignItem | LighterTransfer)[];
 /** A take paid inside its venue buys exactly one fill, paid by one signed transfer that is the whole batch. */
@@ -103,6 +108,7 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
   const fill = required(fills[0]);
   insist(fill.role === "taker" && fill.from_venue === input.from && fill.to_venue === input.to && same(fill.payer, payer) && same(fill.taker_recipient, recipient) && item.fill_id === fill.id);
   insist(BigInt(fill.amount_in) > 0n && BigInt(fill.amount_in) <= BigInt(input.amount_in) && BigInt(fill.amount_out) >= BigInt(input.min_out));
+  checkDelivery(fill, recipient);
   const payBy = Date.parse(fill.pay_by) / 1000, t1 = Date.parse(fill.t1) / 1000;
   insist(payBy > now && payBy <= now + 90 && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30);
   return { terms: item.typed_data, fill };
@@ -111,6 +117,7 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
 export function checkLighterTakeIntent(items: TakeItems, fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, account: number, now = Date.now() / 1000): void {
   const { terms, fill } = checkVenueTake(items, "lighter_transfer", fills, input, payer, recipient, now);
   insist("memo" in terms && terms.from_account_index === account && terms.amount === fill.amount_in && terms.memo === fillMemo(fill.id), "The Lighter transfer differs from the take");
+  insist(uint(terms.usdc_fee) <= LIGHTER_MAX_TAKER_FEE, "Lighter's fee on the transfer is above 1 USDC");
 }
 /** A take paid from Aster: the taker's wallet signs a transfer of the fill's amount to the maker's
  * account under the fill id, with a nonce far enough ahead for LaMarge to lock the maker and
@@ -139,6 +146,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
   const receive = CHAINS[input.to];
   for (const fill of fills) {
     insist(fill.role === "taker" && fill.from_venue === input.from && fill.to_venue === input.to && same(fill.payer, payer) && same(fill.taker_recipient, recipient) && BigInt(fill.amount_in) > 0n && BigInt(fill.amount_out) > 0n);
+    checkDelivery(fill, recipient);
     const t1 = Date.parse(fill.t1) / 1000, t2 = Date.parse(fill.t2) / 1000, payBy = Date.parse(fill.pay_by) / 1000;
     insist(payBy > now && payBy <= now + 90 && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30 && t2 > t1 && t2 <= now + TAKER_TIMEOUT_SECONDS + 30);
     const matching = payments.filter(payment => same(payment.swapId, fill.swap_id));

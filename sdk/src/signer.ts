@@ -1,6 +1,8 @@
 import { requireSigningDomains, type DeploymentManifest, ESCROW_DEPLOYMENTS } from "./protocol/deployments.ts";
 import { convert, insist, same, type SignItem, type Typed } from "./protocol/protocol.ts";
 import { address, record } from "./protocol/validation.ts";
+import type { Answer } from "./client.ts";
+import type { components } from "./generated/api.ts";
 
 export type Hex = `0x${string}`;
 export interface TypedDataRequest {
@@ -36,6 +38,17 @@ export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: Ty
   insist(signer.signTypedData, "This signer cannot sign typed data");
   return signer.signTypedData(typedDataRequest(typed));
 }
+
+/**
+ * What a flow is about to sign for the first time, once its own checks passed: a take's payment,
+ * a venue withdrawal or a setup step. The caller's checks run on it, and one that throws signs
+ * nothing. A stored signature submitted again runs none.
+ */
+export type Signing =
+  | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake"> }
+  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: Typed }
+  | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> };
+export type BeforeSigning = (signing: Signing) => void | Promise<void>;
 
 export interface SignedItem { kind: string; fill_id?: string; signature: Hex }
 

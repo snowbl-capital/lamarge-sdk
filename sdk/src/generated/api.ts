@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * Get the best route
-         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no direct take is possible (Lighter and Aster) or finds nothing, or when two pay at least 10 bps more and spend no less. The second take pays what the first delivers, less the Lighter account's transfer fee, rounded down to millionths; where it carries less, the first shrinks to fit. With `min_out`, a route delivering under that price for its amount shrinks to the largest amount that meets it, rather than none. `capped`: the route spends less than `amount_in`. Takes are admitted as `POST /v1/takes` admits them, your own orders excluded; no route goes through Lighter without a linked account and a known fee. The error is what refuses the direct take, or every route; an unusable venue between only drops its routes. Nothing is reserved.
+         * @description What takes would pay now on `to` for `amount_in` on `from`: one take, or two through another venue when no direct take is possible (Lighter and Aster) or finds nothing, or when two pay at least 10 bps more and spend no less. The second take pays what the first delivers, less the Lighter account's transfer fee, rounded down to millionths; where it carries less, the first shrinks to fit. With `min_out`, a route delivering under that price for its amount shrinks to the largest amount that meets it, rather than none. `capped`: the route spends less than `amount_in` beyond rounding; `amount_in` can be short of the request by less than a base unit of output per part without it. Takes are admitted as `POST /v1/takes` admits them, your own orders excluded; no route goes through Lighter without a linked account and a known fee. The error is what refuses the direct take, or every route; an unusable venue between only drops its routes. Nothing is reserved.
          */
         get: operations["getRoute"];
         put?: never;
@@ -2789,7 +2789,7 @@ export interface components {
         FillRole: "taker" | "maker" | (string & {});
     };
     responses: {
-        /** @description `VALIDATION_ERROR`: malformed or refused input. */
+        /** @description `VALIDATION_ERROR`: malformed or refused input; `message` names what was refused. */
         ValidationError: {
             headers: {
                 [name: string]: unknown;

@@ -32,6 +32,8 @@ export interface TakeOptions {
   beforeSigning?: BeforeSigning | undefined;
   /** The clock the payment's windows are checked against, in milliseconds. */
   now?: (() => number) | undefined;
+  /** Runs the whole take inside it, from reserving to submitting: a lock other processes or browser tabs share, so none takes a reservation still being signed for abandoned. */
+  lock?: (<T>(run: () => Promise<T>) => Promise<T>) | undefined;
 }
 
 /** Each venue pays its own way: the escrow payment, or the one transfer LaMarge sends inside Aster or Lighter once the maker is locked. */
@@ -76,6 +78,8 @@ async function signPayment(client: Client, prepared: Prepared, input: TakeInput,
  * a restart submits it again rather than signing another. `signer` is the account paying on `input.from`.
  */
 export async function take(client: Client, signer: Signer, input: TakeInput, options: TakeOptions = {}): Promise<Fill[]> {
+  const { lock, ...unlocked } = options;
+  if (lock) return lock(() => take(client, signer, input, unlocked));
   const { store = memoryStore(), signal } = options;
   input = { ...input, max_parts: input.max_parts ?? MAX_PARTS };
   const balances = options.balances ?? await client.call("getBalances", { signal });

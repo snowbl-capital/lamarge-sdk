@@ -48,7 +48,7 @@ const openString = ts.factory.createIntersectionTypeNode([
   ts.factory.createTypeLiteralNode([]),
 ]);
 
-export async function generate(spec: Node): Promise<string> {
+async function generate(spec: Node): Promise<string> {
   // Schemas an answer or a stream frame reaches have open enums; those only requests use stay exact.
   const answers = reachable(spec, operations(spec).flatMap(({ operation }) => [operation.responses, operation["x-websocket"]]));
   const isAnswer = (path: string | undefined) => path !== undefined

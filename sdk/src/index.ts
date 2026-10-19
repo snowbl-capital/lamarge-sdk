@@ -3,7 +3,7 @@ export { retryAfterMs } from "./retry-after.ts";
 export { checkDeployment, signIn, signOut } from "./session.ts";
 export { signItems, signTyped, typedDataRequest, type BeforeSigning, type Hex, type SignedItem, type Signer, type Signing, type TypedDataRequest } from "./signer.ts";
 export type { components, operations, paths } from "./generated/api.ts";
-export { linkAccount, permitDone, setUpVenue, submitPermit } from "./account.ts";
+export { linkAccount, permitDone, setUpVenue, submitPermit, type SetupProgress } from "./account.ts";
 export { changes, type Change, type ChangeOptions, type EventPage, type Snapshot, type SocketConstructor } from "./events.ts";
 export { fresh, FRESH_MS, prefunded, sweepable } from "./funds.ts";
 export { memoryStore, type SignatureStore } from "./store.ts";

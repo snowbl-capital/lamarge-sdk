@@ -8,7 +8,7 @@ import type { BeforeSigning, Signer } from "./signer.ts";
 import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
 import { submitWithdrawal } from "./withdraw.ts";
 import { checkQuote, MAX_PARTS } from "./book.ts";
-import { take, type Fill, type TakeInput } from "./take.ts";
+import { take, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
 
 export type TransferIntent = Answer<"getTransfer">;
 
@@ -51,6 +51,8 @@ export interface TransferOptions {
   /** The clock the flow's windows and deadlines are read on, and how it sleeps between reads; the machine's by default. */
   now?: (() => number) | undefined;
   sleep?: ((ms: number) => Promise<void>) | undefined;
+  /** Around each take, as `take`'s own. */
+  lock?: TakeOptions["lock"];
 }
 
 /** Nothing failed, but the transfer cannot go on yet; run it again with the same request later. */
@@ -180,7 +182,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   };
   const takeInput = (): TakeInput => ({ from: intent.from, to: intent.to, amount_in: intent.amount_in, min_out: intent.min_out, max_parts: intent.max_parts,
     client_take_id: intent.client_take_id, transfer_intent_id: intent.id });
-  const pay = (balances?: Answer<"getBalances">) => take(client, signer, takeInput(), { store, signal, balances, recipient: request.recipient, beforeSigning, now });
+  const pay = (balances?: Answer<"getBalances">) => take(client, signer, takeInput(), { store, signal, balances, recipient: request.recipient, beforeSigning, now, lock: options.lock });
   // A take reserved again is priced again first, as the app does: a book that no longer pays its minimum reserves nothing.
   const repriced = async (balances?: Answer<"getBalances">) => {
     const [, read] = await Promise.all([reviewQuote(client, takeInput(), now(), signal), balances ?? client.call("getBalances", { signal })]);
@@ -200,7 +202,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
       }
       if (!unsigned() || !prepared.take.fills.every(fill => fill.state === "EXPIRED")) {
         if (!prepared.to_sign.length || prepared.take.fills.some(fill => fill.state !== "RESERVED")) return prepared.take.fills;
-        return take(client, signer, takeInput(), { store, signal, prepared, recipient: request.recipient, beforeSigning, now });
+        return take(client, signer, takeInput(), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock });
       }
       // A deterministic replacement survives a lost response or a restart, with the same terms.
       intent = await replace(`retry:${intent.id}`);

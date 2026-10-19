@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkLinkChallenge, checkRegistry, checkSetupKind, CHAINS, required } from "./index.ts";
+import { checkFundingPlan, checkLinkChallenge, checkRegistry, checkSetupKind, CHAINS, required } from "./index.ts";
 
 const address = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A", master = "0x14791697260E4c9A71f18484C9f997B308e59325";
 
@@ -25,4 +25,18 @@ test("a listed permit domain is the pinned one, and none on a venue settled insi
   expect(() => checkRegistry("hyperliquid", { ...hyper, permit: null })).toThrow("reviewed deployment");
   expect(() => checkRegistry("lighter", { ...lighter, permit: null })).not.toThrow();
   expect(() => checkRegistry("lighter", { ...lighter, permit: { name: "USDC", version: "2" } })).toThrow("reviewed deployment");
+});
+
+test("a funding plan lists the permit first, only when a wallet deposit needs it, then the withdrawal and the payment", () => {
+  const kinds = (...names: string[]) => names.map(kind => ({ kind, signer: master, chain_id: 137 }));
+  const intent = (plan: Record<string, unknown>) => ({ from: "polymarket", payer: master, amount_in: "10000000", funding_plan: { observed_at: new Date().toISOString(), venue: "polymarket", owner: master,
+    amount: "10000000", deposit: "7000000", withdrawal_amount: "7000000", withdrawal_to: "signer", payment_setup: "required", requests: kinds("permit", "margin_move", "pay_take"), ...plan } });
+  expect(checkFundingPlan(intent({})).requests).toEqual(kinds("permit", "margin_move", "pay_take"));
+  for (const plan of [
+    { requests: kinds("margin_move", "permit", "pay_take") },
+    { payment_setup: "done" },
+    { payment_setup: "pending" },
+    { requests: kinds("margin_move", "pay_take") },
+    { deposit: "0", withdrawal_amount: "0", withdrawal_to: null, requests: kinds("permit", "pay_take") },
+  ]) expect(() => checkFundingPlan(intent(plan))).toThrow("Funding requests differ");
 });

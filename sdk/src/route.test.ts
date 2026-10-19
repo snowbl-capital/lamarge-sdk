@@ -3,42 +3,49 @@ import { createClient } from "./client.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas } from "./protocol/protocol.ts";
 import { record, required } from "./protocol/validation.ts";
 import { route, type RouteRequest } from "./route.ts";
+import { memoryStore } from "./store.ts";
+import { TransferPending } from "./transfer.ts";
 
 const owner = `0x${"11".repeat(20)}` as const, maker = `0x${"22".repeat(20)}`, id = `0x${"aa".repeat(32)}`;
 const now = () => Math.floor(Date.now() / 1000);
 const at = (seconds: number) => new Date((now() + seconds) * 1000).toISOString();
 
 /** The API for a route from Polymarket to Aster through Hyperliquid, 1 USDC each take, the second continuing what the first delivered. */
-function api(options: { continuable?: string; received?: string; unknownReads?: number } = {}) {
+function api(options: { continuable?: string; received?: string; unknownReads?: number; hub?: string; undelivered?: boolean; refunded?: boolean; viaHeld?: string; secondExpired?: boolean } = {}) {
+  const hub = options.hub ?? owner;
   const calls: string[] = [];
   const legs = { first: { from: "polymarket", to: "hyperliquid" }, second: { from: "hyperliquid", to: "aster" } };
   const intents: Record<string, Record<string, unknown>> = {};
+  // Every transfer opened, newest last, each with the terms it was opened with, as the server keeps them.
+  const records: Record<string, unknown>[] = [];
   const delivery = { claimed: false };
   let unknown = options.unknownReads ?? 0;
   const intent = (key: "first" | "second", body: Record<string, unknown>) => {
     const leg = legs[key], chain = required(CHAINS[leg.from]);
-    return { id: `transfer-${key}`, client_transfer_id: body.client_transfer_id, client_take_id: `take-client-${key}`, ...leg, amount_in: body.amount_in, min_out: body.min_out,
-      max_parts: 8, payer: owner, recipient: body.recipient, from_chain_id: chain.id, to_chain_id: required(CHAINS[leg.to]).id, withdrawal: null, take_id: null as string | null,
+    const count = records.filter(row => row.previous_transfer_id).length;
+    return { id: key === "first" || count === 0 ? `transfer-${key}` : `transfer-${key}-${count + 1}`, client_transfer_id: body.client_transfer_id, client_take_id: `take-client-${key}`, ...leg, amount_in: body.amount_in, min_out: body.min_out,
+      max_parts: 8, payer: key === "first" ? owner : hub, recipient: body.recipient, from_chain_id: chain.id, to_chain_id: required(CHAINS[leg.to]).id, withdrawal: null, take_id: null as string | null,
       withdrawal_preparation: null, take_final: null, then: body.then ?? null, previous_transfer_id: body.previous_transfer_id ?? null,
       continuable: key === "first" && delivery.claimed ? options.continuable ?? "1000000" : null, cancelled_at: null, created_at: at(0),
-      funding_plan: { venue: leg.from, owner, amount: body.amount_in, deposit: "0", withdrawal_amount: "0", withdrawal_to: null, observed_at: at(0), payment_setup: "done",
-        requests: [{ kind: "pay_take", signer: owner, chain_id: chain.id }] } };
+      funding_plan: { venue: leg.from, owner: key === "first" ? owner : hub, amount: body.amount_in, deposit: "0", withdrawal_amount: "0", withdrawal_to: null, observed_at: at(0), payment_setup: "done",
+        requests: [{ kind: "pay_take", signer: key === "first" ? owner : hub, chain_id: chain.id }] } };
   };
   const fill = (key: "first" | "second") => {
     const leg = legs[key], claimed = key === "first" && delivery.claimed;
-    return { id: `fill-${key}`, take_id: `take-${key}`, order_id: id, sequence: 1, role: "taker", state: claimed ? "SETTLED" : "PAID", from_venue: leg.from, to_venue: leg.to,
-      amount_in: "1000000", amount_out: key === "first" ? options.received ?? "1000000" : String(10n ** 18n), payer: owner, maker_recipient: maker, taker_recipient: owner,
-      swap_id: id, hashlock: `0x${"bb".repeat(32)}`, pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: claimed ? "CLAIMED" : "NONE",
+    return { id: `fill-${key}`, take_id: `take-${key}`, order_id: id, sequence: 1, role: "taker", state: claimed ? options.refunded ? "REFUNDED" : "SETTLED" : "PAID", from_venue: leg.from, to_venue: leg.to,
+      amount_in: key === "first" ? "1000000" : String(intents.second?.amount_in ?? "1000000"), amount_out: key === "first" ? options.received ?? "1000000" : String(10n ** 18n), payer: key === "first" ? owner : hub, maker_recipient: maker, taker_recipient: key === "first" ? hub : owner,
+      swap_id: id, hashlock: `0x${"bb".repeat(32)}`, pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: claimed ? options.refunded ? "ABANDONED" : "CLAIMED" : "NONE",
       maker_claimed_at: claimed ? at(-5) : null, transactions: [], delivery_hash: null, payment_locked_at: null, delivery_to: leg.to === "aster" ? owner : null };
   };
   const prepared = (key: "first" | "second") => {
     const leg = legs[key], pay = required(CHAINS[leg.from]), receive = required(CHAINS[leg.to]), reserved = { ...fill(key), state: "RESERVED" };
-    const payment = { payer: owner, swapId: id, recipient: maker, amount: "1000000", hashlock: reserved.hashlock, refundAt: now() + 7200, deadline: now() + 45, orderId: id, sequence: 1,
-      amountOut: reserved.amount_out, receiveChainId: receive.id, receiveToken: receive.token, receiveEscrow: receive.escrow, receiveRecipient: owner, dex: 0 };
-    return { take: { id: `take-${key}`, fills: [reserved] }, to_sign: [{ kind: "pay_take", fill_id: reserved.id, signer: owner,
-      typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: pay.id, verifyingContract: ESCROW }, message: { payer: owner, deposit: "0", payments: [payment] } } }] };
+    const payer = key === "first" ? owner : hub;
+    const payment = { payer, swapId: id, recipient: maker, amount: reserved.amount_in, hashlock: reserved.hashlock, refundAt: now() + 7200, deadline: now() + 45, orderId: id, sequence: 1,
+      amountOut: reserved.amount_out, receiveChainId: receive.id, receiveToken: receive.token, receiveEscrow: receive.escrow, receiveRecipient: key === "first" ? hub : owner, dex: 0 };
+    return { take: { id: `take-${key}`, fills: [reserved] }, to_sign: [{ kind: "pay_take", fill_id: reserved.id, signer: payer,
+      typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: pay.id, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] };
   };
-  const balance = (venue: string, held: string) => ({ venue, address: owner, venue_wallet: null, chain_balance: held, chain_error: null, chain_read_at: at(0), escrow_balance: "0",
+  const balance = (venue: string, held: string) => ({ venue, address: venue === "hyperliquid" ? hub : owner, venue_wallet: null, chain_balance: held, chain_error: null, chain_read_at: at(0), escrow_balance: "0",
     deposit_balance: "0", withdrawable: "0", withdrawal_fee: "0", read_at: at(0) });
   const book = (from: string, to: string) => ({ from, to, max_fill: String(10n ** 24n), levels: [{ order_id: id, supply: to === "aster" ? String(10n ** 18n) : "1000000", receive: "1000000", available: String(10n ** 24n), min_fill: "1", valid_until: at(60) }] });
   const routes: Record<string, (body: Record<string, unknown>, query: URLSearchParams) => unknown> = {
@@ -47,32 +54,49 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
     "GET /v1/books": (_body, query) => book(String(query.get("from")), String(query.get("to"))),
     "POST /v1/transfers": body => {
       const key = body.previous_transfer_id ? "second" : "first";
-      intents[key] ??= intent(key, body);
-      return intents[key];
+      const known = records.find(row => row.client_transfer_id === body.client_transfer_id);
+      if (known) {
+        // The server answers a client id again only with the terms it was first opened with.
+        if (known.amount_in !== body.amount_in || known.min_out !== body.min_out) return Response.json({ error: { code: "STATE_CONFLICT", message: "client ID was already used with different parameters", request_id: "r", retryable: false } }, { status: 409 });
+        return known;
+      }
+      const opened = intent(key, body);
+      records.push(opened);
+      intents[key] = opened;
+      return opened;
     },
+    "GET /v1/transfers": () => ({ data: [...records].reverse(), next_cursor: null, has_more: false }),
     "GET /v1/transfers/transfer-first": () => ({ ...required(intents.first), continuable: delivery.claimed && unknown-- <= 0 ? options.continuable ?? "1000000" : null }),
-    "GET /v1/transfers/transfer-second": () => intents.second,
-    "GET /v1/balances": () => [balance("polymarket", "1000000"), balance("hyperliquid", delivery.claimed ? options.received ?? "1000000" : "0"), balance("aster", "0")],
-    "POST /v1/takes": body => { const key = body.transfer_intent_id === "transfer-second" ? "second" : "first"; required(intents[key]).take_id = `take-${key}`; return prepared(key); },
-    "GET /v1/takes/take-first": () => { delivery.claimed = true; return { take: { id: "take-first", fills: [fill("first")] }, to_sign: [] }; },
+
+    "GET /v1/balances": () => [balance("polymarket", "1000000"), balance("hyperliquid", options.viaHeld ?? (delivery.claimed ? options.received ?? "1000000" : "0")), balance("aster", "0")],
+    "POST /v1/takes": body => { const key = body.transfer_intent_id === "transfer-first" ? "first" : "second"; required(intents[key]).take_id = `take-${key}`; return prepared(key); },
+    "GET /v1/takes/take-first": () => { delivery.claimed = !options.undelivered; return { take: { id: "take-first", fills: [fill("first")] }, to_sign: [] }; },
     "POST /v1/takes/take-first/signatures": () => ({ fills: [fill("first")] }),
     "POST /v1/takes/take-second/signatures": () => ({ fills: [fill("second")] }),
-    "GET /v1/takes/take-second": () => ({ take: { id: "take-second", fills: [fill("second")] }, to_sign: [] }),
+    "GET /v1/takes/take-second": () => ({ take: { id: "take-second", fills: [options.secondExpired ? { ...fill("second"), state: "EXPIRED", maker_leg: "ABANDONED" } : fill("second")] }, to_sign: [] }),
   };
   const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init), url = new URL(request.url);
     const name = `${request.method} ${url.pathname}`;
     calls.push(name);
-    const handler = routes[name];
+    const opened = records.find(row => name === `GET /v1/transfers/${String(row.id)}`);
+    const cancelled = records.find(row => name === `DELETE /v1/transfers/${String(row.id)}`);
+    const handler = routes[name] ?? (opened ? () => opened : cancelled ? () => {
+      // As the server: a transfer with a take cannot be cancelled.
+      if (cancelled.take_id) return Response.json({ error: { code: "STATE_CONFLICT", message: "a transfer with a take cannot be cancelled", request_id: "r", retryable: false } }, { status: 409 });
+      cancelled.cancelled_at = at(0);
+      return new Response(null, { status: 204 });
+    } : undefined);
     if (!handler) return Response.json({ error: { code: "NOT_FOUND", message: name, request_id: "r", retryable: false } }, { status: 404 });
-    const body = request.method === "GET" ? {} : record(await request.json());
-    return Response.json(handler(body, url.searchParams));
+    const body = request.method === "GET" || request.method === "DELETE" ? {} : record(await request.json());
+    const answer = handler(body, url.searchParams);
+    return answer instanceof Response ? answer : Response.json(answer);
   }, { preconnect: globalThis.fetch.preconnect });
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, intents };
+  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, intents, records, options };
 }
 
-const signer = () => {
-  const counted = { address: owner, signed: 0, signMessage: async () => "0x00" as const, signTypedData: async () => { counted.signed++; return "0x00" as const; } };
+const signer = (address: `0x${string}` = owner) => {
+  const counted = { address, signed: 0, signMessage: async () => "0x00" as const, signTypedData: async () => { counted.signed++; return "0x00" as const; } };
   return counted;
 };
 const request: RouteRequest = { client_transfer_id: "move-1", from: "polymarket", via: "hyperliquid", to: "aster", amount_in: "1000000", min_out: "1000000",
@@ -153,4 +177,75 @@ test("a route whose first transfer names another end is never paid", async () =>
   await expect(route(client, paying, { ...request, recipient: maker, transfer_id: "transfer-first" }, { pollMs: 1 })).rejects.toThrow("Transfer terms changed");
   await expect(route(client, paying, { ...request, then: { amount_in: "2000000", min_out: "1" }, transfer_id: "transfer-first" }, { pollMs: 1 })).rejects.toThrow("Transfer terms changed");
   expect(paying.signed).toBe(0);
+});
+
+test("the account linked on the venue between, when another, receives the first take and pays the second", async () => {
+  const hub = `0x${"33".repeat(20)}` as const;
+  const { client, intents } = api({ hub });
+  const first = signer(), between = signer(hub);
+  const { second } = await route(client, first, request, { viaSigner: between, sleep: async () => {} });
+  expect(second.map(fill => fill.state)).toEqual(["PAID"]);
+  expect([first.signed, between.signed]).toEqual([1, 1]);
+  expect([intents.first?.recipient, intents.second?.payer]).toEqual([hub, hub]);
+  // Without it, the signer is taken for that account, and a route to another is never paid.
+  await expect(route(api({ hub }).client, signer(), request, { sleep: async () => {} })).rejects.toThrow();
+});
+
+test("a first take that delivered nothing ends the route; one still able to deliver leaves it pending", async () => {
+  const { client, calls } = api({ refunded: true });
+  expect((await route(client, signer(), request, { pollMs: 1 })).second).toEqual([]);
+  expect(calls.filter(call => call === "POST /v1/transfers")).toHaveLength(1);
+  let time = Date.now();
+  const waiting = route(api({ undelivered: true }).client, signer(), request, { now: () => time, sleep: async ms => { time += ms; } });
+  expect(await waiting.catch((error: unknown) => error instanceof TransferPending && error.reason)).toBe("arrival_unconfirmed");
+});
+
+test("a continuation cancelled before it was paid is followed, from the history, by one successor with what is left now; the first take is never paid again", async () => {
+  const { client, calls, records, options } = api();
+  const paying = signer();
+  // The continuation's review is left before its take is reserved, then cancelled.
+  const leave = { onIntent: (intent: { previous_transfer_id?: string | null }) => { if (intent.previous_transfer_id) throw new Error("Operation cancelled"); } };
+  const cancel = async () => { await client.call("cancelTransfer", { path: { id: String(records.at(-1)?.id) } }); };
+  await expect(route(client, paying, request, { pollMs: 1, ...leave })).rejects.toThrow("Operation cancelled");
+  await cancel();
+  // Meanwhile the venue between's fee grew, so less is left.
+  options.continuable = "900000";
+  await expect(route(client, paying, { ...request, transfer_id: "transfer-first" }, { pollMs: 1, ...leave })).rejects.toThrow("Operation cancelled");
+  await cancel();
+  // Named by its stale id, the route still goes on from its latest continuation.
+  const resumed = await route(client, paying, { ...request, transfer_id: "transfer-first", then_transfer_id: "transfer-second" }, { pollMs: 1 });
+  expect(resumed.second.map(fill => fill.amount_in)).toEqual(["900000"]);
+  expect(records.map(row => [row.client_transfer_id, row.amount_in, Boolean(row.cancelled_at)])).toEqual([["move-1", "1000000", false], ["move-1.2", "1000000", true],
+    ["renew:transfer-second", "900000", true], ["renew:transfer-second-2", "900000", false]]);
+  expect(calls.filter(call => call === "POST /v1/takes/take-first/signatures")).toHaveLength(1);
+  expect(paying.signed).toBe(2);
+});
+
+test("a continuation's replacement found in the history goes on through the one it replaced, never funded again", async () => {
+  const { client, calls, intents, options } = api();
+  const store = memoryStore();
+  let declined = false;
+  const paying = { ...signer(), signTypedData: async () => { if (intents.second && !declined) { declined = true; throw new Error("User rejected the request"); } paying.signed++; return "0x00" as const; } };
+  await expect(route(client, paying, request, { pollMs: 1, store })).rejects.toThrow("User rejected");
+  // Its take expired unsigned; the replacement was opened, but its answer was lost: nothing records it as funded.
+  options.secondExpired = true;
+  const second = required(intents.second);
+  await client.call("postTransfer", { body: { client_transfer_id: `retry:${String(second.id)}`, from: "hyperliquid", to: "aster", amount_in: String(second.amount_in), min_out: String(second.min_out),
+    max_parts: 8, payer: owner, recipient: owner, previous_transfer_id: "transfer-first" } });
+  options.viaHeld = "0";
+  const resumed = await route(client, paying, { ...request, transfer_id: "transfer-first" }, { pollMs: 1, store });
+  expect(resumed.second).toHaveLength(1);
+  expect(calls.filter(call => call.includes("/withdrawal"))).toEqual([]);
+});
+
+test("a route whose own client id begins as a replacement's resumes its continuation as it is", async () => {
+  for (const named of [false, true]) {
+    const { client, intents } = api();
+    const own = { ...request, client_transfer_id: "retry:rebalance-1" };
+    const leave = { onIntent: (intent: { previous_transfer_id?: string | null }) => { if (intent.previous_transfer_id) throw new Error("Operation cancelled"); } };
+    await expect(route(client, signer(), own, { pollMs: 1, ...leave })).rejects.toThrow("Operation cancelled");
+    expect(intents.second?.client_transfer_id).toBe("retry:rebalance-1.2");
+    const resumed = await route(client, signer(), { ...own, transfer_id: "transfer-first", ...named ? { then_transfer_id: "transfer-second" } : {} }, { pollMs: 1 });
+    expect(resumed.second).toHaveLength(1);
+  }
 });

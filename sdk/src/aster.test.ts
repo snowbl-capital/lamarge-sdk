@@ -5,13 +5,14 @@ import { AsterDeliverer, type AsterDelivery } from "./aster.ts";
 import { LaMargeError } from "./client.ts";
 import type { FillSource } from "./delivery.ts";
 import type { DeliveryFill } from "./maker.ts";
-import { asterAmount } from "./protocol/index.ts";
+import { asterAmount, hex, required } from "./protocol/index.ts";
 
 // The server's test key and Foundry-signed transfer (server/src/aster.rs).
 const owner = privateKeyToAccount("0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 const agent = privateKeyToAccount(`0x${"55".repeat(32)}`);
 const taker = "0x14791697260e4c9a71f18484c9f997b308e59325";
 const api = { chain: "http://chain.test", futures: "http://futures.test", spot: "http://spot.test" };
+// AsterDeliverer calls Aster through the global fetch.
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -26,7 +27,7 @@ const second = (overrides: Partial<DeliveryFill> = {}) => fill({ id: "0192f0a1-b
 /** Aster's Spot read, margin move and transfer: a repeated clientTranId returns its first id; `lose` drops answers, `refuse` refuses. */
 function aster(spot = "10") {
   const book = { spot, reads: 0, moves: [] as URLSearchParams[], sent: [] as string[], lose: 0, refuse: null as null | { code: number; msg: string }, ids: new Map<string, string>() };
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.origin === api.spot && url.pathname === "/api/v3/account") { book.reads++; return Response.json({ balances: [{ asset: "USDT", free: book.spot }] }); }
     if (url.origin === api.futures && url.pathname === "/fapi/v3/asset/wallet/transfer") {
@@ -44,12 +45,12 @@ function aster(spot = "10") {
       return Response.json({ transferId: id, status: "SUCCESS" });
     }
     return new Response("unexpected", { status: 500 });
-  }) as typeof fetch;
+  }, { preconnect: realFetch.preconnect });
   return book;
 }
 
 const memory = () => { let saved: Record<string, AsterDelivery> = {}; const writes: Record<string, AsterDelivery>[] = []; return { writes, load: () => structuredClone(saved), save: (value: Record<string, AsterDelivery>) => { saved = structuredClone(value); writes.push(saved); } }; };
-const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => LaMargeError | null) => ({ fills: async () => fills(), deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } }) as unknown as FillSource;
+const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => LaMargeError | null): FillSource => ({ fills: async () => fills(), deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } });
 const deliverer = (store = memory(), now = () => Date.now()) => new AsterDeliverer(owner, agent, store, api, now);
 
 test("a delivery is the fill's transfer request, signed by the account at chain 1666", async () => {
@@ -69,15 +70,15 @@ test("the agent moves the Spot shortfall from the margin, then the transfer is p
   const bot = deliverer(store);
   await bot.run(quoter, () => {});
   expect(book.moves.length).toBe(1);
-  const move = book.moves[0]!;
+  const move = required(book.moves[0]);
   expect([...move.keys()]).toEqual(["amount", "asset", "clientTranId", "kindType", "nonce", "user", "signer", "signature"]);
   expect(move.get("amount")).toBe("1");
   expect(move.get("clientTranId")).toBe("m0192f0a1b2c37d4e8f90a1b2c3d4e5f6");
   expect(move.get("signer")).toBe(agent.address);
   const msg = [...move.entries()].filter(([name]) => name !== "signature").map(([name, value]) => `${name}=${value}`).join("&");
-  expect(await recoverTypedDataAddress({ domain: { name: "AsterSignTransaction", version: "1", chainId: 1666, verifyingContract: zeroAddress }, types: { Message: [{ name: "msg", type: "string" }] }, primaryType: "Message", message: { msg }, signature: move.get("signature") as `0x${string}` })).toBe(agent.address);
+  expect(await recoverTypedDataAddress({ domain: { name: "AsterSignTransaction", version: "1", chainId: 1666, verifyingContract: zeroAddress }, types: { Message: [{ name: "msg", type: "string" }] }, primaryType: "Message", message: { msg }, signature: hex(move.get("signature")) })).toBe(agent.address);
   expect(store.writes[0]?.[fill().id]).toMatchObject({ attempted: false });
-  expect(book.sent).toEqual([store.load()[fill().id]!.query]);
+  expect(book.sent).toEqual([required(store.load()[fill().id]).query]);
   expect(reported).toEqual([[fill().id, "73170000"]]);
   expect(store.load()[fill().id]).toMatchObject({ transfer_id: "73170000", outcome: "reported" });
   await bot.run(quoter, () => {});
@@ -110,7 +111,7 @@ test("a lost answer is resent as the same bytes within the window, and the first
   now += 1_000;
   await bot.run(quoter, () => {});
   expect(book.sent.length).toBe(3);
-  expect(book.sent[0]).toBe(book.sent[1]!);
+  expect(book.sent[0]).toBe(required(book.sent[1]));
   expect(reported).toEqual([[fill().id, "73170000"], [second().id, "73170001"]]);
 });
 
@@ -187,10 +188,10 @@ test("nothing is sent before the journal's save resolves, and a failed save send
   let saved: Record<string, AsterDelivery> = {};
   const slow = { load: () => structuredClone(saved), save: async (value: Record<string, AsterDelivery>) => { order.push("save-start"); await new Promise(resolve => setTimeout(resolve, 20)); saved = structuredClone(value); order.push("saved"); } };
   const realFetchOf = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (new URL(String(input)).pathname === "/aster-chain/v3/transfer") order.push("send");
     return realFetchOf(input, init);
-  }) as typeof fetch;
+  }, { preconnect: realFetch.preconnect });
   await new AsterDeliverer(owner, agent, slow, api).run(quoterOf(() => [fill()]), () => {});
   expect(order.slice(0, order.indexOf("send"))).toEqual(["save-start", "saved", "save-start", "saved"]);
   book.sent.length = 0;

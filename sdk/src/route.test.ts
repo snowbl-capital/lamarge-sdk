@@ -249,3 +249,15 @@ test("a route whose own client id begins as a replacement's resumes its continua
     expect(resumed.second).toHaveLength(1);
   }
 });
+
+test("a first transfer cancelled for a renewal whose answer was lost is replaced on resume, not refused", async () => {
+  const { client, records } = api();
+  const store = memoryStore();
+  await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
+    max_parts: 8, payer: owner, recipient: owner, then: { to: request.to, recipient: request.recipient, ...request.then } } });
+  required(records[0]).cancelled_at = at(0);
+  await store.save("renewal:transfer-first", true);
+  const { first } = await route(client, signer(), { ...request, transfer_id: "transfer-first" }, { pollMs: 1, store });
+  expect(first.map(fill => fill.maker_leg)).toEqual(["CLAIMED"]);
+  expect(records[1]?.client_transfer_id).toBe("renew:transfer-first");
+});

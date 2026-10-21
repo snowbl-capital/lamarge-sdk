@@ -1,14 +1,16 @@
 import { linkAccount, setUpVenue } from "./account.ts";
 import { wait, type Client } from "./client.ts";
 import { errorText } from "./delivery.ts";
-import { changes } from "./events.ts";
+import { changes, type SocketConstructor } from "./events.ts";
 import type { components } from "./generated/api.ts";
 import { ESCROW_DEPLOYMENTS, requireSigningDomains, type DeploymentManifest } from "./protocol/deployments.ts";
 import { checkMakerIntent, type FundingSource } from "./protocol/intents.ts";
+import { checkPreparedLines, type PriceLine } from "./protocol/lines.ts";
 import { checkCloseOrders, checkPreparedQuote, insist, same, VENUE_SETTLED, type QuoteIntent } from "./protocol/protocol.ts";
 import { signIn, signOut } from "./session.ts";
 import { signItems, type Signer } from "./signer.ts";
 import { signedItems, type SignatureStore } from "./store.ts";
+import { required } from "./protocol/validation.ts";
 
 export type Order = components["schemas"]["Order"];
 export type Credential = components["schemas"]["CredentialCreated"];
@@ -136,7 +138,31 @@ export class Quoter {
     return this.timed(() => this.client.call("putV1QuoteIdentitiesIdLease", { path: { id: this.identity }, body: { ttl_seconds: ttlSeconds, ...telemetry }, retry: true }));
   }
   cancelAll() { return this.timed(() => this.client.call("deleteV1QuoteIdentitiesIdQuotes", { path: { id: this.identity } })); }
-  /** Prepares `order`'s quote set and checks it; signing is the caller's, as for a contract delegate. */
+  orders() { return this.timed(() => this.client.call("getOrders")); }
+  lines() { return this.timed(() => this.client.call("getQuoteLines")); }
+  /**
+   * Prepares a complete replacement of the identity's price lines and checks every draft against
+   * them; signing is the caller's, as for a contract delegate. `recipients` pins, per venue the
+   * lines buy on, the maker's address paid there.
+   */
+  async prepareLinesUnsigned(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {
+    const [current, pools] = await Promise.all([this.lines(), this.orders()]);
+    const prepared = await this.timed(() => this.client.call("prepareQuoteLines", { body: { expected_revision: current.revision, valid_until: validUntil, lines } }));
+    checkPreparedLines(prepared, { lines, validUntil, expectedRevision: current.revision }, { identity: this.identity, quoteSigner: this.account.address, pools, recipients });
+    for (const draft of prepared.drafts) requireSigningDomains(draft.to_sign, this.manifest);
+    return prepared;
+  }
+  /** Prepares, checks, signs and publishes the lines: every pool of the identity switches at once, or none. */
+  async publishLines(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {
+    const prepared = await this.prepareLinesUnsigned(lines, recipients, validUntil);
+    const signatures: { draft_id: string; signature: string }[] = [];
+    for (const draft of prepared.drafts) {
+      const [signed] = await signItems(this.account, draft.to_sign, this.manifest);
+      signatures.push({ draft_id: draft.draft_id, signature: required(signed, "Nothing to sign").signature });
+    }
+    return this.timed(() => this.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures }, retry: true }));
+  }
+  /** Deprecated: publish price lines. Prepares `order`'s quote set and checks it; signing is the caller's, as for a contract delegate. */
   async prepareUnsigned(order: Order, quotes: QuoteIntent[], size: bigint, validUntil: number) {
     insist(order.quote_identity_id === this.identity && same(order.quote_signer, this.account.address) && order.state === "live" && size > 0n && size <= BigInt(order.available_to_quote));
     insist(quotes.length > 0);
@@ -146,13 +172,14 @@ export class Quoter {
     requireSigningDomains(prepared.to_sign, this.manifest);
     return prepared;
   }
+  /** Deprecated: publish price lines. */
   async prepare(order: Order, quotes: QuoteIntent[], size: bigint, validUntil: number) {
     const prepared = await this.prepareUnsigned(order, quotes, size, validUntil);
     const [signed] = await signItems(this.account, prepared.to_sign, this.manifest);
     insist(signed, "Nothing to sign");
     return { order_id: order.id, draft_id: prepared.draft_id, signature: signed.signature };
   }
-  /** All distinct order updates and cancels commit atomically; a cancel is never replayed, as it would void the sequence that follows. */
+  /** Deprecated: publish price lines; updates drop the identity's lines. All distinct order updates and cancels commit atomically; a cancel is never replayed, as it would void the sequence that follows. */
   batch(updates: { order_id: string; draft_id: string; signature: string }[], cancels: string[] = []) {
     insist(updates.length + cancels.length > 0 && updates.length + cancels.length <= 50);
     return this.timed(() => this.client.call("postV1QuotesBatch", { body: { updates, cancels }, retry: cancels.length === 0 }));
@@ -167,7 +194,7 @@ export class Quoter {
    * The identity's open fills kept current from its event journal: a snapshot, then only the
    * changes, pushed over the stream. `fills()` throws until the first snapshot is in.
    */
-  fillFeed(signal: AbortSignal, log: (line: string) => void = console.error) {
+  fillFeed(signal: AbortSignal, log: (line: string) => void = console.error, WebSocket?: SocketConstructor) {
     const current = new Map<string, FeedFill>();
     let synced = false;
     // The journal names the venues `from` and `to`; REST fills, `from_venue` and `to_venue`.
@@ -178,7 +205,7 @@ export class Quoter {
     const done = (async () => {
       while (!signal.aborted) {
         try {
-          for await (const change of changes(this.client, { scope: "private", signal })) {
+          for await (const change of changes(this.client, { scope: "private", signal, WebSocket })) {
             if ("resync" in change) {
               current.clear();
               if ("fills" in change.resync) for (const fill of change.resync.fills) put(fill);

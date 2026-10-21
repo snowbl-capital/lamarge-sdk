@@ -55,11 +55,6 @@ test("an answer longer than the caller reads is refused, not read whole", async 
   expect(JSON.stringify(await send({ apiUrl: "http://localhost:8080", fetch: answering(long).fetch, maxAnswerBytes: 20_000 }, { method: "GET", path: "/v1/orders" }))).toHaveLength(10_014);
 });
 
-test("the client carries its transport's fetch for the reads a flow makes beside the API", () => {
-  const { fetch } = answering();
-  expect(createClient({ apiUrl: "http://localhost:8080", fetch }).fetch).toBe(fetch);
-});
-
 test("a client refusal is never retried", async () => {
   const { fetch, seen } = answering(() => Response.json({ error: { code: "VALIDATION_ERROR", message: "", request_id: "r", retryable: false } }, { status: 400 }));
   await expect(send({ apiUrl: "http://localhost:8080", fetch }, { method: "GET", path: "/v1/orders", retry: true })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
@@ -133,12 +128,12 @@ test("options are required exactly when the operation has a path, a required que
   expect([order, takes, balances]).toEqual([false, false, true]);
 });
 
-test("cancelling stops a retry's wait at once", async () => {
-  const { fetch } = answering(() => Response.json({ error: { code: "RATE_LIMITED", message: "", request_id: "r", retryable: true } }, { status: 429, headers: { "retry-after": "60" } }));
+test("cancelling once a retryable refusal has come stops the retry at once", async () => {
   const controller = new AbortController();
-  const pending = send({ apiUrl: "http://localhost:8080", fetch }, { method: "GET", path: "/v1/orders", retry: true, signal: controller.signal });
-  setTimeout(() => controller.abort(), 20);
-  const started = Date.now();
-  await expect(pending).rejects.toThrow();
-  expect(Date.now() - started).toBeLessThan(5_000);
+  const { fetch, seen } = answering(() => {
+    controller.abort();
+    return Response.json({ error: { code: "RATE_LIMITED", message: "", request_id: "r", retryable: true } }, { status: 429, headers: { "retry-after": "60" } });
+  });
+  await expect(send({ apiUrl: "http://localhost:8080", fetch }, { method: "GET", path: "/v1/orders", retry: true, signal: controller.signal })).rejects.toBe(controller.signal.reason);
+  expect(seen).toHaveLength(1);
 });

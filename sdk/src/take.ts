@@ -36,10 +36,14 @@ export interface TakeOptions {
   lock?: (<T>(run: () => Promise<T>) => Promise<T>) | undefined;
 }
 
+/** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
+export interface PaymentOptions { at: number; signal?: AbortSignal | undefined; before?: BeforeSigning | undefined; payWindow?: number | undefined; route?: boolean | undefined }
+
 /** Each venue pays its own way: the escrow payment, or the one transfer LaMarge sends inside Aster or Lighter once the maker is locked. */
-async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Balance, recipient: string, at: number, signal?: AbortSignal, before?: BeforeSigning) {
+export async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Balance, recipient: string, options: PaymentOptions) {
   const { take, to_sign } = prepared;
-  const checked = async () => { await before?.({ kind: "take", input, prepared }); };
+  const { at, signal, before } = options;
+  const checked = async () => { await before?.({ kind: "take", input, prepared, ...(options.route ? { route: true as const } : {}) }); };
   insist(to_sign.every(entry => entry.kind === takePaymentKind(input.from)), "The signing request differs from the take's venue");
   const item = required(to_sign[0]);
   // A Lighter account is an index: Lighter itself says whose it is, LaMarge's record of it doesn't.
@@ -67,7 +71,7 @@ async function signPayment(client: Client, prepared: Prepared, input: TakeInput,
     return [signedItem(item, await signTyped(signer, item.typed_data))];
   }
   const typed = to_sign.filter((entry): entry is Exclude<Item, LighterItem | AsterItem> => !isLighter(entry) && !isAster(entry));
-  checkTakeIntent(typed, take.fills, input, payer.address, recipient, at);
+  checkTakeIntent(typed, take.fills, input, payer.address, recipient, at, options.payWindow);
   await checked();
   return signItems(signer, typed);
 }
@@ -98,7 +102,7 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   if (signatures && isRecord(kept)) insist(canonical(kept.to_sign) === canonical(to_sign), "The take's payment differs from the one already signed");
   if (!signatures) {
     try {
-      signatures = await signPayment(client, prepared, input, signer, payer, recipient, (options.now ?? Date.now)() / 1000, signal, options.beforeSigning);
+      signatures = await signPayment(client, prepared, input, signer, payer, recipient, { at: (options.now ?? Date.now)() / 1000, signal, before: options.beforeSigning });
       signal?.throwIfAborted();
       await store.save(key, { items: signatures, to_sign });
     } catch (error) {

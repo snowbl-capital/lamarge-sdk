@@ -1,6 +1,6 @@
 import { fillMemo, LIGHTER_MAX_TAKER_FEE } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** `replace` names a position in the current set; without it, the quote adds a price level on `receive_venue`. */
 export type MakerQuoteIntent = { receive_venue: string; receive: string; min_fill: string; quote_validity_seconds?: number | null | undefined; replace?: { sequence: number; index: number } | undefined };
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
@@ -127,10 +127,39 @@ export function checkAsterTakeIntent(items: TakeItems, fills: TakeFill[], input:
   insist("domain" in terms, "Unexpected Aster transfer");
   const transfer = asterTransfer(terms);
   checkAsterTransfer(transfer, fill);
-  insist(transfer.nonce >= now + 20 && transfer.nonce <= now + 70, "The Aster transfer's nonce differs from the take");
+  insist(transfer.nonce >= now + ASTER_NONCE_AHEAD && transfer.nonce <= now + 70, "The Aster transfer's nonce differs from the take");
+}
+/** An Aster transfer is signed while its nonce is at least this many seconds ahead. */
+const ASTER_NONCE_AHEAD = 20;
+/** Until when, in seconds, a reserved take can still be signed: its `pay_by`, sooner for an Aster transfer whose nonce must stay ahead. */
+export function signableUntil(prepared: { take: { fills: readonly { pay_by: string }[] }; to_sign: TakeItems }): number {
+  const nonces = prepared.to_sign.flatMap(({ kind, typed_data: terms }) => kind === "aster_transfer" && "domain" in terms ? [asterTransfer(terms).nonce - ASTER_NONCE_AHEAD] : []);
+  return Math.min(...prepared.take.fills.map(fill => Date.parse(fill.pay_by) / 1000), ...nonces);
+}
+type RouteTransfer = { id: string; from: string; to: string; amount_in: string; min_out: string; payer: string; recipient: string; previous_transfer_id: string | null;
+  withdrawal_preparation: { amount: string; typed_data: Typed } | null };
+/**
+ * A route signed at once, before its first signature: its second transfer goes on from `hub`, the
+ * account on the venue between, to the route's end, for at most what the first take delivers, at
+ * least a hundredth of the plan and at the planned price; its withdrawal from the venue between
+ * brings no more than that, to `hub`. Each take's payment is checked as any take's when signed.
+ */
+export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string } | null | undefined }, delivering: readonly { amount_out: string }[],
+  second: RouteTransfer, hub: string, now = Date.now() / 1000): void {
+  const then = first.then;
+  insist(then && second.previous_transfer_id === first.id && second.from === first.to && second.to === then.to && same(second.payer, hub) && same(second.recipient, then.recipient), "The route's second transfer differs from the route");
+  const delivers = delivering.reduce((sum, fill) => sum + uint(fill.amount_out), 0n), pays = uint(second.amount_in), planned = uint(then.amount_in);
+  insist(pays > 0n && pays <= delivers && pays * 100n >= planned && uint(second.min_out) >= uint(then.min_out) * pays / planned, "The route's second take differs from its plan");
+  const withdrawal = second.withdrawal_preparation;
+  if (withdrawal) {
+    const amount = uint(withdrawal.amount);
+    insist(amount <= delivers, "The route withdraws more than it brings");
+    checkWithdrawal(withdrawal.typed_data, second.from, hub, hub, amount, now);
+  }
 }
 
-export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, now = Date.now() / 1000): asserts items is Verified<SignItem[]> {
+/** `payWindow`: the most seconds to `pay_by`, `ROUTE_PAY_WINDOW_SECONDS` for a route's second take signed at once. */
+export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, now = Date.now() / 1000, payWindow = 90): asserts items is Verified<SignItem[]> {
   insist(takePaymentKind(input.from) === "pay_take", "The signing request differs from the take's venue");
   insist(fills.length > 0 && fills.length <= (input.max_parts ?? 8) && new Set(fills.map(fill => fill.id)).size === fills.length && new Set(fills.map(fill => fill.swap_id.toLowerCase())).size === fills.length);
   const totalIn = fills.reduce((sum, fill) => sum + BigInt(fill.amount_in), 0n);
@@ -148,7 +177,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(fill.role === "taker" && fill.from_venue === input.from && fill.to_venue === input.to && same(fill.payer, payer) && same(fill.taker_recipient, recipient) && BigInt(fill.amount_in) > 0n && BigInt(fill.amount_out) > 0n);
     checkDelivery(fill, recipient);
     const t1 = Date.parse(fill.t1) / 1000, t2 = Date.parse(fill.t2) / 1000, payBy = Date.parse(fill.pay_by) / 1000;
-    insist(payBy > now && payBy <= now + 90 && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30 && t2 > t1 && t2 <= now + TAKER_TIMEOUT_SECONDS + 30);
+    insist(payBy > now && payBy <= now + payWindow && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30 && t2 > t1 && t2 <= now + TAKER_TIMEOUT_SECONDS + 30);
     const matching = payments.filter(payment => same(payment.swapId, fill.swap_id));
     insist(matching.length === 1);
     const p = required(matching[0]);

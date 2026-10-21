@@ -179,6 +179,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/markets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get venue prices
+         * @description Per enabled venue: the best price lines of the quote identities whose quotes the books show (`best_buy` the highest price a maker pays to receive the venue's token there, `best_sell` the lowest it asks to deliver it there, in USDC), the liquidity those books draw from each pool once, and the volume delivered there in the last 24 hours. Prices are indicative: the best buy and the best sell may come from different makers, and a route always prices one maker's pair ([quote lines](/how-it-works#quote-lines)). Pools quoted without lines count in `liquidity` only. An answer is reused for two seconds. Over 1000 eligible orders: 503 `SNAPSHOT_TOO_LARGE`.
+         */
+        get: operations["getMarkets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -465,6 +485,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/quote-lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read quote lines
+         * @description The quote identity's published lines ([quote lines](/how-it-works#quote-lines)) and their `revision`, `0` before any. A credential reads its own identity. Credential scope: `read`.
+         */
+        get: operations["getQuoteLines"];
+        put?: never;
+        /**
+         * Publish quote lines
+         * @description Accepts every draft and cancellation of a preparation and replaces the identity's lines, in one transaction, or none: each draft as `PUT /v1/orders/{id}/quotes`, each cancellation as `DELETE /v1/orders/{id}/quotes`. `STATE_CONFLICT` when the lines' revision moved since the preparation, `STALE_QUOTE` once it is five minutes old. Publishing an accepted preparation again returns the lines. Credential scope: `quote`, and `cancel` when it cancels.
+         */
+        post: operations["publishQuoteLines"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/quote-lines/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare quote lines
+         * @description Compiles a complete replacement of the identity's lines into one draft per live pool with stock, each quoting every other line with a buy price whose venue can pay into the pool's, and one cancellation per other quoted pool. A draft's quotes share the line's `stock` as their `supply` and `quote_size`, with its `min_fill`, at `receive = ceil(stock × sell × 10^dA / (buy × 10^dB))` ([quote lines](/how-it-works#quote-lines)). Stock needs a pool on its venue (else `VALIDATION_ERROR`), at least one token and its minimum fill, a sell price and a buy price elsewhere that can pay for it; any pool of the identity moving capital is `STATE_CONFLICT`. Drafts follow `POST /v1/orders/{id}/quotes/prepare`; publish them within five minutes. Credential scope: `quote`, and `cancel` when it cancels.
+         */
+        post: operations["prepareQuoteLines"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/maker/{venue}/prepare": {
         parameters: {
             query?: never;
@@ -476,7 +540,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare maker funds or a quote
-         * @description Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account, `funding_source: venue` and no `quote` (quote through `POST /v1/orders/{id}/quotes/prepare`); the preparation is `complete` at once. An unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.
+         * @description Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account, `funding_source: venue` and no `quote` (quote through [quote lines](/how-it-works#quote-lines)); the preparation is `complete` at once. An unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.
          */
         post: operations["prepareMaker"];
         delete?: never;
@@ -576,7 +640,8 @@ export interface paths {
         get?: never;
         /**
          * Replace the quote set
-         * @description Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply venue's escrow chain; a Lighter or Aster pool needs an EOA signer. Credential scope: `quote`.
+         * @deprecated
+         * @description Deprecated: publish [quote lines](/how-it-works#quote-lines), which this drops. Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply venue's escrow chain; a Lighter or Aster pool needs an EOA signer. Credential scope: `quote`.
          */
         put: operations["putQuotes"];
         post?: never;
@@ -601,7 +666,8 @@ export interface paths {
         put?: never;
         /**
          * Prepare a quote set
-         * @description Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished, unexpired drafts per identity, else `RATE_LIMITED`. Credential scope: `quote`.
+         * @deprecated
+         * @description Deprecated: prepare [quote lines](/how-it-works#quote-lines). Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished, unexpired drafts per identity, else `RATE_LIMITED`. Credential scope: `quote`.
          */
         post: operations["prepareQuotes"];
         delete?: never;
@@ -852,6 +918,50 @@ export interface paths {
          * @description Submits the signed preparation, recorded before the venue is called; answers 200 with the withdrawal, even `refused`, and retries return it. Never sign another for an `unknown` one.
          */
         post: operations["submitTransferWithdrawal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}/grouped": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a route signed at once
+         * @description For a route's first transfer whose take is reserved and unsigned, paid inside Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign. The withdrawal from the venue between, when the route needs one, is the second transfer's `withdrawal_preparation`. Sign in order: the first take's request, the withdrawal, the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route is not signed at once (not eligible, the book or the accounts between do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.
+         */
+        post: operations["prepareGroupedRoute"];
+        /**
+         * Abort a prepared route
+         * @description Ends a route not committed: its second take and second transfer are released at once. The first take stays reserved, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.
+         */
+        delete: operations["abortGroupedRoute"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}/grouped/signatures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit a route's signatures
+         * @description Every signature of a prepared route at once: each take's items by `fill_id`, the withdrawal as a `margin_move` item. Accepted together before `commit_by`, or none; the operator then withdraws once the first take delivered and pays the second take once its funds arrived. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.
+         */
+        post: operations["commitGroupedRoute"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1791,6 +1901,10 @@ export interface components {
             quote_identity_id?: components["schemas"]["Uuid"];
             /** @description `supply` with `quote`, else a deposit. A pool's first funding is at least 5 tokens. */
             amount: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description Deprecated, and it drops the identity's quote lines; publish quote lines instead.
+             */
             quote?: components["schemas"]["MakerQuoteInput"];
             funding_source: components["schemas"]["FundingSource"];
         };
@@ -2009,6 +2123,25 @@ export interface components {
             continuable: components["schemas"]["Amount"] | null;
             cancelled_at: components["schemas"]["Timestamp"] | null;
             created_at: components["schemas"]["Timestamp"];
+            /** @description The route signed at once this transfer belongs to, as its first or second. */
+            grouped: components["schemas"]["GroupedRoute"] | null;
+        };
+        /** @description A route signed at once: its first transfer pays inside Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the first goes on leg by leg. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`. */
+        GroupedRoute: {
+            /** @enum {string} */
+            state: "prepared" | "committed" | "aborted" | "closed" | (string & {});
+            second_transfer_id: components["schemas"]["Uuid"];
+            first_take_id: components["schemas"]["Uuid"];
+            second_take_id: components["schemas"]["Uuid"] | null;
+            /** @description Every signature must be committed before it. */
+            commit_by: components["schemas"]["Timestamp"];
+        };
+        GroupedPreparation: {
+            route: components["schemas"]["GroupedRoute"];
+            /** @description The first take and its request, signed first. */
+            first: components["schemas"]["TakePreparation"];
+            /** @description The second take and its `pay_take`, signed last. */
+            second: components["schemas"]["TakePreparation"];
         };
         TransferPage: {
             data: components["schemas"]["TransferIntent"][];
@@ -2225,6 +2358,8 @@ export interface components {
             quote_validity_seconds_max: number;
             take_parts_max: number;
             pay_window_seconds: number;
+            /** @description A route signed at once's second take. */
+            route_pay_window_seconds: number;
             /** @description Most one fill takes from one level, in millionths of a token (books' `max_fill`, in base units). */
             fill_max: components["schemas"]["Amount"];
         };
@@ -2338,12 +2473,91 @@ export interface components {
             quotes: components["schemas"]["Quote"][];
             to_sign: components["schemas"]["ToSign"][];
         };
+        /** @description USDC per unit of the venue's token, from 0.90 to 1.10, at most eight decimals. */
+        Price: string;
+        QuoteLine: {
+            venue: components["schemas"]["VenueId"];
+            /** @description What the maker pays to receive one unit on `venue`; null receives nothing there. */
+            buy: components["schemas"]["Price"] | null;
+            /** @description What the maker asks to deliver one unit on `venue`, at least `buy`; null delivers nothing there. */
+            sell: components["schemas"]["Price"] | null;
+            /** @description What the identity's pool on `venue` offers to deliver; `0` without a sell price. */
+            stock: components["schemas"]["Amount"];
+            /** @description The smallest fill of the pool's quotes, at least 1 token, at most `stock` and `fill_max`; null or omitted is 1 token. */
+            min_fill?: components["schemas"]["Amount"] | null;
+        };
+        QuoteLines: {
+            quote_identity_id: components["schemas"]["Uuid"];
+            /** @description Advances at each publication, and when a quote set of the identity is published without lines, which drops them. */
+            revision: components["schemas"]["Cursor"];
+            lines: components["schemas"]["QuoteLine"][];
+        };
+        QuoteLinesInput: {
+            /** @description The identity; the browser identity by default, a credential's own with a credential. */
+            quote_identity_id?: components["schemas"]["Uuid"];
+            /** @description The lines' `revision`; `STATE_CONFLICT` if it changed by preparation or publication. */
+            expected_revision: components["schemas"]["Cursor"];
+            /** @description Last admission time, within the next 300 s; `253402214400` (never) for the browser identity. */
+            valid_until: components["schemas"]["UnixTime"];
+            /** @description Every line of the identity, one per venue; a venue left out is removed. */
+            lines: components["schemas"]["QuoteLine"][];
+        };
+        QuoteLineDraft: {
+            order_id: components["schemas"]["Bytes32"];
+            venue: components["schemas"]["VenueId"];
+            expected_revision: null;
+            draft_id: components["schemas"]["Uuid"];
+            sequence: number;
+            valid_until: components["schemas"]["UnixTime"];
+            expires_at: components["schemas"]["UnixTime"];
+            /** @description The line's stock; not signed on chain. */
+            quote_size: components["schemas"]["Amount"];
+            quotes: components["schemas"]["Quote"][];
+            to_sign: components["schemas"]["ToSign"][];
+        };
+        QuoteLinesPreparation: {
+            id: components["schemas"]["Uuid"];
+            quote_identity_id: components["schemas"]["Uuid"];
+            expected_revision: components["schemas"]["Cursor"];
+            valid_until: components["schemas"]["UnixTime"];
+            /** @description The lines, normalized and sorted by venue id. */
+            lines: components["schemas"]["QuoteLine"][];
+            drafts: components["schemas"]["QuoteLineDraft"][];
+            /** @description The pools whose quotes publication pulls. */
+            cancels: components["schemas"]["Bytes32"][];
+        };
+        QuoteLinesPublication: {
+            preparation_id: components["schemas"]["Uuid"];
+            /** @description One per draft. */
+            signatures: {
+                draft_id: components["schemas"]["Uuid"];
+                signature: components["schemas"]["QuoteSignature"];
+            }[];
+        };
+        Markets: {
+            as_of: components["schemas"]["Timestamp"];
+            venues: {
+                venue: components["schemas"]["VenueId"];
+                symbol: string;
+                decimals: number;
+                best_buy: components["schemas"]["Price"] | null;
+                best_sell: components["schemas"]["Price"] | null;
+                /** @description What the books show of the pools supplying the venue, each pool once. */
+                liquidity: components["schemas"]["Amount"];
+                /** @description Settled public trades delivered on the venue in the last 24 hours. */
+                volume_24h: components["schemas"]["Amount"];
+            }[];
+        };
         QuoteCancellation: {
             order_id: components["schemas"]["Bytes32"];
             cancel_epoch: components["schemas"]["Cursor"];
         };
         /** @description 1 to 50 distinct orders across `updates` and `cancels`. */
         QuoteBatchInput: {
+            /**
+             * @deprecated
+             * @description Deprecated, and each drops its identity's quote lines; publish quote lines instead.
+             */
             updates?: {
                 order_id: components["schemas"]["Bytes32"];
                 draft_id: components["schemas"]["Uuid"];
@@ -3265,6 +3479,28 @@ export interface operations {
             500: components["responses"]["Internal"];
         };
     };
+    getMarkets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The venues in registry order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Markets"];
+                };
+            };
+            500: components["responses"]["Internal"];
+            503: components["responses"]["SnapshotTooLarge"];
+        };
+    };
     getHealth: {
         parameters: {
             query?: never;
@@ -3703,6 +3939,118 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    getQuoteLines: {
+        parameters: {
+            query?: {
+                /** @description The identity; the browser identity by default, a credential's own with a credential. */
+                quote_identity_id?: components["schemas"]["Uuid"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The lines. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteLines"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    publishQuoteLines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteLinesPublication"];
+            };
+        };
+        responses: {
+            /** @description The published lines. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteLines"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["QuoteForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `STALE_QUOTE`, `STALE_SEQUENCE` or `STATE_CONFLICT`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    prepareQuoteLines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteLinesInput"];
+            };
+        };
+        responses: {
+            /** @description The drafts to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteLinesPreparation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `ACCESS_REQUIRED`, `FORBIDDEN` (no `quote` or `cancel` scope, quote identity revoked, or quoting disabled by an admin), or `MAKER_NOT_APPROVED` for a venue-held pool. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
         };
@@ -4472,12 +4820,28 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            409: components["responses"]["StateConflict"];
+            /** @description `STATE_CONFLICT`: the resource's state forbids this, or a client id reused with other terms; reason `no_deposit`: the Aster account it or its route delivers to never received a deposit, which Aster refuses transfers to; reason `grouped_route`: an open route signed at once holds it until it ends (a continuation of its first transfer). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             413: components["responses"]["PayloadTooLarge"];
-            422: components["responses"]["AccountNotLinked"];
+            /** @description `ACCOUNT_NOT_LINKED`, `VENUE_DISABLED`, or `SETUP_REQUIRED` for the `agent` step of an Aster account it delivers to. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
-            /** @description `VENUE_UNAVAILABLE`: the Lighter transfer fee a continuation (`previous_transfer_id`) pays is unknown. */
+            /** @description `VENUE_UNAVAILABLE`: the Lighter transfer fee a continuation (`previous_transfer_id`) pays is unknown, or the Aster account it delivers to could not be read. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -4539,7 +4903,15 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["StateConflict"];
+            /** @description `STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
         };
@@ -4584,7 +4956,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             404: components["responses"]["NotFound"];
-            /** @description `STATE_CONFLICT`. */
+            /** @description `STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends; with `reason` `funds_arriving`: an earlier withdrawal of the route is still arriving, nothing more is withdrawn. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4647,6 +5019,102 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             404: components["responses"]["NotFound"];
+            /** @description `STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends; with `reason` `funds_arriving`: an earlier withdrawal of the route is still arriving, nothing more is withdrawn. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    prepareGroupedRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The route and its two takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupedPreparation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    abortGroupedRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aborted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    commitGroupedRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Signatures"];
+            };
+        };
+        responses: {
+            /** @description The committed route. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupedRoute"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["StateConflict"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["AccountNotLinked"];
@@ -4688,7 +5156,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
-            /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT`. */
+            /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT` (reason `no_deposit`: the Aster account it delivers to never received a deposit). `FILL_IN_PROGRESS` with `reason` `grouped_route`: an open route signed at once holds it until it ends. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4751,7 +5219,15 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["StateConflict"];
+            /** @description `STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends: abort the route instead. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
         };
@@ -4786,7 +5262,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             404: components["responses"]["NotFound"];
-            /** @description `TAKE_EXPIRED`: `pay_by` passed or a fill is not `RESERVED`; take again. */
+            /** @description `TAKE_EXPIRED`: `pay_by` passed or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open route signed at once holds it until it ends: commit or abort the route instead. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5069,7 +5545,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
-            409: components["responses"]["StateConflict"];
+            /** @description `STATE_CONFLICT`; with `reason` `funds_arriving`: an earlier withdrawal of a route is still arriving, nothing more is withdrawn. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["AccountNotLinked"];
             429: components["responses"]["RateLimited"];
@@ -5500,6 +5984,10 @@ export const routes = {
     "path": "/v1/volume",
     "method": "GET"
   },
+  "getMarkets": {
+    "path": "/v1/markets",
+    "method": "GET"
+  },
   "getHealth": {
     "path": "/health",
     "method": "GET",
@@ -5558,6 +6046,18 @@ export const routes = {
   "getV1MeExposure": {
     "path": "/v1/me/exposure",
     "method": "GET"
+  },
+  "getQuoteLines": {
+    "path": "/v1/quote-lines",
+    "method": "GET"
+  },
+  "publishQuoteLines": {
+    "path": "/v1/quote-lines",
+    "method": "POST"
+  },
+  "prepareQuoteLines": {
+    "path": "/v1/quote-lines/prepare",
+    "method": "POST"
   },
   "prepareMaker": {
     "path": "/v1/maker/{venue}/prepare",
@@ -5649,6 +6149,18 @@ export const routes = {
   },
   "submitTransferWithdrawal": {
     "path": "/v1/transfers/{id}/withdrawal",
+    "method": "POST"
+  },
+  "prepareGroupedRoute": {
+    "path": "/v1/transfers/{id}/grouped",
+    "method": "POST"
+  },
+  "abortGroupedRoute": {
+    "path": "/v1/transfers/{id}/grouped",
+    "method": "DELETE"
+  },
+  "commitGroupedRoute": {
+    "path": "/v1/transfers/{id}/grouped/signatures",
     "method": "POST"
   },
   "postTake": {

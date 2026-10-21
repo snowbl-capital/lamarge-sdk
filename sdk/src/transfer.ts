@@ -2,6 +2,7 @@ import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
 import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
+import { signableUntil } from "./protocol/intents.ts";
 import { CHAINS, insist, same, shortfall, VENUE_SETTLED } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import type { BeforeSigning, Signer } from "./signer.ts";
@@ -79,9 +80,15 @@ export const unsignedReservation = (fill: {
   && fill.payment_leg === "NONE" && (fill.maker_leg === "NONE" || fill.maker_leg === "ABANDONED")
   && fill.transactions.length === 0 && !fill.delivery_hash && !fill.payment_locked_at && !fill.maker_claimed_at;
 
+/** The take a transfer reserves: its own terms, under its client take id. */
+export const takeInput = (intent: TransferIntent): TakeInput => ({ from: intent.from, to: intent.to, amount_in: intent.amount_in, min_out: intent.min_out,
+  max_parts: intent.max_parts, client_take_id: intent.client_take_id, transfer_intent_id: intent.id });
+
 function replacement(intent: TransferIntent, clientId: string) {
   const { from, to, amount_in, min_out, max_parts, payer, recipient, then, previous_transfer_id: previous } = intent;
-  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...(then ? { then } : {}), ...(previous ? { previous_transfer_id: previous } : {}) };
+  // The request's `then` carries the route's terms only: `chain_id` is the server's answer.
+  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient,
+    ...(then ? { then: { to: then.to, recipient: then.recipient, amount_in: then.amount_in, min_out: then.min_out } } : {}), ...(previous ? { previous_transfer_id: previous } : {}) };
 }
 
 /** The transfer the API answers is the one asked: by its id, or by the client id it was created under. */
@@ -180,12 +187,10 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     if (request.funding === "wallet") covers(await readFunds());
     await options.beforeSigning?.(signing);
   };
-  const takeInput = (): TakeInput => ({ from: intent.from, to: intent.to, amount_in: intent.amount_in, min_out: intent.min_out, max_parts: intent.max_parts,
-    client_take_id: intent.client_take_id, transfer_intent_id: intent.id });
-  const pay = (balances?: Answer<"getBalances">) => take(client, signer, takeInput(), { store, signal, balances, recipient: request.recipient, beforeSigning, now, lock: options.lock });
+  const pay = (balances?: Answer<"getBalances">) => take(client, signer, takeInput(intent), { store, signal, balances, recipient: request.recipient, beforeSigning, now, lock: options.lock });
   // A take reserved again is priced again first, as the app does: a book that no longer pays its minimum reserves nothing.
   const repriced = async (balances?: Answer<"getBalances">) => {
-    const [, read] = await Promise.all([reviewQuote(client, takeInput(), now(), signal), balances ?? client.call("getBalances", { signal })]);
+    const [, read] = await Promise.all([reviewQuote(client, takeInput(intent), now(), signal), balances ?? client.call("getBalances", { signal })]);
     return pay(read);
   };
   /** The take already reserved, signed or paid, settled first; a replaced one is priced and taken again. Null when there is none. */
@@ -195,14 +200,15 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
       stage("taking");
       let prepared = await client.call("getV1TakesId", { path: { id: intent.take_id }, signal });
       const unsigned = () => prepared.take.fills.length > 0 && prepared.take.fills.every(unsignedReservation);
-      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED" && Date.parse(fill.pay_by) <= now())) {
+      // Past what it can still be signed by, an Aster transfer's nonce included, it is replaced.
+      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED") && signableUntil(prepared) * 1000 <= now()) {
         // Cancellation serializes with acceptance. A late or uncertain signature is never replaced.
         await client.call("deleteTake", { path: { id: intent.take_id }, signal });
         prepared = await client.call("getV1TakesId", { path: { id: intent.take_id }, signal });
       }
       if (!unsigned() || !prepared.take.fills.every(fill => fill.state === "EXPIRED")) {
         if (!prepared.to_sign.length || prepared.take.fills.some(fill => fill.state !== "RESERVED")) return prepared.take.fills;
-        return take(client, signer, takeInput(), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock });
+        return take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock });
       }
       // A deterministic replacement survives a lost response or a restart, with the same terms.
       intent = await replace(`retry:${intent.id}`);
@@ -241,15 +247,30 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   if (!intent.withdrawal && (intent.withdrawal_preparation || funds !== null && funds.supplied < amount)) {
     insist(request.funding === "venue", "Wallet funds do not cover the transfer");
     // Margin leaves the venue only for a take the book can execute now.
-    if (!intent.withdrawal_preparation) await reviewQuote(client, takeInput(), now(), signal);
+    if (!intent.withdrawal_preparation) await reviewQuote(client, takeInput(intent), now(), signal);
     stage("funding");
     const preparation = intent.withdrawal_preparation;
-    const withdrawal = preparation ? BigInt(preparation.amount) : shortfall(amount, required(funds, "A fresh balance is required").supplied, intent.from);
-    if (intent.funding_plan) insist(withdrawal === BigInt(intent.funding_plan.withdrawal_amount), "Funding amount changed; review the transfer again");
-    intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
-    checkWithdrawalState();
-    // Until it is relayed the wait below reads the balance anyway.
-    if (intent.withdrawal.state === "relayed") funds = await readFunds();
+    let withdrawal = preparation ? BigInt(preparation.amount) : shortfall(amount, required(funds, "A fresh balance is required").supplied, intent.from);
+    if (intent.funding_plan) {
+      // A continuation of a route signed at once withdraws at most what its route may still: the
+      // rest is already on its way. Never more than the shortfall.
+      const planned = BigInt(intent.funding_plan.withdrawal_amount), previous = intent.previous_transfer_id;
+      insist(planned === withdrawal || !preparation && planned < withdrawal && previous && (await client.call("getTransfer", { path: { id: previous }, signal })).grouped,
+        "Funding amount changed; review the transfer again");
+      withdrawal = planned;
+    }
+    if (withdrawal > 0n) {
+      try {
+        intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
+      } catch (error) {
+        // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.
+        if (error instanceof LaMargeError && error.reason === "funds_arriving") throw new TransferPending(intent, "arrival_unconfirmed");
+        throw error;
+      }
+      checkWithdrawalState();
+      // Until it is relayed the wait below reads the balance anyway.
+      if (intent.withdrawal.state === "relayed") funds = await readFunds();
+    }
   }
   insist(intent.withdrawal || funds !== null, "A fresh balance is required; try again shortly");
   const waitingForFunds = () => funds === null || funds.ready < amount || (intent.withdrawal != null && intent.withdrawal.state !== "relayed");

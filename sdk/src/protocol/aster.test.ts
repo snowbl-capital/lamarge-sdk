@@ -22,7 +22,7 @@ test("an Aster withdrawal is pinned to the account, BSC, USDT, a bounded fee and
   pinned();
   expect(() => checkWithdrawal(action(), "aster", owner, owner, 10n * USDT, now)).not.toThrow();
   expect(withdrawalCost("aster", action())).toBe(10n * USDT);
-  const refused: [Record<string, unknown>, bigint][] = [
+  const refused: [Record<string, unknown>, bigint, string?][] = [
     [{ amount: "10.1" }, 10n * USDT],
     [{ fee: "2.000001", amount: "12.000001" }, 10n * USDT],
     [{ destination: agent }, 10n * USDT],
@@ -30,11 +30,11 @@ test("an Aster withdrawal is pinned to the account, BSC, USDT, a bounded fee and
     [{ token: "USDC" }, 10n * USDT],
     [{ type: "Transfer" }, 10n * USDT],
     [{ "aster chain": "Testnet" }, 10n * USDT],
-    [{ nonce: String((BigInt(now) - 61n) * 1_000_000n) }, 10n * USDT],
+    [{ nonce: String((BigInt(now) - 61n) * 1_000_000n) }, 10n * USDT, "Stale withdrawal nonce"],
     [{}, 10_110_000_000_000_000_000n],
     [{}, 10_000_000n],
   ];
-  for (const [patch, amount] of refused) expect(() => checkWithdrawal(action(patch), "aster", owner, owner, amount, now)).toThrow();
+  for (const [patch, amount, reason = "The signing request differs from your instructions"] of refused) expect(() => checkWithdrawal(action(patch), "aster", owner, owner, amount, now)).toThrow(reason);
   const elsewhere = action();
   elsewhere.domain.chainId = 42161;
   expect(() => checkWithdrawal(elsewhere, "aster", owner, owner, 10n * USDT, now)).toThrow();
@@ -75,12 +75,13 @@ test("an agent approval is LaMarge's, for this address, only moving margin to Sp
   expect(() => checkAsterApproval(challenge(message()), owner, now * 1000)).not.toThrow();
   expect(() => checkAsterApproval(challenge(message({}, "&ipWhitelist=1.2.3.4 10.0.0.0/24")), owner, now * 1000)).not.toThrow();
   expect(() => checkAsterApproval(challenge(message({ agentName: "LaMargeDev" })), owner, now * 1000)).not.toThrow();
-  for (const bad of [
-    message({ canWithdraw: "true" }), message({ canPerpTrade: "false" }), message({ canSpotTrade: "true" }), message({}, "&ipWhitelist="), message({ user: agent }), message({ agentName: "Other" }),
-    message({ agentName: "@aster-desktop" }), message({ agentName: "LaMargeProd" }), message({ agentName: "LaMargeWithdrawal" }),
-    message({ agentAddress: owner }), message({ signatureChainId: "42161" }), message({ expired: String(BigInt(expired) + 1n) }),
-    message({ nonce: String(BigInt(nonce) + 61_000_000n) }), message({}, "&agentCode=ref"), message({}, "&ipWhitelist=1.2.3.4&extra=1"),
-  ]) expect(() => checkAsterApproval(challenge(bad), owner, now * 1000)).toThrow();
+  const spot = "The agent may only move margin to Spot", agentName = "Unexpected agent", approval = "Unexpected agent approval";
+  for (const [bad, reason] of [
+    [message({ canWithdraw: "true" }), spot], [message({ canPerpTrade: "false" }), spot], [message({ canSpotTrade: "true" }), spot], [message({}, "&ipWhitelist="), spot], [message({ user: agent }), "The approval names another account"], [message({ agentName: "Other" }), agentName],
+    [message({ agentName: "@aster-desktop" }), agentName], [message({ agentName: "LaMargeProd" }), agentName], [message({ agentName: "LaMargeWithdrawal" }), agentName],
+    [message({ agentAddress: owner }), agentName], [message({ signatureChainId: "42161" }), spot], [message({ expired: String(BigInt(expired) + 1n) }), "Unexpected approval expiry"],
+    [message({ nonce: String(BigInt(nonce) + 61_000_000n) }), "Stale agent approval"], [message({}, "&agentCode=ref"), approval], [message({}, "&ipWhitelist=1.2.3.4&extra=1"), approval],
+  ] as const) expect(() => checkAsterApproval(challenge(bad), owner, now * 1000)).toThrow(reason);
   expect(() => checkAsterApproval(challenge(message(), message({ canWithdraw: "true" })), owner, now * 1000)).toThrow();
   const elsewhere = challenge(message());
   elsewhere.typed_data.domain.chainId = 42161;
@@ -115,11 +116,12 @@ test("a take paid from Aster signs one transfer of its amount to the maker, unde
     message: { msg: Object.entries({ ...fields, ...patch }).map(([name, value]) => `${name}=${value}`).join("&") + extra } } });
   const take = { from: "aster", to: "hyperliquid", amount_in: fill.amount_in, min_out: "1000000" };
   expect(() => checkAsterTakeIntent([item()], [fill], take, owner, owner, now)).not.toThrow();
-  for (const bad of [
-    item({ amount: "1.5" }), item({ amount: "1.500002" }), item({ amount: "1.5000011" }), item({ asset: "USDC" }), item({ toAddress: agent }), item({ user: agent }),
-    item({ clientTranId: "0".repeat(32) }), item({ nonce: String(BigInt(now + 10) * 1_000_000n) }), item({ nonce: String(BigInt(now + 80) * 1_000_000n) }),
-    item({}, "&signer=" + owner), item({}, "", ASTER_CHAIN_ID), { ...item(), kind: "lighter_transfer" }, { ...item(), signer: agent }, { ...item(), fill_id: "other" },
-  ]) expect(() => checkAsterTakeIntent([bad], [fill], take, owner, owner, now)).toThrow();
+  const differs = "The Aster transfer differs from the take", nonceDiffers = "The Aster transfer's nonce differs from the take", unexpected = "Unexpected Aster transfer", one = "A take paid inside a venue is one transfer";
+  for (const [bad, reason] of [
+    [item({ amount: "1.5" }), differs], [item({ amount: "1.500002" }), differs], [item({ amount: "1.5000011" }), "Invalid decimal amount"], [item({ asset: "USDC" }), unexpected], [item({ toAddress: agent }), differs], [item({ user: agent }), differs],
+    [item({ clientTranId: "0".repeat(32) }), differs], [item({ nonce: String(BigInt(now + 10) * 1_000_000n) }), nonceDiffers], [item({ nonce: String(BigInt(now + 80) * 1_000_000n) }), nonceDiffers],
+    [item({}, "&signer=" + owner), unexpected], [item({}, "", ASTER_CHAIN_ID), "Unexpected Aster request"], [{ ...item(), kind: "lighter_transfer" }, one], [{ ...item(), signer: agent }, one], [{ ...item(), fill_id: "other" }, "The signing request differs from your instructions"],
+  ] as const) expect(() => checkAsterTakeIntent([bad], [fill], take, owner, owner, now)).toThrow(reason);
   expect(() => checkAsterTakeIntent([item(), item()], [fill], take, owner, owner, now)).toThrow("one transfer");
   expect(() => checkAsterTakeIntent([item()], [fill, { ...fill, id: "other" }], take, owner, owner, now)).toThrow("one transfer");
   expect(() => checkAsterTakeIntent([item()], [fill], take, owner, owner, now + 60)).toThrow();

@@ -506,6 +506,34 @@
         }
       }
     },
+    "/v1/markets": {
+      "get": {
+        "tags": [
+          "Market data"
+        ],
+        "summary": "Get venue prices",
+        "description": "Per enabled venue: the best price lines of the quote identities whose quotes the books show (`best_buy` the highest price a maker pays to receive the venue's token there, `best_sell` the lowest it asks to deliver it there, in USDC), the liquidity those books draw from each pool once, and the volume delivered there in the last 24 hours. Prices are indicative: the best buy and the best sell may come from different makers, and a route always prices one maker's pair ([quote lines](/how-it-works#quote-lines)). Pools quoted without lines count in `liquidity` only. An answer is reused for two seconds. Over 1000 eligible orders: 503 `SNAPSHOT_TOO_LARGE`.",
+        "operationId": "getMarkets",
+        "responses": {
+          "200": {
+            "description": "The venues in registry order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Markets"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/SnapshotTooLarge"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -1262,13 +1290,221 @@
         }
       }
     },
+    "/v1/quote-lines": {
+      "get": {
+        "tags": [
+          "Quotes"
+        ],
+        "summary": "Read quote lines",
+        "description": "The quote identity's published lines ([quote lines](/how-it-works#quote-lines)) and their `revision`, `0` before any. A credential reads its own identity. Credential scope: `read`.",
+        "operationId": "getQuoteLines",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "makerCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "quote_identity_id",
+            "in": "query",
+            "required": false,
+            "description": "The identity; the browser identity by default, a credential's own with a credential.",
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lines.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteLines"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Quotes"
+        ],
+        "summary": "Publish quote lines",
+        "description": "Accepts every draft and cancellation of a preparation and replaces the identity's lines, in one transaction, or none: each draft as `PUT /v1/orders/{id}/quotes`, each cancellation as `DELETE /v1/orders/{id}/quotes`. `STATE_CONFLICT` when the lines' revision moved since the preparation, `STALE_QUOTE` once it is five minutes old. Publishing an accepted preparation again returns the lines. Credential scope: `quote`, and `cancel` when it cancels.",
+        "operationId": "publishQuoteLines",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "makerCredential": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteLinesPublication"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The published lines.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteLines"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadSignature"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/QuoteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`STALE_QUOTE`, `STALE_SEQUENCE` or `STATE_CONFLICT`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/VenueUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/quote-lines/prepare": {
+      "post": {
+        "tags": [
+          "Quotes"
+        ],
+        "summary": "Prepare quote lines",
+        "description": "Compiles a complete replacement of the identity's lines into one draft per live pool with stock, each quoting every other line with a buy price whose venue can pay into the pool's, and one cancellation per other quoted pool. A draft's quotes share the line's `stock` as their `supply` and `quote_size`, with its `min_fill`, at `receive = ceil(stock × sell × 10^dA / (buy × 10^dB))` ([quote lines](/how-it-works#quote-lines)). Stock needs a pool on its venue (else `VALIDATION_ERROR`), at least one token and its minimum fill, a sell price and a buy price elsewhere that can pay for it; any pool of the identity moving capital is `STATE_CONFLICT`. Drafts follow `POST /v1/orders/{id}/quotes/prepare`; publish them within five minutes. Credential scope: `quote`, and `cancel` when it cancels.",
+        "operationId": "prepareQuoteLines",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "makerCredential": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteLinesInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The drafts to sign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteLinesPreparation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "description": "`ACCESS_REQUIRED`, `FORBIDDEN` (no `quote` or `cancel` scope, quote identity revoked, or quoting disabled by an admin), or `MAKER_NOT_APPROVED` for a venue-held pool.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
     "/v1/maker/{venue}/prepare": {
       "post": {
         "tags": [
           "Orders"
         ],
         "summary": "Prepare maker funds or a quote",
-        "description": "Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account, `funding_source: venue` and no `quote` (quote through `POST /v1/orders/{id}/quotes/prepare`); the preparation is `complete` at once. An unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.",
+        "description": "Funds the quote identity's capital pool on `venue`, or adds or replaces one of its quotes ([maker capital](/how-it-works#maker-capital)). Without `quote`, the order is left unquoted unless it belongs to the browser identity, whose quotes are re-signed. Idempotent on `client_request_id`. Lighter and Aster pools ([active market making](/market-making#active-market-making)): approved makers only (`MAKER_NOT_APPROVED`), one pool per account, `funding_source: venue` and no `quote` (quote through [quote lines](/how-it-works#quote-lines)); the preparation is `complete` at once. An unreadable Lighter transfer fee is `VENUE_UNAVAILABLE`.",
         "operationId": "prepareMaker",
         "security": [
           {
@@ -1657,8 +1893,9 @@
           "Quotes"
         ],
         "summary": "Replace the quote set",
-        "description": "Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply venue's escrow chain; a Lighter or Aster pool needs an EOA signer. Credential scope: `quote`.",
+        "description": "Deprecated: publish [quote lines](/how-it-works#quote-lines), which this drops. Publishes a signed draft ([quotes](/how-it-works#quotes)). `STALE_QUOTE` unless the order is `live`, the lease current and the draft under five minutes old, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless its sequence exceeds every published one; `STATE_CONFLICT` if a guarded draft's revision changed or the draft was accepted with another signature. Retries never restore a cancelled or superseded set; reserved fills keep their quote. ERC-1271 signers are checked on the supply venue's escrow chain; a Lighter or Aster pool needs an EOA signer. Credential scope: `quote`.",
         "operationId": "putQuotes",
+        "deprecated": true,
         "security": [
           {
             "session": []
@@ -1799,8 +2036,9 @@
           "Quotes"
         ],
         "summary": "Prepare a quote set",
-        "description": "Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished, unexpired drafts per identity, else `RATE_LIMITED`. Credential scope: `quote`.",
+        "description": "Deprecated: prepare [quote lines](/how-it-works#quote-lines). Stores an immutable draft with the next sequence for a `live` order with a current lease, else `STATE_CONFLICT`; publish it signed within five minutes. Each quote pays the maker's linked, set-up account on another enabled venue ([quotes](/how-it-works#quotes)). At most 100 unpublished, unexpired drafts per identity, else `RATE_LIMITED`. Credential scope: `quote`.",
         "operationId": "prepareQuotes",
+        "deprecated": true,
         "security": [
           {
             "session": []
@@ -2616,13 +2854,27 @@
             }
           },
           "409": {
-            "$ref": "#/components/responses/StateConflict"
+            "description": "`STATE_CONFLICT`: the resource's state forbids this, or a client id reused with other terms; reason `no_deposit`: the Aster account it or its route delivers to never received a deposit, which Aster refuses transfers to; reason `grouped_route`: an open route signed at once holds it until it ends (a continuation of its first transfer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "422": {
-            "$ref": "#/components/responses/AccountNotLinked"
+            "description": "`ACCOUNT_NOT_LINKED`, `VENUE_DISABLED`, or `SETUP_REQUIRED` for the `agent` step of an Aster account it delivers to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -2631,7 +2883,7 @@
             "$ref": "#/components/responses/Internal"
           },
           "502": {
-            "description": "`VENUE_UNAVAILABLE`: the Lighter transfer fee a continuation (`previous_transfer_id`) pays is unknown.",
+            "description": "`VENUE_UNAVAILABLE`: the Lighter transfer fee a continuation (`previous_transfer_id`) pays is unknown, or the Aster account it delivers to could not be read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2774,7 +3026,14 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/StateConflict"
+            "description": "`STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -2862,7 +3121,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`STATE_CONFLICT`.",
+            "description": "`STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends; with `reason` `funds_arriving`: an earlier withdrawal of the route is still arriving, nothing more is withdrawn.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2967,6 +3226,171 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
+            "description": "`STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends; with `reason` `funds_arriving`: an earlier withdrawal of the route is still arriving, nothing more is withdrawn.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/v1/transfers/{id}/grouped": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "prepareGroupedRoute",
+        "summary": "Prepare a route signed at once",
+        "description": "For a route's first transfer whose take is reserved and unsigned, paid inside Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign. The withdrawal from the venue between, when the route needs one, is the second transfer's `withdrawal_preparation`. Sign in order: the first take's request, the withdrawal, the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route is not signed at once (not eligible, the book or the accounts between do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The route and its two takes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupedPreparation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "abortGroupedRoute",
+        "summary": "Abort a prepared route",
+        "description": "Ends a route not committed: its second take and second transfer are released at once. The first take stays reserved, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Aborted",
+            "or never prepared.": null
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/v1/transfers/{id}/grouped/signatures": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "commitGroupedRoute",
+        "summary": "Commit a route's signatures",
+        "description": "Every signature of a prepared route at once: each take's items by `fill_id`, the withdrawal as a `margin_move` item. Accepted together before `commit_by`, or none; the operator then withdraws once the first take delivered and pays the second take once its funds arrived. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Signatures"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The committed route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupedRoute"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
             "$ref": "#/components/responses/StateConflict"
           },
           "413": {
@@ -3038,7 +3462,7 @@
             "$ref": "#/components/responses/AccessRequired"
           },
           "409": {
-            "description": "`PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT`.",
+            "description": "`PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT` (reason `no_deposit`: the Aster account it delivers to never received a deposit). `FILL_IN_PROGRESS` with `reason` `grouped_route`: an open route signed at once holds it until it ends.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3139,7 +3563,14 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/StateConflict"
+            "description": "`STATE_CONFLICT`; with `reason` `grouped_route`: an open route signed at once holds it until it ends: abort the route instead.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -3213,7 +3644,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`TAKE_EXPIRED`: `pay_by` passed or a fill is not `RESERVED`; take again.",
+            "description": "`TAKE_EXPIRED`: `pay_by` passed or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open route signed at once holds it until it ends: commit or abort the route instead.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3729,7 +4160,14 @@
             "$ref": "#/components/responses/Unauthenticated"
           },
           "409": {
-            "$ref": "#/components/responses/StateConflict"
+            "description": "`STATE_CONFLICT`; with `reason` `funds_arriving`: an earlier withdrawal of a route is still arriving, nothing more is withdrawn.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -6109,7 +6547,13 @@
             "description": "`supply` with `quote`, else a deposit. A pool's first funding is at least 5 tokens."
           },
           "quote": {
-            "$ref": "#/components/schemas/MakerQuoteInput"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MakerQuoteInput"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated, and it drops the identity's quote lines; publish quote lines instead."
           },
           "funding_source": {
             "$ref": "#/components/schemas/FundingSource"
@@ -6846,7 +7290,8 @@
           "continuable",
           "cancelled_at",
           "created_at",
-          "funding_plan"
+          "funding_plan",
+          "grouped"
         ],
         "properties": {
           "id": {
@@ -6990,6 +7435,82 @@
           },
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "grouped": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupedRoute"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The route signed at once this transfer belongs to, as its first or second."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupedRoute": {
+        "type": "object",
+        "description": "A route signed at once: its first transfer pays inside Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the first goes on leg by leg. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`.",
+        "required": [
+          "state",
+          "second_transfer_id",
+          "first_take_id",
+          "second_take_id",
+          "commit_by"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "committed",
+              "aborted",
+              "closed"
+            ]
+          },
+          "second_transfer_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "first_take_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "second_take_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit_by": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Every signature must be committed before it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupedPreparation": {
+        "type": "object",
+        "required": [
+          "route",
+          "first",
+          "second"
+        ],
+        "properties": {
+          "route": {
+            "$ref": "#/components/schemas/GroupedRoute"
+          },
+          "first": {
+            "$ref": "#/components/schemas/TakePreparation",
+            "description": "The first take and its request, signed first."
+          },
+          "second": {
+            "$ref": "#/components/schemas/TakePreparation",
+            "description": "The second take and its `pay_take`, signed last."
           }
         },
         "additionalProperties": false
@@ -7663,6 +8184,7 @@
           "quote_validity_seconds_max",
           "take_parts_max",
           "pay_window_seconds",
+          "route_pay_window_seconds",
           "fill_max"
         ],
         "properties": {
@@ -7693,6 +8215,10 @@
           },
           "pay_window_seconds": {
             "type": "integer"
+          },
+          "route_pay_window_seconds": {
+            "type": "integer",
+            "description": "A route signed at once's second take."
           },
           "fill_max": {
             "$ref": "#/components/schemas/Amount",
@@ -8137,6 +8663,320 @@
           }
         }
       },
+      "Price": {
+        "type": "string",
+        "pattern": "^[01](\\.[0-9]{1,8})?$",
+        "description": "USDC per unit of the venue's token, from 0.90 to 1.10, at most eight decimals."
+      },
+      "QuoteLine": {
+        "type": "object",
+        "required": [
+          "venue",
+          "buy",
+          "sell",
+          "stock"
+        ],
+        "properties": {
+          "venue": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "buy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Price"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the maker pays to receive one unit on `venue`; null receives nothing there."
+          },
+          "sell": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Price"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the maker asks to deliver one unit on `venue`, at least `buy`; null delivers nothing there."
+          },
+          "stock": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the identity's pool on `venue` offers to deliver; `0` without a sell price."
+          },
+          "min_fill": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The smallest fill of the pool's quotes, at least 1 token, at most `stock` and `fill_max`; null or omitted is 1 token."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteLines": {
+        "type": "object",
+        "required": [
+          "quote_identity_id",
+          "revision",
+          "lines"
+        ],
+        "properties": {
+          "quote_identity_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Cursor",
+            "description": "Advances at each publication, and when a quote set of the identity is published without lines, which drops them."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            }
+          }
+        }
+      },
+      "QuoteLinesInput": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "valid_until",
+          "lines"
+        ],
+        "properties": {
+          "quote_identity_id": {
+            "$ref": "#/components/schemas/Uuid",
+            "description": "The identity; the browser identity by default, a credential's own with a credential."
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/Cursor",
+            "description": "The lines' `revision`; `STATE_CONFLICT` if it changed by preparation or publication."
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UnixTime",
+            "description": "Last admission time, within the next 300 s; `253402214400` (never) for the browser identity."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            },
+            "description": "Every line of the identity, one per venue; a venue left out is removed."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteLineDraft": {
+        "type": "object",
+        "required": [
+          "order_id",
+          "venue",
+          "draft_id",
+          "sequence",
+          "valid_until",
+          "expires_at",
+          "quote_size",
+          "quotes",
+          "to_sign",
+          "expected_revision"
+        ],
+        "properties": {
+          "order_id": {
+            "$ref": "#/components/schemas/Bytes32"
+          },
+          "venue": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "expected_revision": {
+            "type": "null"
+          },
+          "draft_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UnixTime"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/UnixTime"
+          },
+          "quote_size": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The line's stock; not signed on chain."
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Quote"
+            },
+            "minItems": 1
+          },
+          "to_sign": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToSign"
+            },
+            "minItems": 1,
+            "maxItems": 1
+          }
+        }
+      },
+      "QuoteLinesPreparation": {
+        "type": "object",
+        "required": [
+          "id",
+          "quote_identity_id",
+          "expected_revision",
+          "valid_until",
+          "lines",
+          "drafts",
+          "cancels"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "quote_identity_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UnixTime"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            },
+            "description": "The lines, normalized and sorted by venue id."
+          },
+          "drafts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLineDraft"
+            }
+          },
+          "cancels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Bytes32"
+            },
+            "description": "The pools whose quotes publication pulls."
+          }
+        }
+      },
+      "QuoteLinesPublication": {
+        "type": "object",
+        "required": [
+          "preparation_id",
+          "signatures"
+        ],
+        "properties": {
+          "preparation_id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "signatures": {
+            "type": "array",
+            "description": "One per draft.",
+            "items": {
+              "type": "object",
+              "required": [
+                "draft_id",
+                "signature"
+              ],
+              "properties": {
+                "draft_id": {
+                  "$ref": "#/components/schemas/Uuid"
+                },
+                "signature": {
+                  "$ref": "#/components/schemas/QuoteSignature"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Markets": {
+        "type": "object",
+        "required": [
+          "as_of",
+          "venues"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "venue",
+                "symbol",
+                "decimals",
+                "best_buy",
+                "best_sell",
+                "liquidity",
+                "volume_24h"
+              ],
+              "properties": {
+                "venue": {
+                  "$ref": "#/components/schemas/VenueId"
+                },
+                "symbol": {
+                  "type": "string"
+                },
+                "decimals": {
+                  "type": "integer"
+                },
+                "best_buy": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Price"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "best_sell": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Price"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "liquidity": {
+                  "$ref": "#/components/schemas/Amount",
+                  "description": "What the books show of the pools supplying the venue, each pool once."
+                },
+                "volume_24h": {
+                  "$ref": "#/components/schemas/Amount",
+                  "description": "Settled public trades delivered on the venue in the last 24 hours."
+                }
+              }
+            }
+          }
+        }
+      },
       "QuoteCancellation": {
         "type": "object",
         "required": [
@@ -8157,6 +8997,8 @@
         "required": [],
         "properties": {
           "updates": {
+            "deprecated": true,
+            "description": "Deprecated, and each drops its identity's quote lines; publish quote lines instead.",
             "type": "array",
             "items": {
               "type": "object",

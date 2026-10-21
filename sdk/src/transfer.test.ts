@@ -24,7 +24,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   permit?: boolean; levels?: unknown[]; stalePreparation?: boolean; loseCancel?: boolean; refuseCancel?: boolean; takeId?: string; answered?: Record<string, unknown>;
   unreadable?: number; from?: string; setup?: string; permitReads?: string[]; funds?: Record<string, string>[]; withdrawal?: string; withdrawn?: string;
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
-  then?: Record<string, string>; loseReplacements?: number; plan?: false } = {}) {
+  then?: Record<string, string | number>; loseReplacements?: number; plan?: false } = {}) {
   const calls: string[] = [];
   const bodies: Record<string, unknown[]> = {};
   let failures = options.failSubmissions ?? 0;
@@ -157,7 +157,7 @@ test("wallet funding never withdraws: a shortfall stops before anything is signe
 test("a payment to anyone but the requested recipient is never signed", async () => {
   const { client } = api({ recipient: maker });
   const signer = counting();
-  await expect(transfer(client, signer, request)).rejects.toThrow();
+  await expect(transfer(client, signer, request)).rejects.toThrow("The signing request differs from your instructions");
   expect(signer.signed).toBe(0);
 });
 
@@ -567,7 +567,8 @@ test("an expired take that was signed, or whose signature is unproven, is return
 
 test("an unsigned expired take is replaced under retry:<id> with its route's terms, and the replacement is never funded again", async () => {
   const then = { to: "hyperliquid", recipient: payer, amount_in: "1000000", min_out: "990000" };
-  const { client, calls, bodies } = api({ takeId: "take-1", withdrawal: "relayed", withdrawalAmount: "600000", chainBalance: "0", then, takeFill: { state: "EXPIRED", maker_leg: "ABANDONED" } });
+  // The server answers its `then` with the end's chain, which a request never carries.
+  const { client, calls, bodies } = api({ takeId: "take-1", withdrawal: "relayed", withdrawalAmount: "600000", chainBalance: "0", then: { ...then, chain_id: 999 }, takeFill: { state: "EXPIRED", maker_leg: "ABANDONED" } });
   const store = memoryStore();
   const named: string[] = [];
   expect((await transfer(client, counting(), { ...venue, transfer_id: "transfer-1" }, { store, onIntent: intent => { named.push(intent.id); } })).map(fill => fill.state)).toEqual(["PAID"]);

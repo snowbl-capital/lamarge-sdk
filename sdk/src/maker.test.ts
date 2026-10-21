@@ -40,7 +40,7 @@ test("malicious operator authority is rejected before the first master signature
   const o=order(), item=fund(o);item.typed_data.message.operator=quoteAccount.address;let signatures=0;
   const signing={...account,signTypedData:async()=>{signatures++;return "0x00" as const;}};
   const client=api(url=>readResponse(url) ?? Response.json(prepared(o,[item])));
-  await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow();expect(signatures).toBe(0);
+  await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow("The signing request differs from your instructions");expect(signatures).toBe(0);
 });
 test("delegated quoting validates both directions and sends only scoped authority",async()=>{
   const headers:Headers[]=[];
@@ -100,7 +100,7 @@ test("provisioning never signs a replaced destination or excessive shortfall", a
   for(const mutate of [(p:PreparedMaker)=>{p.funding.wallet_amount="5000001";},(p:PreparedMaker)=>{p.intent.quote={receive_venue:"aster",receive:"1",min_fill:"1"};}]) {
     const p=prepared(o);mutate(p);
     const client=api(url=>readResponse(url) ?? Response.json(p));
-    await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow();
+    await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow("The signing request differs from your instructions");
   }
   expect(prompts).toBe(0);
 });
@@ -133,41 +133,40 @@ test("external contract quoting reviews its draft without an EOA key and preserv
 
 test("the fill feed keeps the identity's fills from one snapshot and their events, replayed while the stream is down",async()=>{
   const fill={id:"f1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
-  const realSocket=globalThis.WebSocket;
+  const replayed=Promise.withResolvers<void>();
   // A stream that closes at once: pages come by HTTP replay.
-  // fillFeed opens the global WebSocket.
-  Object.assign(globalThis,{WebSocket:class { onopen=()=>{};onmessage=()=>{};onclose=()=>{}; constructor(){setTimeout(()=>this.onclose(),0);} send(){} close(){} } satisfies SocketConstructor});
+  class Down { onopen=()=>{};onmessage=()=>{};onclose=()=>{}; constructor(){queueMicrotask(()=>this.onclose());} send(){} close(){} }
   let reads=0;
   const client=api(url=>{
     if(url.includes("/me/snapshot")){reads++;return Response.json({cursor:"5",orders:[],fills:[fill]});}
-    if(url.includes("/me/events")) return Response.json({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]});
+    if(url.includes("/me/events")){replayed.resolve();return Response.json({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]});}
     return new Response("unexpected",{status:500});
   },"mk_token");
   const stop=new AbortController();
-  const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{});
-  for(let tries=0;tries<50;tries++){const fills=await feed.fills().catch(()=>[]);if(fills[0]?.payment_verified_at)break;await new Promise(resolve=>setTimeout(resolve,20));}
+  const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{},Down satisfies SocketConstructor);
+  await replayed.promise;
+  while((await feed.fills())[0]?.payment_verified_at===null) await Bun.sleep(1);
+  stop.abort();
+  await feed.done;
   const [current]=await feed.fills();
   expect(current).toMatchObject({id:"f1",from_venue:"hyperliquid",to_venue:"lighter",payment_verified_at:"2026-10-13T00:00:00Z"});
   expect(reads).toBe(1);
-  stop.abort();
-  await feed.done;
-  globalThis.WebSocket=realSocket;
 });
 
 test("the fill feed takes its pages from the stream, from the cursor it processed",async()=>{
   const fill={id:"f1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
-  const realSocket=globalThis.WebSocket;
   const subscriptions:unknown[]=[];
+  const subscription=Promise.withResolvers<void>();
   class Stream {
     onopen=()=>{};onmessage=(_:{data:unknown})=>{};onclose=()=>{};
-    constructor(readonly url:string) {setTimeout(()=>this.onopen(),0);}
+    constructor(readonly url:string) {queueMicrotask(()=>this.onopen());}
     send(text:string) {
       subscriptions.push({url:this.url,...record(JSON.parse(text))});
-      setTimeout(()=>this.onmessage({data:JSON.stringify({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]})}),0);
+      this.onmessage({data:JSON.stringify({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]})});
+      subscription.resolve();
     }
-    close() {setTimeout(()=>this.onclose(),0);}
+    close() {this.onclose();}
   }
-  Object.assign(globalThis,{WebSocket:Stream satisfies SocketConstructor});
   let replays=0;
   const client=api(url=>{
     if(url.includes("/me/snapshot")) return Response.json({cursor:"5",orders:[],fills:[fill]});
@@ -175,15 +174,14 @@ test("the fill feed takes its pages from the stream, from the cursor it processe
     return new Response("unexpected",{status:500});
   },"mk_token");
   const stop=new AbortController();
-  try {
-    const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{});
-    for(let tries=0;tries<50;tries++){const fills=await feed.fills().catch(()=>[]);if(fills[0]?.payment_verified_at)break;await new Promise(resolve=>setTimeout(resolve,20));}
-    expect((await feed.fills())[0]).toMatchObject({id:"f1",payment_verified_at:"2026-10-13T00:00:00Z"});
-    expect(subscriptions[0]).toEqual({url:"ws://localhost:8080/v1/stream",token:"mk_token",after:"5"});
-    expect(replays).toBe(0);
-    stop.abort();
-    await feed.done;
-  } finally {globalThis.WebSocket=realSocket;}
+  const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{},Stream satisfies SocketConstructor);
+  await subscription.promise;
+  // Stopping closes the connection; the page received before it is still processed.
+  stop.abort();
+  await feed.done;
+  expect((await feed.fills())[0]).toMatchObject({id:"f1",payment_verified_at:"2026-10-13T00:00:00Z"});
+  expect(subscriptions[0]).toEqual({url:"ws://localhost:8080/v1/stream",token:"mk_token",after:"5"});
+  expect(replays).toBe(0);
 });
 
 test("a Lighter pool is opened for the dedicated owner linked there; escrow funding stays the financial key's",async()=>{
@@ -227,4 +225,32 @@ test("a funding is followed by its preparation: a failed top-up throws though th
   await expect(master.waitForFunding({...order(),state:"live",preparation_id:"prep-1"},10_000)).rejects.toThrow("Funding failed: venue refused the margin transfer");
   answer=url=>url.includes("/maker/preparations/") ? Response.json({id:"prep-2",state:"complete",order:{...order(),state:"live"}}) : Response.json({...order(),state:"live",preparation_id:null});
   expect((await master.waitForFunding({...order(),preparation_id:"prep-2"})).state).toBe("live");
+});
+
+test("delegated lines are checked, then every pool's set is signed and published together", async () => {
+  const pool = { ...order(), state: "live" as const, last_sequence: 1 };
+  const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
+  const quotes = [{ venue: "polymarket", recipient: account.address, supply: "5000000", receive: "5001000", min_fill: "1000000" }];
+  const posted: Record<string, unknown>[] = [];
+  const validUntil = Math.floor(Date.now() / 1000) + 25, expiresAt = validUntil + 3601;
+  const client = api((url, init) => {
+    if (url.endsWith("/quote-lines") && !init?.body) return Response.json({ quote_identity_id: "credential-1", revision: "4", lines: [] });
+    if (url.endsWith("/orders")) return Response.json([pool]);
+    const body = record(JSON.parse(String(init?.body)));
+    posted.push(body);
+    if (url.endsWith("/quote-lines/prepare")) return Response.json({ id: "preparation-1", quote_identity_id: "credential-1", expected_revision: body.expected_revision, valid_until: body.valid_until, lines, cancels: [],
+      drafts: [{ order_id: id, venue: "hyperliquid", draft_id: "draft-1", expected_revision: null, sequence: 2, valid_until: validUntil, expires_at: expiresAt, quote_size: "5000000", quotes, to_sign: [{ kind: "quote_set", signer: quoteAccount.address, typed_data: {
+        types: { EIP712Domain, ...schemas.QuoteSet }, primaryType: "QuoteSet", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
+        message: { owner: account.address, offerId: id, sequence: 2, expiresAt, quotes: quotes.map(q => ({ venue: q.venue, chainId: 137, token: required(CHAINS.polymarket).token, recipient: q.recipient, supply: q.supply, receive: q.receive, minFill: q.min_fill })) } } }] }] });
+    return Response.json({ quote_identity_id: "credential-1", revision: "5", lines });
+  }, "mk_scoped");
+  const quoter = new Quoter(client, "credential-1", quoteAccount, testDeployments);
+  expect((await quoter.publishLines(lines, { polymarket: account.address }, validUntil)).revision).toBe("5");
+  expect(posted[0]?.expected_revision).toBe("4");
+  expect(array(posted[1]?.signatures)).toHaveLength(1);
+  // A server asking for a lower price is refused before any signature.
+  quotes[0] = { ...required(quotes[0]), receive: "5000999" };
+  posted.length = 0;
+  await expect(quoter.publishLines(lines, { polymarket: account.address }, validUntil)).rejects.toThrow();
+  expect(posted).toHaveLength(1);
 });

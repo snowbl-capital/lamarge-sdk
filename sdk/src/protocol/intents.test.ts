@@ -12,8 +12,9 @@ const validate=(items:SignItem[],returned=preparation(items))=>checkMakerIntent(
 
 test("financial provisioning permits only the requested authority, domain, capital and request id",()=>{
   expect(()=>validate([funding()])).not.toThrow();
-  const mutations:((item:SignItem)=>void)[]=[i=>i.typed_data.message.operator=owner,i=>i.typed_data.message.quoteSigner=operator,i=>i.typed_data.message.amount="10000001",i=>i.typed_data.domain.verifyingContract=owner,i=>i.typed_data.domain.chainId=137,i=>i.typed_data.types.FundOffer=required(i.typed_data.types.FundOffer).map(f=>f.name==="amount"?{...f,type:"uint64"}:f),i=>i.typed_data.message.deadline=now+7200,i=>i.signer=operator];
-  for(const mutate of mutations) {const item=funding();item.typed_data=structuredClone(item.typed_data);mutate(item);expect(()=>validate([item])).toThrow();}
+  const differs="The signing request differs from your instructions";
+  const mutations:[(item:SignItem)=>void,string][]=[[i=>i.typed_data.message.operator=owner,differs],[i=>i.typed_data.message.quoteSigner=operator,differs],[i=>i.typed_data.message.amount="10000001",differs],[i=>i.typed_data.domain.verifyingContract=owner,"Unexpected signing domain"],[i=>i.typed_data.domain.chainId=137,"Unexpected signing domain"],[i=>i.typed_data.types.FundOffer=required(i.typed_data.types.FundOffer).map(f=>f.name==="amount"?{...f,type:"uint64"}:f),"Unexpected signing types"],[i=>i.typed_data.message.deadline=now+7200,"Signing deadline is expired or too long"],[i=>i.signer=operator,differs]];
+  for(const [mutate,reason] of mutations) {const item=funding();item.typed_data=structuredClone(item.typed_data);mutate(item);expect(()=>validate([item])).toThrow(reason);}
   expect(()=>validate([funding()],{...preparation([funding()]),client_request_id:"another-request"})).toThrow();
   expect(()=>validate([funding(),funding()])).toThrow();
   expect(()=>validate([])).toThrow();
@@ -86,7 +87,7 @@ test("take signing respects the caller's limit on parts", () => {
 
 test("one take signature binds both amounts, destination, quote and payment of every fill before signing",()=>{
  const mutations:((p:Record<string,unknown>)=>void)[]=[p=>p.amountOut="1000001",p=>p.amount="1",p=>p.receiveRecipient=receiver,p=>p.receiveChainId=999,p=>p.receiveToken=owner,p=>p.receiveEscrow=owner,p=>p.hashlock=id,p=>p.recipient=operator,p=>p.refundAt=now+86400,p=>p.orderId=fill.hashlock,p=>p.sequence=2,p=>p.swapId=fill.hashlock,p=>p.deadline=now+60,p=>p.payer=receiver,p=>p.dex=1];
- for(const mutate of mutations){const item=payTake();mutate(paymentOf(item));expect(()=>checkTakeIntent([item],[fill],take,owner,owner,now)).toThrow();}
+ for(const mutate of mutations){const item=payTake();mutate(paymentOf(item));expect(()=>checkTakeIntent([item],[fill],take,owner,owner,now)).toThrow("The signing request differs from your instructions");}
  const signer=payTake();signer.signer=receiver;expect(()=>checkTakeIntent([signer],[fill],take,owner,owner,now)).toThrow();
  const types=payTake();types.typed_data.types.LockPayment=required(types.typed_data.types.LockPayment).filter(f=>f.name!=="receiveRecipient");expect(()=>checkTakeIntent([types],[fill],take,owner,owner,now)).toThrow();
 });
@@ -132,7 +133,7 @@ test("maker topup binds only the shortfall and preserves every other remaining p
     p=>required(p.to_sign[1]).typed_data.message.quotes=[array(required(p.to_sign[1]).typed_data.message.quotes)[1]],
     p=>required(p.to_sign[1]).typed_data.message.quotes=[...array(required(p.to_sign[1]).typed_data.message.quotes),array(required(p.to_sign[1]).typed_data.message.quotes)[0]],
   ];
-  for(const mutate of mutations){const p=structuredClone(prepared);mutate(p);expect(()=>check(p)).toThrow();}
+  for(const mutate of mutations){const p=structuredClone(prepared);mutate(p);expect(()=>check(p)).toThrow("The signing request differs from your instructions");}
 });
 
 test("maker repricing signs no funding and rejects unexpected prerequisites",()=>{

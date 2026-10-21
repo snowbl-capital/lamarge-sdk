@@ -42,12 +42,16 @@ export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: Ty
 /**
  * What a flow is about to sign for the first time, once its own checks passed: a take's payment,
  * a venue withdrawal or a setup step. The caller's checks run on it, and one that throws signs
- * nothing. A stored signature submitted again runs none.
+ * nothing. A stored signature submitted again runs none. A route signed at once is shown whole
+ * (`route`: its two takes, and the second transfer with its withdrawal) before any of its requests
+ * still to sign, then each request as any other, marked `route`.
  */
 export type Signing =
-  | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake"> }
-  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: Typed }
-  | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> };
+  | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
+  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: Typed; route?: true }
+  | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
+  /** `signed`: what a resumed route already signed, never asked again. */
+  | { kind: "route"; preparation: Answer<"prepareGroupedRoute">; second: Answer<"getTransfer">; signed: { first: boolean; withdrawal: boolean; second: boolean } };
 export type BeforeSigning = (signing: Signing) => void | Promise<void>;
 
 export interface SignedItem { kind: string; fill_id?: string; signature: Hex }

@@ -37,7 +37,7 @@ const fills = await transfer(client, account, {
 | `linkAccount`, `setUpVenue` | Links an account, by the link message when it is not the master's; runs its setup steps (permit, Aster agent, Lighter key) |
 | `transfer` | Funding, the take, its payment; recovery by client id; `TransferPending` when funds or a permit have not arrived yet |
 | `take` | Reserves quotes, checks and signs the payment (escrow, Aster or Lighter), submits it |
-| `route` | A route of two takes through a venue between, as `GET /v1/routes` plans it: two transfers, the second continuing what the first delivered |
+| `route` | A route of two takes through a venue between, as `GET /v1/routes` plans it: two transfers, the second continuing what the first delivered; with `grouped`, signed at once where LaMarge can (`checkRouteIntent`) |
 | `changes` | Snapshot, then every page of events over the WebSocket, HTTP replay between connections, `{ resync }` when the journal moved on |
 
 Making a market takes two keys on two hosts. `Maker` holds the financial key and only provisions and releases capital; `Quoter` holds a scoped credential (`mk_`) and the quote key, and only quotes, cancels and reports deliveries.
@@ -52,7 +52,8 @@ const order = await master.waitForFunding(await master.addCapital({ venue: "hype
 
 const quoter = new Quoter(createClient({ apiUrl, token: credential.token }), credential.id, quoteAccount);
 await quoter.lease(30);
-await quoter.batch([await quoter.prepare(await quoter.order(order.id), quotes, 5_000_000n, Math.floor(Date.now() / 1000) + 25)]);
+const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
+await quoter.publishLines(lines, { polymarket: polymarketAccount }, Math.floor(Date.now() / 1000) + 25);
 ```
 
 A passive maker's pools sit in the escrow (Hyperliquid, Polymarket): the operator settles every fill. An active maker's pools sit inside a venue (Lighter, Aster): its agent also runs a deliverer, which sends each paid fill's transfer, persists it in a `DeliveryJournal` before sending, never signs a fill twice and reports the transfer. The agent itself (its loop, configuration, journal storage, single-writer lock and shutdown) is the application's; LaMarge's maker example is one, available on request.

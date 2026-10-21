@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 /** The browser bundle of the main and protocol entries, minified and gzipped. */
-const BUDGET_BYTES = 27_000;
+const BUDGET_BYTES = 29_800;
 
 const root = resolve(import.meta.dir, "..");
 const work = mkdtempSync(join(tmpdir(), "lamarge-sdk-"));
@@ -28,10 +28,11 @@ try {
   // The optional peer of the Aster entry, as the integrator provides it.
   symlinkSync(join(root, "node_modules", "viem"), join(project, "node_modules", "viem"));
   await Bun.write(join(project, "package.json"), JSON.stringify({ type: "module" }));
-  const entries = ["@lamarge/sdk", "@lamarge/sdk/protocol", "@lamarge/sdk/aster", "@lamarge/sdk/lighter"];
+  const { exports } = await Bun.file(join(installed, "package.json")).json() as { exports: Record<string, unknown> };
+  const entries = Object.keys(exports).filter(key => key !== "./package.json").map(key => join("@lamarge/sdk", key));
   await Bun.write(join(project, "imports.js"), `${entries.map((entry, index) => `import * as e${index} from "${entry}";`).join("\n")}
   for (const entry of [${entries.map((_, index) => `e${index}`).join(", ")}]) if (Object.keys(entry).length === 0) throw new Error("empty entry");
-  const { createClient } = e0;
+  const { createClient } = e${entries.indexOf("@lamarge/sdk")};
   createClient({ apiUrl: "https://api.lamarge.trade" });
   `);
   await $`node imports.js`.cwd(project);

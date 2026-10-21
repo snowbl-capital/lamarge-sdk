@@ -34,6 +34,6 @@ export function hex(value: unknown): `0x${string}` {
   return value;
 }
 
-function isHex(value: unknown): value is `0x${string}` {
+export function isHex(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x(?:[0-9a-fA-F]{2})*$/.test(value);
 }

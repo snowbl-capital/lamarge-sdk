@@ -14,6 +14,10 @@ export const CHAINS: Record<string, { id: number; token: string; decimals: numbe
 };
 /** Venues where the maker delivers inside the venue, read by the server, instead of an escrow lock. */
 export const VENUE_SETTLED = new Set(["lighter", "aster"]);
+/** A route whose first take pays inside a venue and goes through an escrow venue: LaMarge can have it signed at once. */
+export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
+/** The most seconds to a route's second take's `pay_by` when signed at once: the server's 180 s bound and a clock margin. */
+export const ROUTE_PAY_WINDOW_SECONDS = 210;
 /** The escrow holding a venue's commitments; for a venue now settled inside itself, its former escrow. */
 export function escrowOf(venue: string): string {
   const chain = CHAINS[venue];

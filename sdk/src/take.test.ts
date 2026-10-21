@@ -74,7 +74,7 @@ test("a take paid from Lighter checks its one transfer against the reserved fill
   expect(() => check([item], fills, { ...input, from: "aster" })).toThrow("take's venue");
   // LaMarge's key in development, never another slot of the account.
   check([{ ...item, typed_data: { ...terms, api_key_index: 253 } }]);
-  expect(() => check([{ ...item, typed_data: { ...terms, api_key_index: 4 } }])).toThrow("not sent by LaMarge's key");
+  expect(() => check([{ ...item, typed_data: { ...terms, api_key_index: 4 } }])).toThrow("Unexpected Lighter key");
   check([{ ...item, typed_data: { ...terms, usdc_fee: "1000000" } }]);
   expect(() => check([{ ...item, typed_data: { ...terms, usdc_fee: "1000001" } }])).toThrow("above 1 USDC");
 });

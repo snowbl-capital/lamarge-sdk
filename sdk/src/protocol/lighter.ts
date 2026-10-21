@@ -16,8 +16,8 @@ export const TAKER_API_KEY = 254;
 export const TAKER_API_KEYS: readonly number[] = [TAKER_API_KEY, 253];
 /** A maker bot's API key slot, `LIGHTER_API_KEY_INDEX`: 4 unless set, below LaMarge's taker keys. */
 export function makerKeySlot(value = "4"): number {
-  const slot = Number(value), last = Math.min(...TAKER_API_KEYS) - 1;
-  if (!Number.isInteger(slot) || slot < 4 || slot > last) throw new Error(`LIGHTER_API_KEY_INDEX is a key slot from 4 to ${last}: ${TAKER_API_KEYS.join(" and ")} are LaMarge's taker keys`);
+  const slot = Number(value);
+  if (!Number.isInteger(slot) || slot < 4 || slot > 252) throw new Error("LIGHTER_API_KEY_INDEX is a key slot from 4 to 252");
   return slot;
 }
 /** A taker's transfer moves USDC between collateral routes. */

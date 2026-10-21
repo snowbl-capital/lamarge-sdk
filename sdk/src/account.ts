@@ -50,8 +50,7 @@ async function signStep(client: Client, step: SetupStep, venue: string, owner: S
   const message = required(request.message);
   const account = Number(required(wallet, "Link the Lighter account again"));
   const key = /^Register Lighter Account\n\npubkey: 0x([0-9a-f]{80})\n/.exec(message)?.[1];
-  const index = Number(/\napi key index: (0x[0-9a-f]{16})\n/.exec(message)?.[1]);
-  insist(key && TAKER_API_KEYS.includes(index) && message === registrationMessage({ account, apiKey: index, publicKey: fromHex(key), nonce: Number(request.ref) }), "Unexpected Lighter key registration");
+  insist(key && TAKER_API_KEYS.some(apiKey => message === registrationMessage({ account, apiKey, publicKey: fromHex(key), nonce: Number(request.ref) })), "Unexpected Lighter key registration");
   insist(same(await lighterAccountOwner(account, signal, client.fetch), owner.address), "The Lighter key registration names another account than yours");
   await before?.({ kind: "setup", venue, step });
   return owner.signMessage({ message });

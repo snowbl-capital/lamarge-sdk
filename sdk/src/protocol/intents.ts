@@ -120,7 +120,7 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
 export function checkLighterTakeIntent(items: TakeItems, fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, account: number, now = Date.now() / 1000): void {
   const { terms, fill } = checkVenueTake(items, "lighter_transfer", fills, input, payer, recipient, now);
   insist("memo" in terms && terms.from_account_index === account && terms.amount === fill.amount_in && terms.memo === fillMemo(fill.id), "The Lighter transfer differs from the take");
-  insist(TAKER_API_KEYS.includes(terms.api_key_index), "The Lighter transfer is not sent by LaMarge's key");
+  insist(TAKER_API_KEYS.includes(terms.api_key_index), "Unexpected Lighter key");
   insist(uint(terms.usdc_fee) <= LIGHTER_MAX_TAKER_FEE, "Lighter's fee on the transfer is above 1 USDC");
 }
 /** A take paid from Aster: the taker's wallet signs a transfer of the fill's amount to the maker's

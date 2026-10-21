@@ -1,4 +1,4 @@
-import { fillMemo, LIGHTER_MAX_TAKER_FEE } from "./lighter.ts";
+import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
 import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** `replace` names a position in the current set; without it, the quote adds a price level on `receive_venue`. */
@@ -95,7 +95,7 @@ type TakeIntent = { from: string; to: string; amount_in: string; min_out: string
 export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined };
 /** What a take from `venue` signs to pay: a transfer inside Aster or Lighter, an escrow `pay_take` elsewhere. */
 export const takePaymentKind = (venue: string): string => venue === "aster" ? "aster_transfer" : venue === "lighter" ? "lighter_transfer" : "pay_take";
-type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { from_account_index: number; amount: string; usdc_fee: string; memo: string } };
+type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { api_key_index: number; from_account_index: number; amount: string; usdc_fee: string; memo: string } };
 /** Delivered inside a venue, a fill goes to the taker's own account there: its Aster address, or its Lighter index, whose owner only Lighter can confirm. Through an escrow, to none. */
 function checkDelivery(fill: TakeFill, recipient: string) {
   const to = fill.delivery_to;
@@ -120,6 +120,7 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
 export function checkLighterTakeIntent(items: TakeItems, fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, account: number, now = Date.now() / 1000): void {
   const { terms, fill } = checkVenueTake(items, "lighter_transfer", fills, input, payer, recipient, now);
   insist("memo" in terms && terms.from_account_index === account && terms.amount === fill.amount_in && terms.memo === fillMemo(fill.id), "The Lighter transfer differs from the take");
+  insist(TAKER_API_KEYS.includes(terms.api_key_index), "The Lighter transfer is not sent by LaMarge's key");
   insist(uint(terms.usdc_fee) <= LIGHTER_MAX_TAKER_FEE, "Lighter's fee on the transfer is above 1 USDC");
 }
 /** A take paid from Aster: the taker's wallet signs a transfer of the fill's amount to the maker's

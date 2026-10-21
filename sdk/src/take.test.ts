@@ -9,7 +9,7 @@ const owner = privateKeyToAccount(`0x${"44".repeat(32)}`);
 const fill = "018f8d98-f485-7f48-9630-e0b7368fe28f";
 const memo = fillMemo(fill);
 const maker = "0x00000000000000000000000000000000000000aa";
-const terms = { from_account_index: 42, to_account_index: 731033, amount: "2001300", usdc_fee: "0", memo, nonce: 7 };
+const terms = { api_key_index: 254, from_account_index: 42, to_account_index: 731033, amount: "2001300", usdc_fee: "0", memo, nonce: 7 };
 const message = transferMessage({ from: 42, apiKey: 254, to: 731033, asset: 3, fromRoute: 0, toRoute: 0, amount: 2001300n, fee: 0n,
   memo: Uint8Array.from(Buffer.from(memo, "hex")), expiredAt: 0, nonce: 7 });
 const item = { kind: "lighter_transfer", signer: owner.address, fill_id: fill, typed_data: terms };
@@ -72,6 +72,9 @@ test("a take paid from Lighter checks its one transfer against the reserved fill
   expect(() => check([item, item])).toThrow("one transfer");
   expect(() => check([item], [reserved, { ...reserved, id: "other" }])).toThrow("one transfer");
   expect(() => check([item], fills, { ...input, from: "aster" })).toThrow("take's venue");
+  // LaMarge's key in development, never another slot of the account.
+  check([{ ...item, typed_data: { ...terms, api_key_index: 253 } }]);
+  expect(() => check([{ ...item, typed_data: { ...terms, api_key_index: 4 } }])).toThrow("not sent by LaMarge's key");
   check([{ ...item, typed_data: { ...terms, usdc_fee: "1000000" } }]);
   expect(() => check([{ ...item, typed_data: { ...terms, usdc_fee: "1000001" } }])).toThrow("above 1 USDC");
 });

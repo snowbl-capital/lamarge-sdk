@@ -1,7 +1,7 @@
 import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, takePaymentKind } from "./protocol/intents.ts";
-import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, TAKER_API_KEY, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
+import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
 import { ASTER_TRANSFER_CHAIN_ID, checkAsterRequest, insist, same } from "./protocol/protocol.ts";
 import { isRecord, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
@@ -58,7 +58,7 @@ export async function signPayment(client: Client, prepared: Prepared, input: Tak
     insist(same(maker, required(take.fills[0]).maker_recipient), "The Lighter transfer pays another account than the maker's");
     insist(same(own, payer.address), "The Lighter transfer pays from another account than yours");
     const message = transferMessage({
-      from: terms.from_account_index, apiKey: TAKER_API_KEY, to: terms.to_account_index, asset: USDC_ASSET, fromRoute: COLLATERAL_ROUTE, toRoute: COLLATERAL_ROUTE,
+      from: terms.from_account_index, apiKey: terms.api_key_index, to: terms.to_account_index, asset: USDC_ASSET, fromRoute: COLLATERAL_ROUTE, toRoute: COLLATERAL_ROUTE,
       amount: BigInt(terms.amount), fee: BigInt(terms.usdc_fee), memo: fromHex(terms.memo), expiredAt: 0, nonce: terms.nonce,
     });
     await checked();

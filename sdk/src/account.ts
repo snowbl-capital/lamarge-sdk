@@ -1,7 +1,7 @@
 import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
 import { checkLinkChallenge, checkSetupKind } from "./protocol/consents.ts";
 import { requireV5Deployment } from "./protocol/deployments.ts";
-import { fromHex, lighterAccountOwner, registrationMessage, TAKER_API_KEY } from "./protocol/lighter.ts";
+import { fromHex, lighterAccountOwner, registrationMessage, TAKER_API_KEYS } from "./protocol/lighter.ts";
 import { CHAINS, checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import { signTyped, type BeforeSigning, type Signer } from "./signer.ts";
@@ -50,7 +50,8 @@ async function signStep(client: Client, step: SetupStep, venue: string, owner: S
   const message = required(request.message);
   const account = Number(required(wallet, "Link the Lighter account again"));
   const key = /^Register Lighter Account\n\npubkey: 0x([0-9a-f]{80})\n/.exec(message)?.[1];
-  insist(key && message === registrationMessage({ account, apiKey: TAKER_API_KEY, publicKey: fromHex(key), nonce: Number(request.ref) }), "Unexpected Lighter key registration");
+  const index = Number(/\napi key index: (0x[0-9a-f]{16})\n/.exec(message)?.[1]);
+  insist(key && TAKER_API_KEYS.includes(index) && message === registrationMessage({ account, apiKey: index, publicKey: fromHex(key), nonce: Number(request.ref) }), "Unexpected Lighter key registration");
   insist(same(await lighterAccountOwner(account, signal, client.fetch), owner.address), "The Lighter key registration names another account than yours");
   await before?.({ kind: "setup", venue, step });
   return owner.signMessage({ message });

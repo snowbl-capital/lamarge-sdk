@@ -1824,8 +1824,13 @@ export interface components {
             fill_id: string;
             typed_data: components["schemas"]["LighterTransferTerms"];
         };
-        /** @description The internal transfer LaMarge sends from your Lighter account once the maker is locked, signed by its key at index 254 and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
+        /** @description The internal transfer LaMarge sends from your Lighter account once the maker is locked, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
         LighterTransferTerms: {
+            /**
+             * @description The index of LaMarge's key on your account, 254 in production and 253 in development.
+             * @enum {integer}
+             */
+            api_key_index: 254 | 253;
             /** @description The taker's linked Lighter account. */
             from_account_index: number;
             /** @description The maker's linked Lighter account. */

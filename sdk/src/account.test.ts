@@ -42,7 +42,7 @@ function approval() {
 }
 
 /** One venue's steps as the server answers them, and every request and signature the setup made. */
-function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: number) => Step | { status: number; code: string; message: string }, lighterOwner: string = owner) {
+function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: number) => Step | { status: number; code: string; message: string }, lighterOwner: string = owner, apiKey = TAKER_API_KEY) {
   const calls: string[] = [], typed: { chainId: number; msg: unknown }[] = [], messages: string[] = [];
   let attempts = 0;
   const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -59,7 +59,7 @@ function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: num
       calls.push(`prepare ${id}`);
       if (step.status !== "required") return Response.json(step);
       const to_sign = id === "agent" ? approval()
-        : { kind: "lighter_api_key", signer: owner, ref: "3", message: registrationMessage({ account: 42, apiKey: TAKER_API_KEY, publicKey: new Uint8Array(40).fill(171), nonce: 3 }) };
+        : { kind: "lighter_api_key", signer: owner, ref: "3", message: registrationMessage({ account: 42, apiKey, publicKey: new Uint8Array(40).fill(171), nonce: 3 }) };
       return Response.json({ ...step, to_sign });
     }
     calls.push(`submit ${id}`);
@@ -115,6 +115,14 @@ test("Lighter's key is registered by the owner's signature of Lighter's own mess
   expect((await flow.run()).ready).toBe(true);
   expect(flow.messages).toHaveLength(1);
   expect(flow.messages[0]?.startsWith("Register Lighter Account")).toBe(true);
+});
+
+test("Lighter's key is registered at LaMarge's development index, never at another slot of the account", async () => {
+  const done = (step: Step) => ({ ...step, status: "done" });
+  expect((await fixture("lighter", [status("api_key")], done, owner, 253).run()).ready).toBe(true);
+  const other = fixture("lighter", [status("api_key")], done, owner, 4);
+  await expect(other.run()).rejects.toThrow("Unexpected Lighter key registration");
+  expect(other.messages).toEqual([]);
 });
 
 test("a Lighter account that Lighter says is someone else's gets no key registration", async () => {

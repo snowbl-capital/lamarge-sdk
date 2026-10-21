@@ -30,7 +30,7 @@ const fill = (overrides: Record<string, unknown>) => ({ order_id: id, sequence: 
   delivery_hash: null, ...overrides });
 const lighterTake = (out = "10000000") => ({ take: { id: "take-first", fills: [fill({ id: firstFill, take_id: "take-first", from_venue: "lighter", to_venue: "hyperliquid", amount_in: "10006500",
   amount_out: out, pay_by: iso(40) })] }, to_sign: [{ kind: "lighter_transfer", signer: owner, fill_id: firstFill,
-  typed_data: { from_account_index: 42, to_account_index: 731033, amount: "10006500", usdc_fee: "0", memo: fillMemo(firstFill), nonce: 7 } }] });
+  typed_data: { api_key_index: 254, from_account_index: 42, to_account_index: 731033, amount: "10006500", usdc_fee: "0", memo: fillMemo(firstFill), nonce: 7 } }] });
 const typed = (primaryType: string, message: Record<string, unknown>) => ({ types: { EIP712Domain, ...schemas[primaryType] }, primaryType,
   domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW }, message });
 /** The second take, its `pay_by` `payIn` seconds ahead: a route's is longer than any other take's. */

@@ -55,9 +55,12 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
     const levels = kept.filter(q => q.venue === asked.receive_venue);
     const before = levels.reduce((sum, q) => sum + uint(q.supply), 0n);
     const after = levels.filter(q => q.index !== asked.replace?.index).reduce((sum, q) => sum + uint(q.supply), amount);
-    const covered = before > available ? before : available, spare = existing - available;
-    insist(added === (after > covered ? after - covered : 0n) && deposit === (added > spare ? added - spare : 0n));
-  } else insist(added === amount && idle === 0n);
+    const covered = before > available ? before : available;
+    insist(added === (after > covered ? after - covered : 0n));
+  } else insist(added === amount);
+  // The available balance pays first; the source deposits the rest.
+  const spare = existing - available;
+  insist(deposit === (added > spare ? added - spare : 0n));
   const quotes: QuoteIntent[] = kept.filter(q => q.index !== asked?.replace?.index).map(({ index: _, ...q }) => q);
   if (asked) quotes.push({ venue: asked.receive_venue, recipient: required(authority.recipient), supply: input.amount, receive: asked.receive, min_fill: asked.min_fill });
   // The server's stable order: by venue, a venue's levels as they were, a new one last.

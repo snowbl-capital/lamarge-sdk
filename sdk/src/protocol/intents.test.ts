@@ -19,6 +19,13 @@ test("financial provisioning permits only the requested authority, domain, capit
   expect(()=>validate([funding(),funding()])).toThrow();
   expect(()=>validate([])).toThrow();
 });
+test("a deposit takes the available balance first and only the rest from its source",()=>{
+  const fund=funding();fund.typed_data.message.deposit="6000000";
+  const idle=(patch:Partial<PreparedMaker["funding"]>)=>({...preparation([fund]),funding:{existing_available:"4000000",added_amount:input.amount,idle_amount:"4000000",wallet_amount:"6000000",venue_amount:"0",...patch}});
+  expect(()=>validate([fund],idle({}))).not.toThrow();
+  expect(()=>validate([fund],idle({existing_available:"3000000"}))).toThrow();
+  expect(()=>validate([fund],idle({idle_amount:"0",wallet_amount:input.amount}))).toThrow();
+});
 test("only the unlimited permit for the pinned escrow is signed",()=>{
   const permit:SignItem={kind:"permit",signer:owner,typed_data:typed("Permit",{owner,spender:ESCROW,value:UNLIMITED_ALLOWANCE.toString(),nonce:"0",deadline:now+600})};
   permit.typed_data.domain={name:"USDC",version:"2",chainId:999,verifyingContract:required(CHAINS.hyperliquid).token};

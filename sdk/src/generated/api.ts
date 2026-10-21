@@ -1899,7 +1899,7 @@ export interface components {
             client_request_id: components["schemas"]["ClientId"];
             /** @description Default the browser identity; an API identity needs an active credential. */
             quote_identity_id?: components["schemas"]["Uuid"];
-            /** @description `supply` with `quote`, else a deposit. A pool's first funding is at least 5 tokens. */
+            /** @description `supply` with `quote`, else capital to add. A pool's first funding is at least 5 tokens. */
             amount: components["schemas"]["Amount"];
             /**
              * @deprecated
@@ -5418,7 +5418,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue; on Aster, until both Spot histories show this id as a USDT transfer from the maker to `delivery_to`) or `not_final` (Lighter, below the required status). */
+            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue; on Aster, until both Spot histories show this id as a USDT transfer from the maker to `delivery_to`), `awaiting_review` (Aster, the id in neither history and parts under the next ids that would deliver the fill, or ids an open review of another fill holds: an admin confirms them, SETTLEMENT.md VEN-20) or `not_final` (Lighter, below the required status). */
             425: {
                 headers: {
                     [name: string]: unknown;

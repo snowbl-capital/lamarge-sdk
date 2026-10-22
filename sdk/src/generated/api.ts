@@ -1699,7 +1699,7 @@ export interface components {
             venue_wallet: string | null;
             /** @description Null before the first read. */
             equity: string | null;
-            /** @description What can leave the venue margin. */
+            /** @description What can leave the venue margin, less transfers relayed since `read_at` and, at Lighter and Aster, payments and deliveries made since then. */
             withdrawable: string | null;
             /** @description Estimated venue withdrawal fee; 0 when none, null when unavailable. Rechecked at preparation. */
             withdrawal_fee: string | null;
@@ -1711,9 +1711,9 @@ export interface components {
             has_account: boolean;
             /** @description Venue token outside the margin, where the venue has one ([venues](/how-it-works#venues-and-balances)). */
             wallet: string | null;
-            /** @description Token balance of the linked address on the escrow chain. */
+            /** @description Token balance of the linked address on the escrow chain, less what a payment locked since `chain_read_at` took beyond `escrow_balance`. */
             chain_balance: string | null;
-            /** @description The available balance (order ID zero), which takes pay from. Read with `chain_balance`. */
+            /** @description The available balance (order ID zero), which takes pay from first, less payments locked since `chain_read_at`. Read with `chain_balance`. */
             escrow_balance: string | null;
             /** @description Waiting at `deposit_address` to be swept into the available balance ([balances](/how-it-works#balances)). Read with `chain_balance`. */
             deposit_balance: string | null;
@@ -2118,6 +2118,13 @@ export interface components {
             withdrawal: components["schemas"]["Withdrawal"] | null;
             /** @description Returned on creation and with `funding_plan=true` while the transfer has no take and is not cancelled: before a withdrawal, or once a relayed withdrawal's funds at the wallet plus the available balance cover `amount_in`. Null otherwise, when paying from Lighter or Aster, or when it cannot be computed. */
             funding_plan: components["schemas"]["FundingPlan"] | null;
+            /** @description Why `funding_plan` could not be computed when it was asked for, such as `VALIDATION_ERROR` for a withdrawable balance short of the amount, or `VENUE_UNAVAILABLE` while a chain does not answer. Null otherwise. */
+            funding_plan_error: {
+                /** @description The [error](/api-reference/overview#errors) code. */
+                code: string;
+                /** @description Human-readable, such as the balance missing; do not parse. */
+                message: string;
+            } | null;
             take_id: components["schemas"]["Uuid"] | null;
             /** @description True once all its take's fills are final; null without a take. */
             take_final: boolean | null;
@@ -5423,7 +5430,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue; on Aster, until both Spot histories show this id as a USDT transfer from the maker to `delivery_to`), `awaiting_review` (Aster, the id in neither history and parts under the next ids that would deliver the fill, or ids an open review of another fill holds: an admin confirms them, SETTLEMENT.md VEN-20) or `not_final` (Lighter, below the required status). */
+            /** @description `DELIVERY_PENDING`: report the same hash after `Retry-After` (1 s). `reason`: `unknown_transaction` (unknown to the venue; on Aster, until both Spot histories show this id as a USDT transfer from the maker to `delivery_to`) or `not_final` (Lighter, below the required status). */
             425: {
                 headers: {
                     [name: string]: unknown;

@@ -1,4 +1,4 @@
-import { checkPreparedQuote, decimalsOf, insist, same, VENUE_SETTLED, type PreparedQuote, type QuoteIntent, type SignItem } from "./protocol.ts";
+import { checkPreparedQuote, decimalsOf, differs, insist, same, VENUE_SETTLED, type PreparedQuote, type QuoteIntent, type SignItem } from "./protocol.ts";
 import { required, type Verified } from "./validation.ts";
 
 /** A venue's prices in USDC per unit of its token, the stock its pool offers there and its smallest fill, in base units (one token when unset). */
@@ -67,7 +67,9 @@ function parsed(lines: readonly PriceLine[]): Map<string, Line> {
 export function checkPreparedLines(prepared: PreparedLines, input: { lines: readonly PriceLine[]; validUntil: number; expectedRevision: string },
   authority: { identity: string; quoteSigner: string; pools: readonly LinePool[]; recipients: Readonly<Record<string, string>> }): asserts prepared is PreparedLines & { drafts: (PreparedLineDraft & { to_sign: Verified<SignItem[]> })[] } {
   const asked = parsed(input.lines), echoed = parsed(prepared.lines);
-  insist(prepared.quote_identity_id === authority.identity && prepared.expected_revision === input.expectedRevision && prepared.valid_until === input.validUntil);
+  insist(prepared.quote_identity_id === authority.identity, differs("quote_identity_id"));
+  insist(prepared.expected_revision === input.expectedRevision, differs("expected_revision"));
+  insist(prepared.valid_until === input.validUntil, differs("valid_until"));
   insist(asked.size === echoed.size && [...asked].every(([venue, line]) => {
     const other = echoed.get(venue);
     return other !== undefined && other.buy === line.buy && other.sell === line.sell && other.stock === line.stock && other.minFill === line.minFill;
@@ -79,8 +81,10 @@ export function checkPreparedLines(prepared: PreparedLines, input: { lines: read
     const pool = required(stocked.find(pool => same(pool.id, draft.order_id)), "A draft names another pool");
     const line = required(asked.get(pool.venue));
     const sell = required(line.sell), minFill = line.minFill ?? 10n ** BigInt(decimalsOf(pool.venue));
-    insist(draft.venue === pool.venue && pool.state === "live" && same(pool.quote_signer, authority.quoteSigner));
-    insist(draft.quotes.length > 0 && new Set(draft.quotes.map(quote => quote.venue)).size === draft.quotes.length);
+    insist(draft.venue === pool.venue, differs("drafts.venue"));
+    insist(pool.state === "live", "The pool is not live");
+    insist(same(pool.quote_signer, authority.quoteSigner), "The pool has another quote signer");
+    insist(draft.quotes.length > 0 && new Set(draft.quotes.map(quote => quote.venue)).size === draft.quotes.length, differs("drafts.quotes"));
     const quotes: QuoteIntent[] = draft.quotes.map(quote => {
       const buy = asked.get(quote.venue)?.buy;
       insist(buy !== undefined && buy !== null && directPair(quote.venue, pool.venue), "A quote receives where you do not buy");

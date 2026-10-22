@@ -41,7 +41,8 @@ export const MAKER_TIMEOUT_SECONDS = 3600;
 export const UNLIMITED_ALLOWANCE = (1n << 256n) - 1n;
 /** Year-9999 admission sentinel for browser orders with no expiry. */
 export const NEVER_VALID_UNTIL = 253_402_214_400;
-export const TAKER_TIMEOUT_SECONDS = 7200;
+/** The latest a take's payment refunds, `T2`: the escrow's `MAX_LOCK_DURATION`, whatever shorter `FILL_TAKER_TIMEOUT` the server runs. */
+export const TAKER_TIMEOUT_SECONDS = 86_400;
 export type Typed = { types: Record<string, { name: string; type: string }[]>; primaryType: string; domain: { name: string; version?: string; chainId: number; verifyingContract: string }; message: Record<string, unknown> };
 export type SignItem = { kind: string; signer: string; typed_data: Typed; fill_id?: string | undefined };
 export function convert(types: Typed["types"], kind: string, value: unknown): unknown {
@@ -74,7 +75,10 @@ export function convert(types: Typed["types"], kind: string, value: unknown): un
   return result;
 }
 export const same = (a: unknown, b: unknown) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
-export function insist(ok: unknown, message = "The signing request differs from your instructions"): asserts ok { if (!ok) throw new Error(message); }
+const DIFFERS = "The signing request differs from your instructions";
+export function insist(ok: unknown, message = DIFFERS): asserts ok { if (!ok) throw new Error(message); }
+/** The message naming the `field` of a signing request that differs from what was asked. */
+export const differs = (field: string) => `${DIFFERS}: ${field}`;
 export const uint = (value: unknown): bigint => { insist(typeof value === "string" && /^\d+$/.test(value) || typeof value === "number" && Number.isSafeInteger(value) && value >= 0, "Invalid signing integer"); return BigInt(value); };
 const fields = (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
 export const EIP712Domain = fields("name:string,version:string,chainId:uint256,verifyingContract:address");
@@ -129,7 +133,8 @@ export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: Dep
 function checkEscrowTypedAt(typed: Typed, venue: string, escrow: string): void {
   checkTypes(typed);
   const chain = CHAINS[venue];
-  insist(chain && !["Withdraw", "HyperliquidTransaction:SendAsset", "Action", "Message"].includes(typed.primaryType));
+  insist(chain, differs("venue"));
+  insist(!["Withdraw", "HyperliquidTransaction:SendAsset", "Action", "Message"].includes(typed.primaryType), differs("primaryType"));
   const permit = typed.primaryType === "Permit";
   if (permit) insist(chain.permit !== undefined && chain.version !== undefined, "The token has no permit");
   insist(typed.domain.chainId === chain.id && same(typed.domain.verifyingContract, permit ? chain.token : escrow) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
@@ -181,21 +186,43 @@ export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(
 export function checkWithdrawal(typed: Typed, venue: string, signer: string, destination: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<Typed> {
   checkTypes(typed);
   const m = typed.message, d = typed.domain;
-  insist(amount > 0n);
+  insist(amount > 0n, differs("amount"));
   if (venue === "hyperliquid") {
-    insist(typed.primaryType === "HyperliquidTransaction:SendAsset" && d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, "0x0000000000000000000000000000000000000000"));
-    insist(same(destination, signer) && m.hyperliquidChain === "Mainnet" && same(m.destination, "0x2000000000000000000000000000000000000000") && ["", "spot"].includes(String(m.sourceDex)) && m.destinationDex === "spot" && m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054" && m.fromSubAccount === "" && decimalUnits(m.amount, decimalsOf(venue)) === amount);
+    insist(typed.primaryType === "HyperliquidTransaction:SendAsset", differs("primaryType"));
+    insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, "0x0000000000000000000000000000000000000000"), differs("domain"));
+    insist(same(destination, signer), differs("destination"));
+    insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
+    insist(same(m.destination, "0x2000000000000000000000000000000000000000"), differs("destination"));
+    insist(["", "spot"].includes(String(m.sourceDex)), differs("sourceDex"));
+    insist(m.destinationDex === "spot", differs("destinationDex"));
+    insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
+    insist(m.fromSubAccount === "", differs("fromSubAccount"));
+    insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
     insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale withdrawal nonce");
   } else if (venue === "aster") {
     // Aster takes the fee out of the signed amount: `amount` is what arrives on BSC.
-    insist(typed.primaryType === "Action" && d.name === "Aster" && d.version === "1" && d.chainId === ASTER_CHAIN_ID && same(d.verifyingContract, ZERO_ADDRESS));
+    insist(typed.primaryType === "Action", differs("primaryType"));
+    insist(d.name === "Aster" && d.version === "1" && d.chainId === ASTER_CHAIN_ID && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
     const decimals = decimalsOf(venue);
     const fee = decimalUnits(m.fee, decimals);
-    insist(same(destination, signer) && m.type === "Withdraw" && same(m.destination, signer) && m["destination Chain"] === "BSC" && m.token === "USDT" && m["aster chain"] === "Mainnet" && fee <= ASTER_MAX_FEE && decimalUnits(m.amount, decimals) === amount + fee);
+    insist(same(destination, signer) && same(m.destination, signer), differs("destination"));
+    insist(m.type === "Withdraw", differs("type"));
+    insist(m["destination Chain"] === "BSC", differs("destination Chain"));
+    insist(m.token === "USDT", differs("token"));
+    insist(m["aster chain"] === "Mainnet", differs("aster chain"));
+    insist(fee <= ASTER_MAX_FEE, differs("fee"));
+    insist(decimalUnits(m.amount, decimals) === amount + fee, differs("amount"));
     insist(Math.abs(Number(uint(m.nonce)) / 1_000_000 - now) <= 60, "Stale withdrawal nonce");
   } else {
-    insist(venue === "polymarket" && typed.primaryType === "Withdraw" && d.name === "Polymarket" && d.version === "1" && d.chainId === 137 && same(d.verifyingContract, "0xdca4af75705dbb50f62437045aff9921947917d2"));
-    insist(same(m.account, signer) && same(m.token, required(CHAINS.polymarket).token) && same(m.to, destination) && uint(m.amount) === amount && uint(m.fee) === 0n && uint(m.salt) <= 0xffffffffffffffffn);
+    insist(venue === "polymarket", differs("venue"));
+    insist(typed.primaryType === "Withdraw", differs("primaryType"));
+    insist(d.name === "Polymarket" && d.version === "1" && d.chainId === 137 && same(d.verifyingContract, "0xdca4af75705dbb50f62437045aff9921947917d2"), differs("domain"));
+    insist(same(m.account, signer), differs("account"));
+    insist(same(m.token, required(CHAINS.polymarket).token), differs("token"));
+    insist(same(m.to, destination), differs("to"));
+    insist(uint(m.amount) === amount, differs("amount"));
+    insist(uint(m.fee) === 0n, differs("fee"));
+    insist(uint(m.salt) <= 0xffffffffffffffffn, differs("salt"));
     insist(Math.abs(Number(uint(m.ts)) - now) <= 60, "Stale withdrawal timestamp");
   }
 }
@@ -297,12 +324,20 @@ export type PreparedQuote = { draft_id: string; sequence: number; valid_until: n
 /** The published draft metadata and signed quote must both match the requested terms. */
 export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & { last_sequence: number }, requested: QuoteIntent | QuoteIntent[], validUntil: number, size: string): asserts prepared is PreparedQuote & { to_sign: Verified<SignItem[]> } {
   const quotes = Array.isArray(requested) ? requested : [requested];
-  insist(quotes.length > 0);
-  insist(prepared.valid_until === validUntil && prepared.quote_size === size && prepared.expires_at === validUntil + MAKER_TIMEOUT_SECONDS + 1);
-  insist(Number.isSafeInteger(prepared.sequence) && prepared.sequence > order.last_sequence && prepared.to_sign.length === 1 && prepared.quotes.length === quotes.length);
+  insist(quotes.length > 0, differs("quotes"));
+  insist(prepared.valid_until === validUntil, differs("valid_until"));
+  insist(prepared.quote_size === size, differs("quote_size"));
+  insist(prepared.expires_at === validUntil + MAKER_TIMEOUT_SECONDS + 1, differs("expires_at"));
+  insist(Number.isSafeInteger(prepared.sequence) && prepared.sequence > order.last_sequence, differs("sequence"));
+  insist(prepared.to_sign.length === 1, differs("to_sign"));
+  insist(prepared.quotes.length === quotes.length, differs("quotes"));
   quotes.forEach((quote, index) => {
     const received = required(prepared.quotes[index]);
-    insist(received.venue === quote.venue && same(received.recipient, quote.recipient) && received.supply === quote.supply && received.receive === quote.receive && received.min_fill === quote.min_fill);
+    insist(received.venue === quote.venue, differs(`quotes[${index}].venue`));
+    insist(same(received.recipient, quote.recipient), differs(`quotes[${index}].recipient`));
+    insist(received.supply === quote.supply, differs(`quotes[${index}].supply`));
+    insist(received.receive === quote.receive, differs(`quotes[${index}].receive`));
+    insist(received.min_fill === quote.min_fill, differs(`quotes[${index}].min_fill`));
   });
   checkSignedQuote(required(prepared.to_sign[0]), order, quotes, prepared.sequence, prepared.expires_at);
 }
@@ -313,21 +348,38 @@ export function checkSignedQuote(item: SignItem, order: QuoteOrder, asked: Quote
   checkEscrowTyped(item.typed_data, order.venue);
   const m = item.typed_data.message;
   const quotes = array(m.quotes).map(record);
-  insist(item.kind === "quote_set" && item.typed_data.primaryType === "QuoteSet" && same(item.signer, order.quote_signer) && same(m.owner, order.owner_address) && same(m.offerId, order.id) && uint(m.sequence) === BigInt(sequence) && uint(m.expiresAt) === BigInt(expires));
-  insist(requested.length > 0 && quotes.length === requested.length);
+  insist(item.kind === "quote_set", differs("kind"));
+  insist(item.typed_data.primaryType === "QuoteSet", differs("primaryType"));
+  insist(same(item.signer, order.quote_signer), differs("signer"));
+  insist(same(m.owner, order.owner_address), differs("owner"));
+  insist(same(m.offerId, order.id), differs("offerId"));
+  insist(uint(m.sequence) === BigInt(sequence), differs("sequence"));
+  insist(uint(m.expiresAt) === BigInt(expires), differs("expiresAt"));
+  insist(requested.length > 0 && quotes.length === requested.length, differs("quotes"));
   for (const [index, expected] of requested.entries()) {
     const q = required(quotes[index]), chain = CHAINS[expected.venue];
-    insist(chain && q.venue === expected.venue && Object.keys(q).length === quote.length && expected.venue !== order.venue && uint(q.chainId) === BigInt(chain.id) && same(q.token, chain.token) && same(q.recipient, expected.recipient) && uint(q.supply) === BigInt(expected.supply) && uint(q.receive) === BigInt(expected.receive) && uint(q.minFill) === BigInt(expected.min_fill));
-    insist(uint(q.supply) > 0n && uint(q.receive) > 0n && uint(q.minFill) <= uint(q.supply));
+    const field = (name: string) => differs(`quotes[${index}].${name}`);
+    insist(chain && q.venue === expected.venue && expected.venue !== order.venue, field("venue"));
+    insist(Object.keys(q).length === quote.length, field("fields"));
+    insist(uint(q.chainId) === BigInt(chain.id), field("chainId"));
+    insist(same(q.token, chain.token), field("token"));
+    insist(same(q.recipient, expected.recipient), field("recipient"));
+    insist(uint(q.supply) === BigInt(expected.supply) && uint(q.supply) > 0n, field("supply"));
+    insist(uint(q.receive) === BigInt(expected.receive) && uint(q.receive) > 0n, field("receive"));
+    insist(uint(q.minFill) === BigInt(expected.min_fill) && uint(q.minFill) <= uint(q.supply), field("minFill"));
   }
 }
 export function checkCloseOrders(items: SignItem[], ids: string[], master: string): asserts items is Verified<SignItem[]> {
-  insist(items.length === 1);
+  insist(items.length === 1, differs("to_sign"));
   const item = required(items[0]), m = item.typed_data.message;
   // CloseOrders is an off-chain operator authorization in the HyperEVM domain.
   checkEscrowTyped(item.typed_data, "hyperliquid");
   const orders = array(m.orders);
-  insist(item.kind === "close_orders" && item.typed_data.primaryType === "CloseOrders" && same(item.signer, master) && same(m.account, master) && orders.length > 0 && new Set(orders).size === orders.length && orders.every(id => ids.some(asked => same(id, asked))));
+  insist(item.kind === "close_orders", differs("kind"));
+  insist(item.typed_data.primaryType === "CloseOrders", differs("primaryType"));
+  insist(same(item.signer, master), differs("signer"));
+  insist(same(m.account, master), differs("account"));
+  insist(orders.length > 0 && new Set(orders).size === orders.length && orders.every(id => ids.some(asked => same(id, asked))), differs("orders"));
   checkDeadline(m.deadline, 3600);
 }
 /** SIWE intent pinned to `origin`, tolerating two minutes of local clock skew. */

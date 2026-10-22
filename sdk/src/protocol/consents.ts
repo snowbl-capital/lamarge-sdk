@@ -28,8 +28,9 @@ type FundingPlan = {
 };
 
 /** What a transfer from wallet funds will ask its payer to sign: at most a permit, a margin withdrawal and the payment, on the pinned escrow chain, for this amount. */
-export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; funding_plan: P | null }, now = Date.now()): P {
-  const plan = required(intent.funding_plan, "Funding details unavailable; try again shortly");
+export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; funding_plan: P | null; funding_plan_error?: { message: string } | null }, now = Date.now()): P {
+  // The server says why it has no plan, such as a balance short of the amount.
+  const plan = required(intent.funding_plan, intent.funding_plan_error?.message ?? "Funding details unavailable; try again shortly");
   const chain = required(CHAINS[intent.from], "Unknown funding venue");
   requireV5Deployment(chain.id, chain.escrow);
   insist(plan.venue === intent.from && same(plan.owner, intent.payer) && plan.amount === intent.amount_in

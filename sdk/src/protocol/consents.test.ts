@@ -41,6 +41,12 @@ test("a funding plan lists the permit first, only when a wallet deposit needs it
   ]) expect(() => checkFundingPlan(intent(plan))).toThrow("Funding requests differ");
 });
 
+test("a missing funding plan throws the server's reason when it gives one", () => {
+  const intent = { from: "polymarket", payer: master, amount_in: "10000000", funding_plan: null };
+  expect(() => checkFundingPlan(intent)).toThrow("Funding details unavailable");
+  expect(() => checkFundingPlan({ ...intent, funding_plan_error: { message: "Insufficient withdrawable balance on Polymarket Perps" } })).toThrow("Insufficient withdrawable balance on Polymarket Perps");
+});
+
 const owner = "0x84026d3beff123aab7dff957574d1362d6f880a5";
 const chain = { id: 999, escrow: ESCROW, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6 };
 const order = {

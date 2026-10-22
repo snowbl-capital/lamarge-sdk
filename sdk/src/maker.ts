@@ -43,7 +43,7 @@ export class Maker {
   }
   async createCredential(name: string, quoteSigner: string, days = 30): Promise<Credential> {
     const credential = await this.client.call("postV1Credentials", { body: { name, quote_signer: quoteSigner, scopes: ["read", "quote", "cancel"], expires_at: Math.floor(Date.now() / 1000) + days * 86_400 } });
-    insist(same(credential.quote_signer, quoteSigner) && credential.scopes.join(",") === "read,quote,cancel");
+    insist(same(credential.quote_signer, quoteSigner) && credential.scopes.join(",") === "read,quote,cancel", "The credential differs from the one asked");
     return credential;
   }
   /**
@@ -164,8 +164,11 @@ export class Quoter {
   }
   /** Deprecated: publish price lines. Prepares `order`'s quote set and checks it; signing is the caller's, as for a contract delegate. */
   async prepareUnsigned(order: Order, quotes: QuoteIntent[], size: bigint, validUntil: number) {
-    insist(order.quote_identity_id === this.identity && same(order.quote_signer, this.account.address) && order.state === "live" && size > 0n && size <= BigInt(order.available_to_quote));
-    insist(quotes.length > 0);
+    insist(order.quote_identity_id === this.identity && same(order.quote_signer, this.account.address), "The order is quoted by another identity");
+    insist(order.state === "live", "The order is not live");
+    insist(size > 0n, "The quote size must be positive");
+    insist(size <= BigInt(order.available_to_quote), "The quote size exceeds the order's available capital");
+    insist(quotes.length > 0, "Provide at least one quote");
     const asks = quotes.map(({ recipient: _, ...ask }) => ask);
     const prepared = await this.timed(() => this.client.call("prepareQuotes", { path: { id: order.id }, body: { valid_until: validUntil, quote_size: String(size), quotes: asks } }));
     checkPreparedQuote(prepared, order, quotes, validUntil, String(size));
@@ -181,7 +184,7 @@ export class Quoter {
   }
   /** Deprecated: publish price lines; updates drop the identity's lines. All distinct order updates and cancels commit atomically; a cancel is never replayed, as it would void the sequence that follows. */
   batch(updates: { order_id: string; draft_id: string; signature: string }[], cancels: string[] = []) {
-    insist(updates.length + cancels.length > 0 && updates.length + cancels.length <= 50);
+    insist(updates.length + cancels.length > 0 && updates.length + cancels.length <= 50, "A batch holds 1 to 50 updates and cancels");
     return this.timed(() => this.client.call("postV1QuotesBatch", { body: { updates, cancels }, retry: cancels.length === 0 }));
   }
   /** The identity's fills, current and the last final ones. */

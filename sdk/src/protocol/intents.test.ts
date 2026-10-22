@@ -13,7 +13,7 @@ const validate=(items:SignItem[],returned=preparation(items))=>checkMakerIntent(
 test("financial provisioning permits only the requested authority, domain, capital and request id",()=>{
   expect(()=>validate([funding()])).not.toThrow();
   const differs="The signing request differs from your instructions";
-  const mutations:[(item:SignItem)=>void,string][]=[[i=>i.typed_data.message.operator=owner,differs],[i=>i.typed_data.message.quoteSigner=operator,differs],[i=>i.typed_data.message.amount="10000001",differs],[i=>i.typed_data.domain.verifyingContract=owner,"Unexpected signing domain"],[i=>i.typed_data.domain.chainId=137,"Unexpected signing domain"],[i=>i.typed_data.types.FundOffer=required(i.typed_data.types.FundOffer).map(f=>f.name==="amount"?{...f,type:"uint64"}:f),"Unexpected signing types"],[i=>i.typed_data.message.deadline=now+7200,"Signing deadline is expired or too long"],[i=>i.signer=operator,differs]];
+  const mutations:[(item:SignItem)=>void,string][]=[[i=>i.typed_data.message.operator=owner,`${differs}: fund.operator`],[i=>i.typed_data.message.quoteSigner=operator,`${differs}: fund.quoteSigner`],[i=>i.typed_data.message.amount="10000001",`${differs}: fund.amount`],[i=>i.typed_data.domain.verifyingContract=owner,"Unexpected signing domain"],[i=>i.typed_data.domain.chainId=137,"Unexpected signing domain"],[i=>i.typed_data.types.FundOffer=required(i.typed_data.types.FundOffer).map(f=>f.name==="amount"?{...f,type:"uint64"}:f),"Unexpected signing types"],[i=>i.typed_data.message.deadline=now+7200,"Signing deadline is expired or too long"],[i=>i.signer=operator,differs]];
   for(const [mutate,reason] of mutations) {const item=funding();item.typed_data=structuredClone(item.typed_data);mutate(item);expect(()=>validate([item])).toThrow(reason);}
   expect(()=>validate([funding()],{...preparation([funding()]),client_request_id:"another-request"})).toThrow();
   expect(()=>validate([funding(),funding()])).toThrow();
@@ -93,8 +93,10 @@ test("take signing respects the caller's limit on parts", () => {
 });
 
 test("one take signature binds both amounts, destination, quote and payment of every fill before signing",()=>{
- const mutations:((p:Record<string,unknown>)=>void)[]=[p=>p.amountOut="1000001",p=>p.amount="1",p=>p.receiveRecipient=receiver,p=>p.receiveChainId=999,p=>p.receiveToken=owner,p=>p.receiveEscrow=owner,p=>p.hashlock=id,p=>p.recipient=operator,p=>p.refundAt=now+86400,p=>p.orderId=fill.hashlock,p=>p.sequence=2,p=>p.swapId=fill.hashlock,p=>p.deadline=now+60,p=>p.payer=receiver,p=>p.dex=1];
- for(const mutate of mutations){const item=payTake();mutate(paymentOf(item));expect(()=>checkTakeIntent([item],[fill],take,owner,owner,now)).toThrow("The signing request differs from your instructions");}
+ const mutations:[(p:Record<string,unknown>)=>void,string][]=[[p=>p.amountOut="1000001","amountOut"],[p=>p.amount="1","amount"],[p=>p.receiveRecipient=receiver,"receiveRecipient"],[p=>p.receiveChainId=999,"receive"],[p=>p.receiveToken=owner,"receive"],[p=>p.receiveEscrow=owner,"receive"],[p=>p.hashlock=id,"hashlock"],[p=>p.recipient=operator,"recipient"],[p=>p.refundAt=now+86400,"refundAt"],[p=>p.orderId=fill.hashlock,"orderId"],[p=>p.sequence=2,"sequence"],[p=>p.swapId=fill.hashlock,"swapId"],[p=>p.deadline=now+60,"deadline"],[p=>p.payer=receiver,"payer"],[p=>p.dex=1,"dex"]];
+ for(const [mutate,field] of mutations){const item=payTake();mutate(paymentOf(item));expect(()=>checkTakeIntent([item],[fill],take,owner,owner,now)).toThrow(new RegExp(`: payments\\.${field}$`));}
+ const day={...fill,t2:new Date((now+86100)*1000).toISOString()};const dayLock={...lock(),refundAt:now+86100};expect(()=>checkTakeIntent([payTake([dayLock])],[day],take,owner,owner,now)).not.toThrow();
+ const later={...fill,t2:new Date((now+86400+60)*1000).toISOString()};expect(()=>checkTakeIntent([payTake()],[later],take,owner,owner,now)).toThrow("The signing request differs from your instructions: fills.t2");
  const signer=payTake();signer.signer=receiver;expect(()=>checkTakeIntent([signer],[fill],take,owner,owner,now)).toThrow();
  const types=payTake();types.typed_data.types.LockPayment=required(types.typed_data.types.LockPayment).filter(f=>f.name!=="receiveRecipient");expect(()=>checkTakeIntent([types],[fill],take,owner,owner,now)).toThrow();
 });

@@ -1,6 +1,6 @@
 import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** `replace` names a position in the current set; without it, the quote adds a price level on `receive_venue`. */
 export type MakerQuoteIntent = { receive_venue: string; receive: string; min_fill: string; quote_validity_seconds?: number | null | undefined; replace?: { sequence: number; index: number } | undefined };
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
@@ -23,28 +23,46 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
   const { owner, quoteSigner, quoteIdentityId, operator, existingOrder } = authority;
   const { order, funding, intent, to_sign: items } = prepared;
   insist(/^0x[0-9a-fA-F]{40}$/.test(operator), "The deployment operator has not been configured");
-  insist(prepared.state === "preparing" && prepared.id.length > 0 && prepared.client_request_id === input.client_request_id && input.client_request_id.length > 0 && prepared.venue === input.venue);
-  insist(order.venue === input.venue && same(order.owner_address, owner) && same(order.quote_signer, quoteSigner) && order.quote_identity_id === quoteIdentityId && (!input.quote_identity_id || input.quote_identity_id === quoteIdentityId));
-  insist(intent.amount === input.amount && intent.quote_identity_id === quoteIdentityId && intent.funding_source === input.funding_source && prepared.expected_revision === order.revision);
+  insist(prepared.state === "preparing" && prepared.id.length > 0, differs("state"));
+  insist(prepared.client_request_id === input.client_request_id && input.client_request_id.length > 0, differs("client_request_id"));
+  insist(prepared.venue === input.venue && order.venue === input.venue, differs("venue"));
+  insist(same(order.owner_address, owner), differs("order.owner_address"));
+  insist(same(order.quote_signer, quoteSigner), differs("order.quote_signer"));
+  insist(order.quote_identity_id === quoteIdentityId && (!input.quote_identity_id || input.quote_identity_id === quoteIdentityId), differs("order.quote_identity_id"));
+  insist(intent.amount === input.amount, differs("intent.amount"));
+  insist(intent.quote_identity_id === quoteIdentityId, differs("intent.quote_identity_id"));
+  insist(intent.funding_source === input.funding_source, differs("intent.funding_source"));
+  insist(prepared.expected_revision === order.revision, differs("expected_revision"));
   checkDeadline(Math.floor(Date.parse(prepared.expires_at) / 1000), 3600, now);
   const asked = input.quote ?? null, echoed = intent.quote;
-  insist(asked === null ? echoed === null : echoed !== null && echoed.receive_venue === asked.receive_venue && echoed.receive === asked.receive && echoed.min_fill === asked.min_fill && (echoed.quote_validity_seconds ?? 0) === (asked.quote_validity_seconds ?? 0) && echoed.replace?.sequence === asked.replace?.sequence && echoed.replace?.index === asked.replace?.index);
+  insist(asked === null ? echoed === null : echoed !== null, differs("intent.quote"));
+  if (asked && echoed) {
+    insist(echoed.receive_venue === asked.receive_venue, differs("intent.quote.receive_venue"));
+    insist(echoed.receive === asked.receive, differs("intent.quote.receive"));
+    insist(echoed.min_fill === asked.min_fill, differs("intent.quote.min_fill"));
+    insist((echoed.quote_validity_seconds ?? 0) === (asked.quote_validity_seconds ?? 0), differs("intent.quote.quote_validity_seconds"));
+    insist(echoed.replace?.sequence === asked.replace?.sequence && echoed.replace?.index === asked.replace?.index, differs("intent.quote.replace"));
+  }
   insist(!asked?.replace || existingOrder?.quote_set?.sequence === asked.replace.sequence, "Quotes changed; review again");
   if (existingOrder) {
-    insist(same(order.id, existingOrder.id) && existingOrder.venue === input.venue && same(existingOrder.owner_address, owner) && same(existingOrder.quote_signer, quoteSigner) && existingOrder.quote_identity_id === quoteIdentityId);
+    insist(same(order.id, existingOrder.id), differs("order.id"));
+    insist(existingOrder.venue === input.venue && same(existingOrder.owner_address, owner) && same(existingOrder.quote_signer, quoteSigner) && existingOrder.quote_identity_id === quoteIdentityId, differs("existing order"));
     insist(order.last_sequence === existingOrder.last_sequence && order.available_to_quote === existingOrder.available_to_quote && uint(order.revision) >= uint(existingOrder.revision), "Maker capital changed; review again");
-  } else insist(order.last_sequence === 0 && uint(order.available_to_quote) === 0n);
+  } else insist(order.last_sequence === 0 && uint(order.available_to_quote) === 0n, differs("order"));
   const amount = uint(input.amount), available = existingOrder ? uint(existingOrder.available_to_quote) : 0n;
   const added = uint(funding.added_amount), idle = uint(funding.idle_amount), wallet = uint(funding.wallet_amount), venue = uint(funding.venue_amount), existing = uint(funding.existing_available);
   const deposit = wallet + venue;
-  insist(amount > 0n && existing >= available && added === idle + deposit && (input.funding_source === "venue" ? wallet : venue) === 0n);
+  insist(amount > 0n, differs("amount"));
+  insist(existing >= available, differs("funding.existing_available"));
+  insist(added === idle + deposit, differs("funding.added_amount"));
+  insist((input.funding_source === "venue" ? wallet : venue) === 0n, differs(input.funding_source === "venue" ? "funding.wallet_amount" : "funding.venue_amount"));
   const kept: (QuoteIntent & { index: number })[] = [];
   // A deposit for a delegated quoter does not publish prices on its behalf.
   const prior = existingOrder && !["closed", "failed"].includes(existingOrder.state) ? existingOrder.quote_set : null;
   if ((asked || !input.quote_identity_id) && prior && Date.parse(prior.valid_until) / 1000 > now) {
     for (const [index, q] of prior.quotes.entries()) {
       const remaining = uint(q.available), supply = uint(q.supply), receive = uint(q.receive);
-      insist(remaining <= supply && remaining <= available);
+      insist(remaining <= supply && remaining <= available, differs(`quote_set.quotes[${index}].available`));
       if (remaining < uint(q.min_fill) || remaining === 0n) continue;
       kept.push({ venue: q.venue, recipient: q.recipient, supply: String(remaining), receive: String((remaining * receive + supply - 1n) / supply), min_fill: q.min_fill, index });
     }
@@ -56,37 +74,45 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
     const before = levels.reduce((sum, q) => sum + uint(q.supply), 0n);
     const after = levels.filter(q => q.index !== asked.replace?.index).reduce((sum, q) => sum + uint(q.supply), amount);
     const covered = before > available ? before : available;
-    insist(added === (after > covered ? after - covered : 0n));
-  } else insist(added === amount);
+    insist(added === (after > covered ? after - covered : 0n), differs("funding.added_amount"));
+  } else insist(added === amount, differs("funding.added_amount"));
   // The available balance pays first; the source deposits the rest.
   const spare = existing - available;
-  insist(deposit === (added > spare ? added - spare : 0n));
+  insist(deposit === (added > spare ? added - spare : 0n), differs("funding.wallet_amount + funding.venue_amount"));
   const quotes: QuoteIntent[] = kept.filter(q => q.index !== asked?.replace?.index).map(({ index: _, ...q }) => q);
   if (asked) quotes.push({ venue: asked.receive_venue, recipient: required(authority.recipient), supply: input.amount, receive: asked.receive, min_fill: asked.min_fill });
   // The server's stable order: by venue, a venue's levels as they were, a new one last.
   quotes.sort((a, b) => a.venue < b.venue ? -1 : a.venue > b.venue ? 1 : 0);
   const kinds = items.map(item => item.kind);
-  insist(new Set(kinds).size === kinds.length && kinds.includes("fund") === (added > 0n) && kinds.includes("quote_set") === (quotes.length > 0) && kinds.includes("margin_move") === (venue > 0n));
+  insist(new Set(kinds).size === kinds.length && kinds.includes("fund") === (added > 0n) && kinds.includes("quote_set") === (quotes.length > 0) && kinds.includes("margin_move") === (venue > 0n), differs("to_sign"));
   const sequence = prepared.sequence === null ? null : uint(prepared.sequence);
-  insist(quotes.length ? sequence !== null && sequence > BigInt(order.last_sequence) : sequence === null);
+  insist(quotes.length ? sequence !== null && sequence > BigInt(order.last_sequence) : sequence === null, differs("sequence"));
   for (const item of items) {
     const typed = item.typed_data, m = typed.message;
     if (item.kind === "margin_move") {
       // The wallet keeps what the move rounds up to whole millionths.
       const moved = venueUnits(venue, input.venue);
-      insist(same(item.signer, owner) && withdrawalCost(input.venue, typed) === moved);
+      insist(same(item.signer, owner), differs("margin_move.signer"));
+      insist(withdrawalCost(input.venue, typed) === moved, differs("margin_move.amount"));
       checkWithdrawal(typed, input.venue, owner, owner, moved, now);
     } else if (item.kind === "fund") {
       checkEscrowTyped(typed, input.venue);
       const floor = uint(m.minQuoteSequence);
-      insist(typed.primaryType === "FundOffer" && same(item.signer, owner) && same(m.owner, owner) && same(m.offerId, order.id) && uint(m.amount) === added && uint(m.deposit) === deposit && same(m.quoteSigner, quoteSigner) && same(m.operator, operator));
-      insist(floor > BigInt(order.last_sequence) && floor <= BigInt(Number.MAX_SAFE_INTEGER) && (sequence === null || floor === sequence));
+      insist(typed.primaryType === "FundOffer", differs("fund.primaryType"));
+      insist(same(item.signer, owner), differs("fund.signer"));
+      insist(same(m.owner, owner), differs("fund.owner"));
+      insist(same(m.offerId, order.id), differs("fund.offerId"));
+      insist(uint(m.amount) === added, differs("fund.amount"));
+      insist(uint(m.deposit) === deposit, differs("fund.deposit"));
+      insist(same(m.quoteSigner, quoteSigner), differs("fund.quoteSigner"));
+      insist(same(m.operator, operator), differs("fund.operator"));
+      insist(floor > BigInt(order.last_sequence) && floor <= BigInt(Number.MAX_SAFE_INTEGER) && (sequence === null || floor === sequence), differs("fund.minQuoteSequence"));
       checkDeadline(m.deadline, 3600, now);
     } else if (item.kind === "quote_set") {
       const expiry = Number(uint(m.expiresAt)), validity = asked?.quote_validity_seconds ?? 0;
-      insist(Number.isSafeInteger(validity) && validity >= 0 && validity <= 300);
-      insist(!asked ? prior !== null && prior !== undefined && expiry === Math.floor(Date.parse(prior.expires_at) / 1000) : validity === 0 ? expiry === NEVER_VALID_UNTIL + MAKER_TIMEOUT_SECONDS + 1 : expiry > now + MAKER_TIMEOUT_SECONDS && expiry <= now + validity + MAKER_TIMEOUT_SECONDS + 31);
-      insist(sequence !== null && sequence <= BigInt(Number.MAX_SAFE_INTEGER));
+      insist(Number.isSafeInteger(validity) && validity >= 0 && validity <= 300, differs("quote_validity_seconds"));
+      insist(!asked ? prior !== null && prior !== undefined && expiry === Math.floor(Date.parse(prior.expires_at) / 1000) : validity === 0 ? expiry === NEVER_VALID_UNTIL + MAKER_TIMEOUT_SECONDS + 1 : expiry > now + MAKER_TIMEOUT_SECONDS && expiry <= now + validity + MAKER_TIMEOUT_SECONDS + 31, differs("quote_set.expiresAt"));
+      insist(sequence !== null && sequence <= BigInt(Number.MAX_SAFE_INTEGER), differs("sequence"));
       checkSignedQuote(item, order, quotes, Number(sequence), expiry);
     } else throw new Error("Unexpected maker signing operation");
   }
@@ -96,6 +122,15 @@ export type TakeFill = { id: string; order_id: string; sequence: number; role: s
 /** What a take from `venue` signs to pay: a transfer inside Aster or Lighter, an escrow `pay_take` elsewhere. */
 export const takePaymentKind = (venue: string): string => venue === "aster" ? "aster_transfer" : venue === "lighter" ? "lighter_transfer" : "pay_take";
 type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { api_key_index: number; from_account_index: number; amount: string; usdc_fee: string; memo: string } };
+/** A taker fill on the asked venues, paid by `payer` to `recipient`, for an amount. */
+function checkFill(fill: TakeFill, input: TakeIntent, payer: string, recipient: string) {
+  insist(fill.role === "taker", differs("fills.role"));
+  insist(fill.from_venue === input.from, differs("fills.from_venue"));
+  insist(fill.to_venue === input.to, differs("fills.to_venue"));
+  insist(same(fill.payer, payer), differs("fills.payer"));
+  insist(same(fill.taker_recipient, recipient), differs("fills.taker_recipient"));
+  insist(BigInt(fill.amount_in) > 0n, differs("fills.amount_in"));
+}
 /** Delivered inside a venue, a fill goes to the taker's own account there: its Aster address, or its Lighter index, whose owner only Lighter can confirm. Through an escrow, to none. */
 function checkDelivery(fill: TakeFill, recipient: string) {
   const to = fill.delivery_to;
@@ -109,11 +144,14 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
   const item = items[0];
   insist(items.length === 1 && fills.length === 1 && item?.kind === kind && same(item.signer, payer), "A take paid inside a venue is one transfer");
   const fill = required(fills[0]);
-  insist(fill.role === "taker" && fill.from_venue === input.from && fill.to_venue === input.to && same(fill.payer, payer) && same(fill.taker_recipient, recipient) && item.fill_id === fill.id);
-  insist(BigInt(fill.amount_in) > 0n && BigInt(fill.amount_in) <= BigInt(input.amount_in) && BigInt(fill.amount_out) >= BigInt(input.min_out));
+  checkFill(fill, input, payer, recipient);
+  insist(item.fill_id === fill.id, differs("fill_id"));
+  insist(BigInt(fill.amount_in) <= BigInt(input.amount_in), differs("fills.amount_in"));
+  insist(BigInt(fill.amount_out) >= BigInt(input.min_out), differs("fills.amount_out"));
   checkDelivery(fill, recipient);
   const payBy = Date.parse(fill.pay_by) / 1000, t1 = Date.parse(fill.t1) / 1000;
-  insist(payBy > now && payBy <= now + 90 && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30);
+  insist(payBy > now && payBy <= now + 90, differs("fills.pay_by"));
+  insist(t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30, differs("fills.t1"));
   return { terms: item.typed_data, fill };
 }
 /** A take paid from Lighter: the transfer the taker signs pays exactly its fill, from his linked account, named by its memo. */
@@ -165,31 +203,48 @@ export function checkRouteIntent(first: { id: string; to: string; then?: { to: s
 /** `payWindow`: the most seconds to `pay_by`, `ROUTE_PAY_WINDOW_SECONDS` for a route's second take signed at once. */
 export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, now = Date.now() / 1000, payWindow = 90): asserts items is Verified<SignItem[]> {
   insist(takePaymentKind(input.from) === "pay_take", "The signing request differs from the take's venue");
-  insist(fills.length > 0 && fills.length <= (input.max_parts ?? 8) && new Set(fills.map(fill => fill.id)).size === fills.length && new Set(fills.map(fill => fill.swap_id.toLowerCase())).size === fills.length);
+  insist(fills.length > 0 && fills.length <= (input.max_parts ?? 8), differs("fills"));
+  insist(new Set(fills.map(fill => fill.id)).size === fills.length, differs("fills.id"));
+  insist(new Set(fills.map(fill => fill.swap_id.toLowerCase())).size === fills.length, differs("fills.swap_id"));
   const totalIn = fills.reduce((sum, fill) => sum + BigInt(fill.amount_in), 0n);
   const totalOut = fills.reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n);
-  insist(totalIn > 0n && totalIn <= BigInt(input.amount_in) && totalOut >= BigInt(input.min_out));
+  insist(totalIn > 0n && totalIn <= BigInt(input.amount_in), differs("amount_in"));
+  insist(totalOut >= BigInt(input.min_out), differs("amount_out"));
   const takes = items.filter(item => item.kind === "pay_take");
   insist(takes.length === 1 && items.length === 1, "A reserved take must already be funded and authorized");
   const take = required(takes[0]), typed = take.typed_data, m = typed.message;
   checkEscrowTyped(typed, input.from);
-  insist(typed.primaryType === "PayTake" && same(take.signer, payer) && same(m.payer, payer) && take.fill_id !== undefined && fills.some(fill => fill.id === take.fill_id));
+  insist(typed.primaryType === "PayTake", differs("primaryType"));
+  insist(same(take.signer, payer) && same(m.payer, payer), differs("payer"));
+  insist(take.fill_id !== undefined && fills.some(fill => fill.id === take.fill_id), differs("fill_id"));
   const payments = takePayments(typed);
-  insist(payments.length === fills.length);
+  insist(payments.length === fills.length, differs("payments"));
   const receive = CHAINS[input.to];
   for (const fill of fills) {
-    insist(fill.role === "taker" && fill.from_venue === input.from && fill.to_venue === input.to && same(fill.payer, payer) && same(fill.taker_recipient, recipient) && BigInt(fill.amount_in) > 0n && BigInt(fill.amount_out) > 0n);
+    checkFill(fill, input, payer, recipient);
+    insist(BigInt(fill.amount_out) > 0n, differs("fills.amount_out"));
     checkDelivery(fill, recipient);
     const t1 = Date.parse(fill.t1) / 1000, t2 = Date.parse(fill.t2) / 1000, payBy = Date.parse(fill.pay_by) / 1000;
-    insist(payBy > now && payBy <= now + payWindow && t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30 && t2 > t1 && t2 <= now + TAKER_TIMEOUT_SECONDS + 30);
+    insist(payBy > now && payBy <= now + payWindow, differs("fills.pay_by"));
+    insist(t1 > payBy && t1 <= now + MAKER_TIMEOUT_SECONDS + 30, differs("fills.t1"));
+    insist(t2 > t1 && t2 <= now + TAKER_TIMEOUT_SECONDS + 30, differs("fills.t2"));
     const matching = payments.filter(payment => same(payment.swapId, fill.swap_id));
-    insist(matching.length === 1);
+    insist(matching.length === 1, differs("payments.swapId"));
     const p = required(matching[0]);
-    insist(same(p.payer, payer) && same(p.recipient, fill.maker_recipient) && same(p.hashlock, fill.hashlock) && /^0x[0-9a-f]{64}$/i.test(fill.hashlock) && uint(p.amount) === BigInt(fill.amount_in) && uint(p.refundAt) === BigInt(Math.floor(t2)) && uint(p.deadline) === BigInt(Math.floor(payBy)));
-    insist(uint(p.dex) === 0n || input.from === "hyperliquid" && uint(p.dex) === 4294967295n);
-    insist(same(p.orderId, fill.order_id) && uint(p.sequence) === BigInt(fill.sequence) && uint(p.amountOut) === BigInt(fill.amount_out) && same(p.receiveRecipient, recipient) && receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && same(p.receiveEscrow, receive.escrow));
+    insist(same(p.payer, payer), differs("payments.payer"));
+    insist(same(p.recipient, fill.maker_recipient), differs("payments.recipient"));
+    insist(same(p.hashlock, fill.hashlock) && /^0x[0-9a-f]{64}$/i.test(fill.hashlock), differs("payments.hashlock"));
+    insist(uint(p.amount) === BigInt(fill.amount_in), differs("payments.amount"));
+    insist(uint(p.refundAt) === BigInt(Math.floor(t2)), differs("payments.refundAt"));
+    insist(uint(p.deadline) === BigInt(Math.floor(payBy)), differs("payments.deadline"));
+    insist(uint(p.dex) === 0n || input.from === "hyperliquid" && uint(p.dex) === 4294967295n, differs("payments.dex"));
+    insist(same(p.orderId, fill.order_id), differs("payments.orderId"));
+    insist(uint(p.sequence) === BigInt(fill.sequence), differs("payments.sequence"));
+    insist(uint(p.amountOut) === BigInt(fill.amount_out), differs("payments.amountOut"));
+    insist(same(p.receiveRecipient, recipient), differs("payments.receiveRecipient"));
+    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && same(p.receiveEscrow, receive.escrow), differs("payments.receive"));
   }
   // Only the shortfall is pulled from the payer. The allowance is reusable, but no unrelated operation is signed.
   const deposit = uint(m.deposit);
-  insist(deposit <= totalIn);
+  insist(deposit <= totalIn, differs("deposit"));
 }

@@ -23,7 +23,7 @@ const first = {
   id: "transfer-first", client_transfer_id: "move", client_take_id: "transfer:transfer-first", from: "lighter", to: "hyperliquid", amount_in: "10006500", min_out: "10000000",
   max_parts: 1, payer: owner, recipient: owner, from_chain_id: 304, to_chain_id: 999, withdrawal_preparation: null, withdrawal: null, take_id: "take-first", take_final: false,
   then: { to: "polymarket", recipient: owner, amount_in: "10000000", min_out: "9000000", chain_id: 137 }, previous_transfer_id: null, continuable: null,
-  cancelled_at: null, created_at: iso(0), funding_plan: null, grouped: null,
+  cancelled_at: null, created_at: iso(0), funding_plan: null, funding_plan_error: null, grouped: null,
 };
 const fill = (overrides: Record<string, unknown>) => ({ order_id: id, sequence: 1, role: "taker", state: "RESERVED", payer: owner, maker_owner: maker, maker_recipient: maker,
   taker_recipient: owner, swap_id: id, hashlock, t1: iso(3600), t2: iso(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null,

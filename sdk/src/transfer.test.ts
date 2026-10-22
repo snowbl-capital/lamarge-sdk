@@ -24,12 +24,16 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   permit?: boolean; levels?: unknown[]; stalePreparation?: boolean; loseCancel?: boolean; refuseCancel?: boolean; takeId?: string; answered?: Record<string, unknown>;
   unreadable?: number; from?: string; setup?: string; permitReads?: string[]; funds?: Record<string, string>[]; withdrawal?: string; withdrawn?: string;
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
-  then?: Record<string, string | number>; loseReplacements?: number; plan?: false } = {}) {
+  then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
+  previous?: "grouped" | "single" | undefined } = {}) {
   const calls: string[] = [];
   const bodies: Record<string, unknown[]> = {};
   let failures = options.failSubmissions ?? 0;
   let unreadable = options.unreadable ?? 0;
   let lostWithdrawals = options.loseWithdrawals ?? 0, unrecorded = options.unrecorded ?? 0, lostReplacements = options.loseReplacements ?? 0, reads = 0, permitReads = 0;
+  // What the escrow chain holds for the payer: the server's plan reads it live, as of the last balances
+  // answer unless `live` gives each of its reads after a withdrawal.
+  let held = 0n, liveReads = 0;
   const from = options.from ?? "hyperliquid";
   const setup = options.setup ?? (options.permit ? "required" : "done");
   const withdrawal = (state: string) => ({ id: "withdrawal-1", venue: from, amount: options.withdrawalAmount ?? "600000", destination: payer, state, venue_ref: null,
@@ -40,8 +44,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     withdrawal: (options.withdrawal ? withdrawal(options.withdrawal) : null) as Record<string, unknown> | null, take_id: (options.takeId ?? null) as string | null,
     withdrawal_preparation: options.stalePreparation ? { amount: "600000", created_at: at(-60), typed_data: {} }
       : options.freshPreparation ? { amount: "600000", created_at: at(0), typed_data: sendAsset("600000") } : null as unknown,
-    take_final: null, previous_transfer_id: null, continuable: null, cancelled_at: null as string | null, created_at: at(0), ...options.then ? { then: options.then } : {},
-    funding_plan: options.plan === false ? null : { venue: "hyperliquid", owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
+    take_final: null, previous_transfer_id: options.previous ? "transfer-0" : null, continuable: null, cancelled_at: null as string | null, created_at: at(0), ...options.then ? { then: options.then } : {},
+    funding_plan: { venue: "hyperliquid", owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
       withdrawal_to: options.withdrawalAmount ? "signer" : null, observed_at: at(0), payment_setup: setup,
       requests: [...setup === "required" ? [{ kind: "permit", signer: payer, chain_id: 999 }] : [], ...options.withdrawalAmount ? [{ kind: "margin_move", signer: payer, chain_id: 999 }] : [], { kind: "pay_take", signer: payer, chain_id: 999 }] },
   };
@@ -54,7 +58,24 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] });
   const permitStep = (status: string) => ({ step: "permit", status, reason: null, expires_at: null, needed_for: ["pay"], hash: null,
     to_sign: status === "required" ? { kind: "permit", signer: payer, ref: "permit-1", typed_data: permitTyped() } : null });
-  const routes: Record<string, (body: unknown) => unknown> = {
+  /** The payer's next balances row; what its escrow chain holds is what the plan reads next. */
+  const payerBalance = () => {
+    const row = { venue: from, address: payer, venue_wallet: null, chain_balance: options.chainBalance ?? "1000000", chain_error: null, chain_read_at: at(0), escrow_balance: "0",
+      deposit_balance: "0", ...options.funds?.[Math.min(reads++, options.funds.length - 1)] };
+    held = BigInt(row.chain_balance) + BigInt(row.escrow_balance);
+    return row;
+  };
+  /** The transfer as the server answers it: its funding plan only when asked, after a relayed withdrawal only once the funds arrived. */
+  const answer = (query: URLSearchParams) => {
+    const plan = intent.funding_plan;
+    if (query.get("funding_plan") !== "true" || intent.take_id || intent.cancelled_at) return { ...intent, funding_plan: null };
+    // `spent`: funds the plan counted were spent since; it now asks for that withdrawal.
+    if (!intent.withdrawal) return options.spent ? { ...intent, funding_plan: { ...plan, withdrawal_amount: options.spent } } : intent;
+    const live = options.live ? BigInt(options.live[Math.min(liveReads++, options.live.length - 1)] ?? "0") : held;
+    if (intent.withdrawal.state !== "relayed" || live < BigInt(intent.amount_in)) return { ...intent, funding_plan: null };
+    return { ...intent, funding_plan: { ...plan, withdrawal_amount: "0", withdrawal_to: null, requests: plan.requests.filter(request => request.kind !== "margin_move") } };
+  };
+  const routes: Record<string, (body: unknown, query: URLSearchParams) => unknown> = {
     "GET /v1/venues": () => [],
     "GET /v1/orders": () => [],
     "GET /v1/books": () => ({ from: "hyperliquid", to: "polymarket", max_fill: "100000000", levels: options.levels ?? [{ order_id: id, supply: "1005000", receive: "1000000", available: "100000000", min_fill: "1", valid_until: at(60) }] }),
@@ -67,8 +88,9 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       }
       return { ...intent, ...options.answered };
     },
-    "GET /v1/transfers/transfer-1": () => intent.id === "transfer-1" ? intent : { ...intent, id: "transfer-1", cancelled_at: at(0) },
-    "GET /v1/transfers/transfer-2": () => intent,
+    "GET /v1/transfers/transfer-1": (_, query) => intent.id === "transfer-1" ? answer(query) : { ...intent, id: "transfer-1", cancelled_at: at(0) },
+    "GET /v1/transfers/transfer-2": (_, query) => answer(query),
+    "GET /v1/transfers/transfer-0": () => ({ ...intent, id: "transfer-0", previous_transfer_id: null, grouped: options.previous === "grouped" ? { state: "closed" } : null }),
     "DELETE /v1/transfers/transfer-1": () => {
       if (options.refuseCancel) return Response.json({ error: { code: "STATE_CONFLICT", message: "withdrawal accepted", request_id: "r", retryable: false } }, { status: 409 });
       intent.cancelled_at = at(0);
@@ -82,12 +104,18 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       if (lostWithdrawals-- > 0) throw new TypeError("withdrawal reply lost");
       return intent.withdrawal;
     },
-    "POST /v1/accounts/hyperliquid/setup/permit": body => permitStep(record(body).signature === undefined ? "required" : "pending"),
+    "POST /v1/accounts/hyperliquid/setup/permit": body => {
+      // Another run of the same transfer withdraws while this one's permit waits for its signer.
+      if (options.withdrawnDuringPermit) intent.withdrawal = withdrawal("relayed");
+      if (record(body).signature === undefined) return permitStep("required");
+      // Submitted: the plan no longer asks for it.
+      intent.funding_plan = { ...intent.funding_plan, payment_setup: "pending", requests: intent.funding_plan.requests.filter(request => request.kind !== "permit") };
+      return permitStep("pending");
+    },
     "GET /v1/accounts/hyperliquid/setup": () => ({ venue: "hyperliquid", address: payer, ready: false,
       steps: [permitStep(options.permitReads?.[Math.min(permitReads++, options.permitReads.length - 1)] ?? "done")] }),
     "GET /v1/balances": () => [
-      { venue: from, address: payer, venue_wallet: null, chain_balance: options.chainBalance ?? "1000000", chain_error: null, chain_read_at: at(0), escrow_balance: "0", deposit_balance: "0",
-        ...options.funds?.[Math.min(reads++, options.funds.length - 1)] },
+      payerBalance(),
       { venue: "polymarket", address: options.linkedRecipient ?? payer, venue_wallet: null, chain_balance: "0", chain_error: null, chain_read_at: at(0), escrow_balance: "0", deposit_balance: "0" },
     ],
     "POST /v1/takes": () => { intent.take_id = "take-1"; delete options.takeFill; return prepared(); },
@@ -111,8 +139,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     if (!handler) return Response.json({ error: { code: "NOT_FOUND", message: route, request_id: "r", retryable: false } }, { status: 404 });
     const body: unknown = request.method === "GET" || request.method === "DELETE" ? undefined : await request.json();
     (bodies[route] ??= []).push(body);
-    const answer = handler(body);
-    return answer instanceof Response ? answer : answer === null ? new Response(null, { status: 204 }) : Response.json(answer);
+    const answered = handler(body, new URL(request.url).searchParams);
+    return answered instanceof Response ? answered : answered === null ? new Response(null, { status: 204 }) : Response.json(answered);
   }, { preconnect: globalThis.fetch.preconnect });
   return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, bodies, intent, fill, payment };
 }
@@ -254,6 +282,70 @@ test("the book is priced at the caller's clock: a level past its validity there 
   expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
 });
 
+test("the plan decides the withdrawal: a balances read predating a payment that spent the funds withdraws them all the same", async () => {
+  // The balances keep showing the spent funds; the take waits until the plan shows the withdrawal arrived.
+  const { client, calls, bodies } = api({ withdrawalAmount: "600000", live: ["400000", "400000", "1000000"] });
+  const signer = counting();
+  const stages: string[] = [];
+  const fills = await transfer(client, signer, { ...request, funding: "venue" }, { onStage: stage => stages.push(stage), ...clock() });
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  expect(bodies["POST /v1/transfers/transfer-1/withdrawal/prepare"]).toEqual([{ amount: "600000" }]);
+  expect(count(calls, "POST /v1/transfers/transfer-1/withdrawal")).toBe(1);
+  expect(stages).toEqual(["checking", "funding", "waiting", "taking", "taking"]);
+});
+
+test("the plan decides the withdrawal: funds the balances read has not seen yet are waited for, not withdrawn again", async () => {
+  const before = { chain_balance: "400000" };
+  const { client, calls } = api({ funds: [before, before, { chain_balance: "1000000" }] });
+  const signer = counting();
+  const fills = await transfer(client, signer, { ...request, funding: "venue" }, clock());
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
+});
+
+test("the plan decides the withdrawal: a plan asking for a withdrawal while the take waits stops before anything is withdrawn or signed", async () => {
+  // Waiting for a sweep, with wallet or venue funding, or after a single take of a route.
+  const sweeping = [{ chain_balance: "0", deposit_balance: "1000000" }];
+  for (const [funding, previous, message] of [["venue", undefined, "Funding amount changed; review the transfer again"],
+    ["wallet", undefined, "Wallet funds do not cover the transfer"], ["venue", "single", "Funding amount changed; review the transfer again"]] as const) {
+    const { client, calls } = api({ funds: sweeping, spent: "600000", previous });
+    const signer = counting();
+    await expect(transfer(client, signer, { ...request, funding }, clock())).rejects.toThrow(message);
+    expect(signer.signed).toBe(0);
+    expect(calls.some(call => call.includes("withdrawal") || call.startsWith("POST /v1/takes"))).toBe(false);
+  }
+});
+
+test("the plan decides the withdrawal: a continuation of a route signed at once waits for what its route still brings", async () => {
+  const sweeping = { chain_balance: "0", deposit_balance: "1000000" };
+  const { client, calls } = api({ funds: [sweeping, sweeping, { chain_balance: "1000000" }], spent: "600000", previous: "grouped" });
+  expect((await transfer(client, counting(), { ...request, funding: "venue" }, clock())).map(fill => fill.state)).toEqual(["PAID"]);
+  expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
+});
+
+test("the plan decides the withdrawal: after its permit is signed, the plan is read again before withdrawing", async () => {
+  const before = { chain_balance: "400000" };
+  const { client, calls } = api({ permit: true, withdrawalAmount: "600000", permitReads: ["done"], funds: [before, before, { chain_balance: "1000000", chain_read_at: at(1) }] });
+  const signer = counting();
+  const fills = await transfer(client, signer, { ...request, funding: "venue" }, clock());
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  const permit = calls.indexOf("POST /v1/accounts/hyperliquid/setup/permit"), withdrawal = calls.indexOf("POST /v1/transfers/transfer-1/withdrawal/prepare");
+  expect(calls.slice(permit, withdrawal)).toContain("GET /v1/transfers/transfer-1");
+});
+
+test("the plan decides the withdrawal: one recorded while the permit waited is not withdrawn again", async () => {
+  // Waited for as any other: never arriving leaves the transfer pending with nothing more signed; arrived, the take pays from it.
+  for (const [live, paid] of [["400000", false], ["1000000", true]] as const) {
+    const { client, calls } = api({ permit: true, withdrawalAmount: "600000", permitReads: ["done"], withdrawnDuringPermit: true, live: [live] });
+    const signer = counting();
+    const run = transfer(client, signer, { ...request, funding: "venue" }, clock());
+    if (paid) expect((await run).map(fill => fill.state)).toEqual(["PAID"]);
+    else await expect(run).rejects.toBeInstanceOf(TransferPending);
+    expect(calls.some(call => call.includes("/withdrawal"))).toBe(false);
+    expect(signer.kinds).toEqual(paid ? ["Permit", "PayTake"] : ["Permit"]);
+  }
+});
+
 test("a replacement decided before a lost cancellation answer is completed on the next run", async () => {
   const { client } = api({ stalePreparation: true, loseCancel: true });
   const signer = counting();
@@ -361,7 +453,7 @@ test("a submitted permit is waited for without another signature; still pending 
 });
 
 test("a final or absent payment setup is not waited for", async () => {
-  for (const [options, resume] of [[{ setup: "done" }, {}], [{ plan: false, withdrawal: "relayed" }, { transfer_id: "transfer-1" }]] as const) {
+  for (const [options, resume] of [[{ setup: "done" }, {}], [{ withdrawal: "relayed" }, { transfer_id: "transfer-1" }]] as const) {
     const { client, calls } = api(options);
     expect((await transfer(client, counting(), { ...venue, ...resume }, clock())).map(fill => fill.state)).toEqual(["PAID"]);
     expect(calls.some(call => call.includes("/setup"))).toBe(false);

@@ -3,7 +3,7 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { CHAINS, insist, same, shortfall, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { CHAINS, insist, same, VENUE_SETTLED } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import type { BeforeSigning, Signer } from "./signer.ts";
 import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
@@ -230,73 +230,88 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     if (intent.withdrawal?.state === "refused") throw new TransferPending(intent, "refused");
     if (intent.withdrawal?.state === "unknown") throw new TransferPending(intent, "unknown");
   };
+  const readIntent = async (funding_plan: boolean) => {
+    intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan }, signal }), { id: intent.id });
+    checkIntent();
+  };
   // A wallet deposit without payment setup signs its permit first; the take waits until it is final.
   let authorizing = false;
-  const fund = async () => {
+  const checkPlan = () => {
     const plan = checkFundingPlan(intent, now());
     insist(request.funding === "venue" || BigInt(plan.withdrawal_amount) === 0n, "Wallet funds do not cover the transfer");
     authorizing = ["required", "pending"].includes(plan.payment_setup);
-    if (plan.requests.some(item => item.kind === "permit")) { stage("funding"); await submitPermit(client, intent.from, signer, signal, options.beforeSigning, now); }
+    return plan;
+  };
+  const fund = async () => {
+    const plan = checkPlan();
+    if (!plan.requests.some(item => item.kind === "permit")) return plan;
+    stage("funding");
+    await submitPermit(client, intent.from, signer, signal, options.beforeSigning, now);
+    // The permit waited for its signer: the plan is read again before it decides a withdrawal. One
+    // another run recorded meanwhile is waited for as any other.
+    if (intent.withdrawal) return;
+    await readIntent(true);
+    return intent.withdrawal ? undefined : checkPlan();
   };
   checkWithdrawalState();
   let funds = await readFunds();
+  let reread = false;
   // Wallet funds are read before the permit too: a transfer they cannot pay signs nothing.
   if (request.funding === "wallet" && !intent.withdrawal) covers(funds);
-  let planned = false;
-  if (!intent.withdrawal) { await fund(); planned = true; }
-  if (!intent.withdrawal && (intent.withdrawal_preparation || funds !== null && funds.supplied < amount)) {
-    insist(request.funding === "venue", "Wallet funds do not cover the transfer");
+  // The plan reads the escrow chain when it is answered; a balances read may predate a payment that
+  // spent it. It also withdraws at most what a route signed at once may still: the rest is on its way.
+  const plan = intent.withdrawal ? undefined : await fund();
+  const withdrawal = plan ? BigInt(plan.withdrawal_amount) : 0n;
+  if (withdrawal > 0n) {
     // Margin leaves the venue only for a take the book can execute now.
     if (!intent.withdrawal_preparation) await reviewQuote(client, takeInput(intent), now(), signal);
     stage("funding");
-    const preparation = intent.withdrawal_preparation;
-    let withdrawal = preparation ? BigInt(preparation.amount) : shortfall(amount, required(funds, "A fresh balance is required").supplied, intent.from);
-    if (intent.funding_plan) {
-      // A continuation of a route signed at once withdraws at most what its route may still: the
-      // rest is already on its way. Never more than the shortfall.
-      const planned = BigInt(intent.funding_plan.withdrawal_amount), previous = intent.previous_transfer_id;
-      insist(planned === withdrawal || !preparation && planned < withdrawal && previous && (await client.call("getTransfer", { path: { id: previous }, signal })).grouped,
-        "Funding amount changed; review the transfer again");
-      withdrawal = planned;
+    try {
+      intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
+    } catch (error) {
+      // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.
+      if (error instanceof LaMargeError && error.reason === "funds_arriving") throw new TransferPending(intent, "arrival_unconfirmed");
+      throw error;
     }
-    if (withdrawal > 0n) {
-      try {
-        intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
-      } catch (error) {
-        // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.
-        if (error instanceof LaMargeError && error.reason === "funds_arriving") throw new TransferPending(intent, "arrival_unconfirmed");
-        throw error;
-      }
-      checkWithdrawalState();
-      // Until it is relayed the wait below reads the balance anyway.
-      if (intent.withdrawal.state === "relayed") funds = await readFunds();
-    }
+    checkWithdrawalState();
+    // The plan read before it is no sign of its arrival: the transfer is read again, with its plan once relayed.
+    await readIntent(intent.withdrawal.state === "relayed");
+    reread = true;
   }
   insist(intent.withdrawal || funds !== null, "A fresh balance is required; try again shortly");
-  const waitingForFunds = () => funds === null || funds.ready < amount || (intent.withdrawal != null && intent.withdrawal.state !== "relayed");
+  // The plan reads the escrow chain when it is answered, where a balances read may predate a payment
+  // that spent the funds: after a relayed withdrawal it is shown only once they arrived; without one,
+  // a plan asking for a withdrawal means they were spent since, unless the transfer continues a route
+  // signed at once that is still bringing them.
+  let arriving: boolean | undefined;
+  const waitingForFunds = async () => {
+    const { withdrawal, funding_plan, previous_transfer_id: previous } = intent;
+    if (withdrawal) return !funds || withdrawal.state !== "relayed" || !funding_plan;
+    if (funding_plan && BigInt(funding_plan.withdrawal_amount) > 0n) {
+      arriving ??= !!previous && !!(await client.call("getTransfer", { path: { id: previous }, signal })).grouped;
+      insist(arriving, request.funding === "wallet" ? "Wallet funds do not cover the transfer" : "Funding amount changed; review the transfer again");
+    }
+    return !funds || funds.ready < amount;
+  };
   const deadline = now() + arrivalWaitMs;
-  let reread = false;
-  if (waitingForFunds()) stage("waiting");
-  while (waitingForFunds()) {
+  if (await waitingForFunds()) stage("waiting");
+  while (await waitingForFunds()) {
     if (now() >= deadline) throw new TransferPending(intent, "arrival_unconfirmed");
     await sleep(pollMs);
-    const id = intent.id;
-    [intent, funds] = await Promise.all([client.call("getTransfer", { path: { id }, signal }).then(read => asked(read, { id })), readFunds()]);
-    checkIntent();
+    [, funds] = await Promise.all([readIntent(true), readFunds()]);
     const accepted = await recoverTake();
     if (accepted) return accepted;
     checkWithdrawalState();
     reread = true;
   }
   stage("taking");
-  // The wait's last read stands unless the funding plan is still to be read.
-  if (!reread || !planned) {
-    intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan: !planned }, signal }), { id: intent.id });
-    checkIntent();
+  // The wait's last read, with its plan, stands.
+  if (!reread) {
+    await readIntent(!plan);
     const accepted = await recoverTake();
     if (accepted) return accepted;
   }
-  if (!planned && intent.funding_plan) await fund();
+  if (!plan && intent.funding_plan) await fund();
   // The permit gets its own wait, however long the funds took to arrive.
   const confirmBy = now() + arrivalWaitMs;
   while (authorizing && !await permitDone(client, intent.from, signer, signal)) {

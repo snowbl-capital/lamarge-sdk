@@ -18,6 +18,8 @@ export const VENUE_SETTLED = new Set(["lighter", "aster"]);
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
 /** The most seconds to a route's second take's `pay_by` when signed at once: the server's 180 s bound and a clock margin. */
 export const ROUTE_PAY_WINDOW_SECONDS = 210;
+/** A take signed at once with its withdrawal is accepted until this long before its `pay_by`, while the withdrawal can still be sent. */
+export const AT_ONCE_SEND_MARGIN_SECONDS = 30;
 /** The escrow holding a venue's commitments; Aster's former BSC escrow for Aster. @deprecated Read `CHAINS[venue].escrow`. */
 export function escrowOf(venue: string): string {
   const chain = CHAINS[venue];

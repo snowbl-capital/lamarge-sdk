@@ -3,7 +3,7 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
+import { AT_ONCE_SEND_MARGIN_SECONDS, CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import type { BeforeSigning, Signer } from "./signer.ts";
 import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
@@ -97,9 +97,6 @@ function asked(intent: TransferIntent, by: { id: string } | { clientId: string }
   return intent;
 }
 
-/** The server sends the withdrawal of a transfer signed at once at the latest this long before its take's `pay_by`. */
-const AT_ONCE_SEND_MARGIN_MS = 30_000;
-
 /** Where a transfer's withdrawal signed alone is kept until the server records it. */
 const withdrawalKey = (id: string) => `transfer-withdrawal:${id}`;
 
@@ -158,7 +155,9 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
       && intent.min_out === request.min_out && same(intent.payer, payer) && same(intent.recipient, request.recipient), "Transfer terms changed; review the original transfer");
   };
   checkIntent();
-  if (!intent.withdrawal && !intent.take_id && intent.withdrawal_preparation && now() - Date.parse(intent.withdrawal_preparation.created_at) > 45_000) {
+  /** A transfer whose withdrawal preparation went unsigned over 45 seconds is replaced. */
+  const renewStale = async () => {
+    if (intent.withdrawal || intent.take_id || !intent.withdrawal_preparation || now() - Date.parse(intent.withdrawal_preparation.created_at) <= 45_000) return false;
     // Cancellation serializes with acceptance; an uncertain withdrawal is never replaced.
     renewedFrom = intent.id;
     await store.save(renewal(renewedFrom), true);
@@ -171,9 +170,14 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     }
     intent = await replace(`renew:${intent.id}`);
     checkIntent();
-  }
-  await onIntent?.(intent);
-  if (renewedFrom) await store.delete(renewal(renewedFrom));
+    return true;
+  };
+  const announce = async () => {
+    await onIntent?.(intent);
+    if (renewedFrom) await store.delete(renewal(renewedFrom));
+  };
+  await renewStale();
+  await announce();
   // A replacement of a take that expired unsigned after its funding: never funded again.
   const funded = (id: string) => `funded:${id}`;
   const alreadyFunded = await store.load(funded(intent.id)) !== undefined;
@@ -207,15 +211,23 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan }, signal }), { id: intent.id });
     checkIntent();
   };
-  /** Whether the take reserved against `preparation` can still be signed with it in time for the server to send the withdrawal. */
-  const sendable = (preparation: { amount: string; typed_data: Typed }, prepared: Answer<"getV1TakesId">) => {
-    if (signableUntil(prepared) * 1000 - AT_ONCE_SEND_MARGIN_MS <= now()) return false;
+  /** Whether a take reserved against `preparation` can still be submitted with it: in time for the server to send the withdrawal, and signed already or still signable. */
+  const sendable = async (preparation: { amount: string; typed_data: Typed }, prepared: Answer<"getV1TakesId">) => {
+    if ((signableUntil(prepared) - AT_ONCE_SEND_MARGIN_SECONDS) * 1000 <= now()) return false;
+    if (await store.load(`take:${prepared.take.id}`) !== undefined) return true;
     try {
       checkWithdrawal(preparation.typed_data, intent.from, signer.address, signer.address, BigInt(preparation.amount), now() / 1000);
       return true;
     } catch {
       return false;
     }
+  };
+  /** Signs a take reserved against `withdrawal` and submits both: a withdrawal refused, or of unknown outcome, never pays it. */
+  const signAtOnce = async (prepared: Answer<"postTake">, withdrawal: { amount: string; typed_data: Typed }, extra: Pick<TakeOptions, "balances" | "lock">) => {
+    const fills = await take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, withdrawal, ...extra });
+    await readIntent(false);
+    checkWithdrawalState();
+    return fills;
   };
   /** The take already reserved, signed or paid, settled first; a replaced one is priced and taken again. Null when there is none. */
   const recoverTake = async (): Promise<Fill[] | null> => {
@@ -227,7 +239,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
       // Reserved against the withdrawal prepared for it: signed and submitted with it.
       const preparation = !intent.withdrawal && !intent.grouped ? intent.withdrawal_preparation : null;
       // Past what it can still be signed by, an Aster transfer's nonce or a withdrawal to send with it included, it is replaced.
-      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED") && (signableUntil(prepared) * 1000 <= now() || preparation && !sendable(preparation, prepared))) {
+      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED") && (signableUntil(prepared) * 1000 <= now() || preparation && !await sendable(preparation, prepared))) {
         // Cancellation serializes with acceptance. A late or uncertain signature is never replaced.
         await client.call("deleteTake", { path: { id: intent.take_id }, signal });
         prepared = await client.call("getV1TakesId", { path: { id: intent.take_id }, signal });
@@ -238,7 +250,8 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
           checkWithdrawalState();
           return prepared.take.fills;
         }
-        return take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock, withdrawal: preparation ?? undefined });
+        if (preparation) return signAtOnce(prepared, preparation, { lock: options.lock });
+        return take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock });
       }
       // A deterministic replacement survives a lost response or a restart, with the same terms. One
       // whose withdrawal was never sent is funded again.
@@ -254,31 +267,22 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   const recovered = await recoverTake();
   if (recovered) return recovered;
   if (alreadyFunded) return repriced();
+  // A replacement recovered above can hold a preparation as stale as the transfer it replaced.
+  if (await renewStale()) await announce();
   // Paid inside the venue: nothing to fund, the take's transfer comes from the venue account.
   if (VENUE_SETTLED.has(intent.from)) { stage("taking"); return pay(); }
 
   /**
    * The take reserved against the withdrawal prepared for it, then signed and submitted with it:
-   * the server sends the withdrawal, then the payment as soon as its funds reach the wallet. Null
-   * when the withdrawal was submitted meanwhile: nothing was signed, it is followed as any other.
+   * the server sends the withdrawal, then the payment as soon as its funds reach the wallet.
    */
-  const takeAtOnce = async (withdrawal: { amount: string; typed_data: Typed }, balances?: Answer<"getBalances">): Promise<Fill[] | null> => {
+  const takeAtOnce = async (withdrawal: { amount: string; typed_data: Typed }, balances?: Answer<"getBalances">) => {
     // Checked before reserving: a withdrawal that can no longer be signed reserves nothing.
     checkWithdrawal(withdrawal.typed_data, intent.from, signer.address, signer.address, BigInt(withdrawal.amount), now() / 1000);
     const run = async () => {
-      let prepared: Answer<"postTake">;
-      try {
-        prepared = await client.call("postTake", { body: takeInput(intent), signal });
-      } catch (error) {
-        if (error instanceof LaMargeError && error.code === "STATE_CONFLICT") return null;
-        throw error;
-      }
+      const prepared = await client.call("postTake", { body: takeInput(intent), signal });
       stage("taking");
-      const fills = await take(client, signer, takeInput(intent), { store, signal, prepared, balances, recipient: request.recipient, beforeSigning, now, withdrawal });
-      // Sent on acceptance: one refused, or of unknown outcome, never pays the take.
-      await readIntent(false);
-      checkWithdrawalState();
-      return fills;
+      return signAtOnce(prepared, withdrawal, { balances });
     };
     return options.lock ? options.lock(run) : run();
   };
@@ -320,8 +324,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
         const preparation = intent.withdrawal_preparation
           ?? { amount: withdrawal.toString(), typed_data: (await client.call("prepareTransferWithdrawal", { path: { id: intent.id }, body: { amount: withdrawal.toString() }, signal })).typed_data };
         insist(BigInt(preparation.amount) === withdrawal, "Funding amount changed; review the transfer again");
-        const signed = await takeAtOnce(preparation, funds?.balances);
-        if (signed) return signed;
+        return await takeAtOnce(preparation, funds?.balances);
       }
       intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
     } catch (error) {

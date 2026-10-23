@@ -2,7 +2,7 @@ import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, takePaymentKind } from "./protocol/intents.ts";
 import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
-import { ASTER_TRANSFER_CHAIN_ID, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
+import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
 import { isRecord, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
@@ -106,15 +106,17 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   if (signatures && isRecord(kept)) insist(canonical(kept.to_sign) === canonical(to_sign) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
   if (!signatures) {
     try {
-      const at = (options.now ?? Date.now)() / 1000;
-      const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at, options.beforeSigning);
-      const paid = await signPayment(client, prepared, input, signer, payer, recipient, { at, signal, before: options.beforeSigning, payWindow: withdrawal ? ROUTE_PAY_WINDOW_SECONDS : undefined });
+      // Each request is checked at its own signing time: a wallet may hold the first one open.
+      const at = () => (options.now ?? Date.now)() / 1000;
+      const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at(), options.beforeSigning);
+      insist(!withdrawal || Math.min(...reserved.fills.map(fill => Date.parse(fill.pay_by) / 1000)) - AT_ONCE_SEND_MARGIN_SECONDS > at(), "Too little time is left to sign the take");
+      const paid = await signPayment(client, prepared, input, signer, payer, recipient, { at: at(), signal, before: options.beforeSigning, payWindow: withdrawal ? ROUTE_PAY_WINDOW_SECONDS : undefined });
       signatures = moved ? [...paid, { kind: "margin_move", signature: moved }] : paid;
       signal?.throwIfAborted();
       await store.save(key, { items: signatures, to_sign, ...withdrawal ? { withdrawal: withdrawal.typed_data } : {} });
     } catch (error) {
-      // A transfer's own recovery decides what happens to its reservation.
-      if (!input.transfer_intent_id) await client.call("deleteTake", { path: { id: reserved.id } }).catch(() => null);
+      // A transfer's own recovery decides what happens to its reservation, except one made for these signatures alone.
+      if (!input.transfer_intent_id || withdrawal) await client.call("deleteTake", { path: { id: reserved.id } }).catch(() => null);
       throw error;
     }
   }

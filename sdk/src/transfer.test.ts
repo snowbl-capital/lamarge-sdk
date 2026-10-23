@@ -25,7 +25,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   unreadable?: number; from?: string; setup?: string; permitReads?: string[]; funds?: Record<string, string>[]; withdrawal?: string; withdrawn?: string;
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
-  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean } = {}) {
+  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number } = {}) {
   const calls: string[] = [];
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
@@ -53,8 +53,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   };
   const fill = { id: "fill-1", take_id: "take-1", order_id: id, sequence: 1, role: "taker", state: "RESERVED", from_venue: "hyperliquid", to_venue: "polymarket",
     amount_in: "1000000", amount_out: "1005000", payer, maker_recipient: maker, taker_recipient: payer, swap_id: id, hashlock: `0x${"bb".repeat(32)}`,
-    pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_hash: null, payment_locked_at: null, maker_claimed_at: null };
-  const payment = { payer, swapId: id, recipient: maker, amount: "1000000", hashlock: fill.hashlock, refundAt: now() + 7200, deadline: now() + 45, orderId: id, sequence: 1,
+    pay_by: at(options.payWindow ?? 45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_hash: null, payment_locked_at: null, maker_claimed_at: null };
+  const payment = { payer, swapId: id, recipient: maker, amount: "1000000", hashlock: fill.hashlock, refundAt: now() + 7200, deadline: now() + (options.payWindow ?? 45), orderId: id, sequence: 1,
     amountOut: fill.amount_out, receiveChainId: 137, receiveToken: required(CHAINS.polymarket).token, receiveEscrow: ESCROW, receiveRecipient: options.recipient ?? payer, dex: 0 };
   const prepared = () => ({ take: { id: "take-1", fills: [{ ...fill, ...committed ? { signed_at: at(0) } : {}, ...options.takeFill }] }, to_sign: committed ? [] : [{ kind: "pay_take", fill_id: fill.id, signer: payer,
     typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] });
@@ -736,13 +736,15 @@ test("a venue-funded transfer is signed at once: the take reserved against its p
   expect(array(record(submitted).signatures).map(item => record(item).kind)).toEqual(["pay_take", "margin_move"]);
 });
 
-test("a take signed at once whose commit was lost is committed again with the same signatures, never signed twice", async () => {
-  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, failSubmissions: 3 });
+test("a take signed at once whose commit was lost is committed again with the same signatures, never signed twice, even once its withdrawal could no longer be signed", async () => {
+  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, failSubmissions: 3, payWindow: 120 });
   const signer = counting();
   const store = memoryStore();
   await expect(transfer(client, signer, atOnce, { store })).rejects.toThrow("connection reset");
   expect(signer.signed).toBe(2);
-  const fills = await transfer(client, signer, { ...atOnce, transfer_id: "transfer-1" }, { store });
+  // Seventy seconds later the withdrawal could not be signed again, but it was signed already.
+  const later = () => Date.now() + 70_000;
+  const fills = await transfer(client, signer, { ...atOnce, transfer_id: "transfer-1" }, { store, now: later });
   expect(fills.map(fill => fill.state)).toEqual(["RESERVED"]);
   expect(signer.signed).toBe(2);
   expect(count(calls, "POST /v1/takes")).toBe(1);
@@ -770,4 +772,19 @@ test("a take signed at once whose withdrawal is refused reports the refusal, on 
   expect(again instanceof TransferPending && again.reason).toBe("refused");
   expect(signer.signed).toBe(2);
   expect(count(calls, "POST /v1/takes/take-1/signatures")).toBe(1);
+});
+
+test("a take signed at once whose signature is refused releases its reservation, and one with too little time left asks for no payment", async () => {
+  const declined = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 120 });
+  await expect(transfer(declined.client, counting(type => type === "PayTake"), atOnce)).rejects.toThrow("User rejected the request");
+  expect(declined.calls).toContain("DELETE /v1/takes/take-1");
+  expect(declined.calls).not.toContain("POST /v1/takes/take-1/signatures");
+  // The wallet held the withdrawal's prompt past the take's last moment to be signed.
+  const slow = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 40 });
+  let time = Date.now();
+  const signer = counting();
+  const late = transfer(slow.client, signer, atOnce, { now: () => time, beforeSigning: signing => { if (signing.kind === "withdrawal") time += 15_000; } });
+  await expect(late).rejects.toThrow("Too little time is left to sign the take");
+  expect(signer.kinds).toEqual(["HyperliquidTransaction:SendAsset"]);
+  expect(slow.calls).toContain("DELETE /v1/takes/take-1");
 });

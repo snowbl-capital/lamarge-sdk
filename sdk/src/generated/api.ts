@@ -997,7 +997,7 @@ export interface paths {
         put?: never;
         /**
          * Submit take signatures
-         * @description The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once the maker is locked. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. Once accepted, retries return the current fills.
+         * @description The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once the maker is locked. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. A refused withdrawal ends the take at once (`EXPIRED`, reason `the withdrawal was refused`). Once accepted, retries return the current fills.
          */
         post: operations["postTakeSignatures"];
         delete?: never;
@@ -5002,7 +5002,15 @@ export interface operations {
                     "application/json": components["schemas"]["TakePreparation"];
                 };
             };
-            400: components["responses"]["ValidationError"];
+            /** @description `VALIDATION_ERROR`, or `WITHDRAWAL_EXPIRED` for a take signed at once whose withdrawal was prepared too long ago to be signed with it: create another transfer. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT` (reason `no_deposit`: the Aster account it delivers to never received a deposit). `FILL_IN_PROGRESS` with `reason` `grouped_route`: an open grouped route holds it until it ends. */
@@ -5107,11 +5115,19 @@ export interface operations {
                     };
                 };
             };
-            400: components["responses"]["BadSignature"];
+            /** @description `BAD_SIGNATURE`, `VALIDATION_ERROR`, or `WITHDRAWAL_EXPIRED` for a take signed at once whose withdrawal is too old to send. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             404: components["responses"]["NotFound"];
-            /** @description `TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. */
+            /** @description `TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. For a take signed at once, `STATE_CONFLICT` also when another withdrawal on the venue is unresolved or the margin no longer covers the withdrawal. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5121,6 +5137,7 @@ export interface operations {
                 };
             };
             413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
         };

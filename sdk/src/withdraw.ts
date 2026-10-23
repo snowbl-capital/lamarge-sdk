@@ -3,10 +3,17 @@ import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
 import { CHAINS, checkWithdrawal, escrowOf, insist, same, type Typed } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
-import { signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
+import { signItems, signTyped, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
 import { exclusive, memoryStore, typedData, type SignatureStore } from "./store.ts";
 
 export type Withdrawal = components["schemas"]["Withdrawal"];
+
+/** Checks a withdrawal against its terms at `at` seconds and the caller's own checks, then signs it. */
+export async function signWithdrawal(signer: Signer, typed: Typed, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning): Promise<Hex> {
+  checkWithdrawal(typed, venue, signer.address, destination, amount, at);
+  await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
+  return signTyped(signer, typed);
+}
 
 /**
  * One withdrawal's signature, stored under `key` (with `context`) before its first submission and
@@ -23,9 +30,7 @@ export async function submitWithdrawal(options: {
   let saved = stored === undefined || record(stored).typed === undefined ? undefined : { typed: typedData(record(stored).typed), signature: hex(record(stored).signature) };
   if (!saved) {
     const typed = await options.prepare();
-    checkWithdrawal(typed, venue, signer.address, destination, amount, (options.now ?? Date.now)() / 1000);
-    await options.beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
-    saved = { typed, signature: await signTyped(signer, typed) };
+    saved = { typed, signature: await signWithdrawal(signer, typed, venue, destination, amount, (options.now ?? Date.now)() / 1000, options.beforeSigning) };
     signal?.throwIfAborted();
     await store.save(key, { ...options.context, ...saved });
   }

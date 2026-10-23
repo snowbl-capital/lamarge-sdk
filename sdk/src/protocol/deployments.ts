@@ -8,8 +8,7 @@ export const ESCROW_DEPLOYMENTS: DeploymentManifest = Object.freeze([
   { version: 5, chainId: 137, address: "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6" },
 ]);
 
-/** Retired v5 proxies are trusted for existing proofs, never new signatures. BSC's current proxy
- * only lets owners close and withdraw, since Aster settles inside itself. */
+/** Retired v5 proxies are trusted for existing proofs, never new signatures. */
 export const RETIRED_V5_DEPLOYMENTS = Object.freeze([
   { version: 5, chainId: 56, address: "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6" },
   { version: 5, chainId: 999, address: "0xea5ba9e1c0f5dde572bc08f3af6a3e8b9db73734" },

@@ -50,6 +50,10 @@ test("an account's owner is read from Lighter's answer for that index only", asy
   const answer = (body: unknown, ok = true) => () => Promise.resolve(new Response(JSON.stringify(body), { status: ok ? 200 : 404 }));
   const owner = "0x00000000000000000000000000000000000000aa";
   expect(await lighterAccountOwner(7, undefined, answer({ code: 200, accounts: [{ index: 7, l1_address: owner }] }))).toBe(owner);
+  // Bounded even when the caller gives no signal: a stalled Lighter API must not hang a take.
+  let bounded: AbortSignal | null | undefined;
+  await lighterAccountOwner(7, undefined, async (_, init) => { bounded = init.signal; return Response.json({ code: 200, accounts: [{ index: 7, l1_address: owner }] }); });
+  expect(bounded).toBeInstanceOf(AbortSignal);
   await expect(lighterAccountOwner(7, undefined, answer({ code: 200, accounts: [{ index: 8, l1_address: owner }] }))).rejects.toThrow("unreadable");
   await expect(lighterAccountOwner(7, undefined, answer({ code: 21100 }, false))).rejects.toThrow("unreadable");
 });

@@ -1,15 +1,15 @@
 import { address, array, hex, record, required, type Verified } from "./validation.ts";
 import { ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
-/** The reviewed proxy, the same address on HyperEVM, Polygon and BSC (contracts/README.md#deployments). */
+/** The reviewed proxy, the same address on HyperEVM and Polygon (contracts/README.md#deployments). */
 export const ESCROW = "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6";
 /** Each venue's escrow chain, token decimals and permit domain. A venue the API enables but that is not pinned here is not traded. */
-export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string; exitEscrow?: string }> = {
+export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string }> = {
   hyperliquid: { id: 999, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6, permit: "USDC", version: "2", escrow: ESCROW },
   polymarket: { id: 137, token: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", decimals: 6, permit: "Polymarket USD", version: "1", escrow: ESCROW },
   // Settled inside the venue, no escrow. Quote sets and payment terms name a signing chain id,
   // contract and token: Lighter's L2 chain id, its zkLighter contract on Ethereum and its USDC;
-  // BSC, Aster's vault and USDT. Aster's former BSC escrow only lets owners close and withdraw.
-  aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974", exitEscrow: ESCROW },
+  // BSC, Aster's vault and USDT.
+  aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
   lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
 };
 /** Venues where the maker delivers inside the venue, read by the server, instead of an escrow lock. */
@@ -18,11 +18,11 @@ export const VENUE_SETTLED = new Set(["lighter", "aster"]);
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
 /** The most seconds to a route's second take's `pay_by` when signed at once: the server's 180 s bound and a clock margin. */
 export const ROUTE_PAY_WINDOW_SECONDS = 210;
-/** The escrow holding a venue's commitments; for a venue now settled inside itself, its former escrow. */
+/** The escrow holding a venue's commitments; Aster's former BSC escrow for Aster. @deprecated Read `CHAINS[venue].escrow`. */
 export function escrowOf(venue: string): string {
   const chain = CHAINS[venue];
   insist(chain, "Unknown venue");
-  return chain.exitEscrow ?? chain.escrow;
+  return venue === "aster" ? ESCROW : chain.escrow;
 }
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 /** Aster's BSC chain, where its approvals and withdrawals are signed. */
@@ -34,8 +34,16 @@ const ASTER_DECIMALS = 18;
 /** Cap on an Aster withdrawal fee: 2 USDT (Aster quoted 0.11 in October 2026). */
 const ASTER_MAX_FEE = 2n * 10n ** BigInt(ASTER_DECIMALS);
 const ASTER_APPROVAL_DAYS = 365;
-/** One agent name per environment: approving the same name from another environment's addresses revokes the other agent. */
-const ASTER_AGENT_NAMES = ["LaMarge", "LaMargeDev"];
+/**
+ * LaMarge's own slots on a user's venue accounts in each environment: a new registration replaces
+ * the previous one, so environments never share one. Aster: its agent's name, as approving the same
+ * name from another environment's addresses revokes the other agent; Lighter: its key's index.
+ */
+export const ENVIRONMENT_SLOTS = {
+  production: { asterAgentName: "LaMarge", lighterKeyIndex: 254 },
+  development: { asterAgentName: "LaMargeDev", lighterKeyIndex: 253 },
+} as const;
+const ASTER_AGENT_NAMES: readonly string[] = Object.values(ENVIRONMENT_SLOTS).map(slots => slots.asterAgentName);
 export const MAKER_TIMEOUT_SECONDS = 3600;
 /** The allowance a permit grants, once: the escrow spends it only on actions the owner signs. */
 export const UNLIMITED_ALLOWANCE = (1n << 256n) - 1n;
@@ -114,11 +122,9 @@ function checkTypes(typed: Typed) {
 export function checkEscrowTyped(typed: Typed, venue: string): void {
   const chain = CHAINS[venue];
   insist(chain, "Unknown venue");
-  // A venue settled inside itself signs quote sets in its own domain; its former escrow only
-  // accepts closes and refunds.
-  const exit = chain.exitEscrow !== undefined && ["CloseOffer", "RefundPayment"].includes(typed.primaryType);
-  insist(chain.exitEscrow === undefined || exit || typed.primaryType === "QuoteSet", "Unexpected signing request");
-  checkEscrowTypedAt(typed, venue, exit ? escrowOf(venue) : chain.escrow);
+  // A venue settled inside itself signs only quote sets, in its own domain.
+  insist(!VENUE_SETTLED.has(venue) || typed.primaryType === "QuoteSet", "Unexpected signing request");
+  checkEscrowTypedAt(typed, venue, chain.escrow);
 }
 /** Proof verification accepts the current protocol on reviewed deployments only. */
 export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: DeploymentManifest = ESCROW_PROOF_DEPLOYMENTS): EscrowDeployment {

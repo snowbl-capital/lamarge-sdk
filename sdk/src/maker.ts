@@ -6,7 +6,7 @@ import type { components } from "./generated/api.ts";
 import { ESCROW_DEPLOYMENTS, requireSigningDomains, type DeploymentManifest } from "./protocol/deployments.ts";
 import { checkMakerIntent, type FundingSource } from "./protocol/intents.ts";
 import { checkPreparedLines, type PriceLine } from "./protocol/lines.ts";
-import { checkCloseOrders, checkPreparedQuote, insist, same, VENUE_SETTLED, type QuoteIntent } from "./protocol/protocol.ts";
+import { checkCloseOrders, insist, same, VENUE_SETTLED } from "./protocol/protocol.ts";
 import { signIn, signOut } from "./session.ts";
 import { signItems, type Signer } from "./signer.ts";
 import { signedItems, type SignatureStore } from "./store.ts";
@@ -14,7 +14,7 @@ import { required } from "./protocol/validation.ts";
 
 export type Order = components["schemas"]["Order"];
 export type Credential = components["schemas"]["CredentialCreated"];
-/** An EOA key, or a deployed ERC-1271 delegate whose signature is collected elsewhere (`prepareUnsigned`). */
+/** An EOA key, or a deployed ERC-1271 delegate whose signature is collected elsewhere (`prepareLinesUnsigned`). */
 export type QuoteSigner = Pick<Signer, "address" | "signTypedData">;
 /** A fill as the event journal shows it, its venues named as in REST fills. */
 export type FeedFill = Omit<components["schemas"]["FillPreview"], "from" | "to"> & { from_venue: string; to_venue: string };
@@ -34,11 +34,12 @@ export class Maker {
   order(id: string) { return this.client.call("getOrder", { path: { id } }); }
   /**
    * Links the financial key's own account on `venue`, or `owner`'s, which signs the link message,
-   * then the setup step a maker pool needs: on Aster, approving LaMarge's agent.
+   * then the setup step a maker pool needs: on Aster, approving LaMarge's agent, the deployment's own
+   * `asterAgentName` when given (`ENVIRONMENT_SLOTS`).
    */
-  async link(venue: string, owner?: Signer) {
+  async link(venue: string, owner?: Signer, asterAgentName?: string) {
     const linked = await linkAccount(this.client, this.account, venue, owner ?? this.account);
-    if (venue === "aster") await setUpVenue(this.client, venue, owner ?? this.account, { steps: ["agent"] });
+    if (venue === "aster") await setUpVenue(this.client, venue, owner ?? this.account, { steps: ["agent"], asterAgentName });
     return linked;
   }
   async createCredential(name: string, quoteSigner: string, days = 30): Promise<Credential> {
@@ -162,30 +163,10 @@ export class Quoter {
     }
     return this.timed(() => this.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures }, retry: true }));
   }
-  /** Deprecated: publish price lines. Prepares `order`'s quote set and checks it; signing is the caller's, as for a contract delegate. */
-  async prepareUnsigned(order: Order, quotes: QuoteIntent[], size: bigint, validUntil: number) {
-    insist(order.quote_identity_id === this.identity && same(order.quote_signer, this.account.address), "The order is quoted by another identity");
-    insist(order.state === "live", "The order is not live");
-    insist(size > 0n, "The quote size must be positive");
-    insist(size <= BigInt(order.available_to_quote), "The quote size exceeds the order's available capital");
-    insist(quotes.length > 0, "Provide at least one quote");
-    const asks = quotes.map(({ recipient: _, ...ask }) => ask);
-    const prepared = await this.timed(() => this.client.call("prepareQuotes", { path: { id: order.id }, body: { valid_until: validUntil, quote_size: String(size), quotes: asks } }));
-    checkPreparedQuote(prepared, order, quotes, validUntil, String(size));
-    requireSigningDomains(prepared.to_sign, this.manifest);
-    return prepared;
-  }
-  /** Deprecated: publish price lines. */
-  async prepare(order: Order, quotes: QuoteIntent[], size: bigint, validUntil: number) {
-    const prepared = await this.prepareUnsigned(order, quotes, size, validUntil);
-    const [signed] = await signItems(this.account, prepared.to_sign, this.manifest);
-    insist(signed, "Nothing to sign");
-    return { order_id: order.id, draft_id: prepared.draft_id, signature: signed.signature };
-  }
-  /** Deprecated: publish price lines; updates drop the identity's lines. All distinct order updates and cancels commit atomically; a cancel is never replayed, as it would void the sequence that follows. */
-  batch(updates: { order_id: string; draft_id: string; signature: string }[], cancels: string[] = []) {
-    insist(updates.length + cancels.length > 0 && updates.length + cancels.length <= 50, "A batch holds 1 to 50 updates and cancels");
-    return this.timed(() => this.client.call("postV1QuotesBatch", { body: { updates, cancels }, retry: cancels.length === 0 }));
+  /** Pulls the quotes of 1 to 50 orders, all or none; never replayed, as a replayed cancel would void the sequence that follows. */
+  cancel(orderIds: string[]) {
+    insist(orderIds.length > 0 && orderIds.length <= 50, "A cancel holds 1 to 50 orders");
+    return this.timed(() => this.client.call("postV1QuotesBatch", { body: { cancels: orderIds } }));
   }
   /** The identity's fills, current and the last final ones. */
   fills() { return this.timed(() => this.client.call("getFills")); }

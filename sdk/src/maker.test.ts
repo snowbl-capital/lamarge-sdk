@@ -8,12 +8,12 @@ const account=privateKeyToAccount(`0x${"11".repeat(32)}`), quoteAccount=privateK
 const operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
 /** A client of the local API whose every request is answered by `answer`. */
 const api=(answer:(url:string,init?:RequestInit)=>Response|Promise<Response>,token?:string)=>createClient({apiUrl:"http://localhost:8080",token,fetch:Object.assign(async(input:RequestInfo|URL,init?:RequestInit)=>answer(String(input),init),{preconnect:globalThis.fetch.preconnect})});
-function order(venue="hyperliquid"):Order {return {preparation_id:null,held_in:"escrow",escrow_available:"5000000",received_by_venue:[],quotable:"0",filled:"0",margin_move:null,transactions:[],created_at:"2026-10-17T00:00:00Z",updated_at:"2026-10-17T00:00:00Z",capital_pool:true,id,venue,receive_venue:venue==="hyperliquid"?"polymarket":"hyperliquid",owner_address:account.address,quote_identity_id:"credential-1",quote_signer:quoteAccount.address,amount:"5000000",client_order_id:"persistent-1",state:"preparing",error:null,held:"5000000",delivery_fee:"0",available_to_quote:"0",revision:"1",last_sequence:0,quote_set:null};}
+function order(venue="hyperliquid"):Order {return {preparation_id:null,held_in:"escrow",escrow_available:"5000000",received_by_venue:[],quotable:"0",filled:"0",margin_move:null,transactions:[],created_at:"2026-10-17T00:00:00Z",updated_at:"2026-10-17T00:00:00Z",capital_pool:true,id,venue,owner_address:account.address,quote_identity_id:"credential-1",quote_signer:quoteAccount.address,amount:"5000000",client_order_id:"persistent-1",state:"preparing",error:null,held:"5000000",delivery_fee:"0",available_to_quote:"0",revision:"1",last_sequence:0,quote_set:null};}
 function fund(o:Order):SignItem {return {kind:"fund",signer:account.address,typed_data:{types:{EIP712Domain,...schemas.FundOffer},primaryType:"FundOffer",domain:{name:"LaMarge",version:"1",chainId:required(CHAINS[o.venue]).id,verifyingContract:ESCROW},message:{owner:account.address,offerId:id,amount:o.amount,deposit:o.amount,quoteSigner:quoteAccount.address,operator,minQuoteSequence:"1",nonce:"0",deadline:Math.floor(Date.now()/1000)+3600}}};}
 const testDeployments = Object.values(CHAINS).map(chain=>({ version: 5 as const, chainId:chain.id, address:chain.escrow }));
 const credential={id:"credential-1",quote_signer:quoteAccount.address};
 function asked(o:Order) {return {venue:o.venue,amount:o.amount,client_request_id:o.client_order_id,funding_source:"wallet" as const};}
-function prepared(o:Order,items=[fund(o)]):PreparedMaker & {order:Order} {return {id:"preparation-1",client_request_id:o.client_order_id,state:"preparing",venue:o.venue,order:o,to_sign:items,expires_at:new Date(Math.floor(Date.now()/1000)*1000+3600_000).toISOString(),expected_revision:o.revision,sequence:null,intent:{amount:o.amount,quote:null,quote_identity_id:credential.id,funding_source:"wallet"},funding:{existing_available:"0",added_amount:o.amount,wallet_amount:o.amount,venue_amount:"0",idle_amount:"0"}};}
+function prepared(o:Order,items=[fund(o)]):PreparedMaker & {order:Order} {return {id:"preparation-1",client_request_id:o.client_order_id,state:"preparing",venue:o.venue,order:o,to_sign:items,expires_at:new Date(Math.floor(Date.now()/1000)*1000+3600_000).toISOString(),expected_revision:o.revision,sequence:null,intent:{amount:o.amount,quote_identity_id:credential.id,funding_source:"wallet"},funding:{existing_available:"0",wallet_amount:o.amount,venue_amount:"0",idle_amount:"0"}};}
 function readResponse(url:string) {if(url.endsWith("/balances"))return Response.json(["hyperliquid","polymarket"].map(venue=>({venue,address:account.address})));if(url.endsWith("/orders"))return Response.json([]);}
 test("master provisioning validates both directions and persists signatures before byte-identical retry",async()=>{
   for(const venue of ["hyperliquid","polymarket"]) {
@@ -42,50 +42,6 @@ test("malicious operator authority is rejected before the first master signature
   const client=api(url=>readResponse(url) ?? Response.json(prepared(o,[item])));
   await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow("The signing request differs from your instructions");expect(signatures).toBe(0);
 });
-test("delegated quoting validates both directions and sends only scoped authority",async()=>{
-  const headers:Headers[]=[];
-  const liveOrder=(venue:string):Order=>({...order(venue),id:venue==="hyperliquid"?id:`0x${"bb".repeat(32)}`,state:"live",available_to_quote:"5000000"});
-  const scoped=api((url,init)=>{
-    headers.push(new Headers(init?.headers));
-    const body=record(JSON.parse(String(init?.body)));
-    const venue=url.includes(id)?"hyperliquid":"polymarket";
-    const o=liveOrder(venue), q:Record<string,unknown>={...record(array(body.quotes)[0]),recipient:account.address}, qVenue=String(q.venue), expiresAt=Number(body.valid_until)+3601;
-    return Response.json({draft_id:"draft-1",sequence:2,valid_until:body.valid_until,quote_size:body.quote_size,expires_at:expiresAt,quotes:[q],to_sign:[{kind:"quote_set",signer:quoteAccount.address,typed_data:{types:{EIP712Domain,...schemas.QuoteSet},primaryType:"QuoteSet",domain:{name:"LaMarge",version:"1",chainId:required(CHAINS[venue]).id,verifyingContract:ESCROW},message:{owner:account.address,offerId:o.id,sequence:2,expiresAt,quotes:[{venue:qVenue,chainId:required(CHAINS[qVenue]).id,token:required(CHAINS[qVenue]).token,recipient:q.recipient,supply:q.supply,receive:q.receive,minFill:q.min_fill}]}}}]});
-  },"mk_scoped");
-  let signed=0;const signing={...quoteAccount,signTypedData:async()=>{signed++;return "0x00" as const;}};
-  const client=new Quoter(scoped,"credential-1",signing,testDeployments);
-  for(const venue of ["hyperliquid","polymarket"]) {
-    const o=liveOrder(venue);
-    const result=await client.prepare(o,[{venue:required(o.receive_venue),recipient:account.address,supply:o.amount,receive:"5000100",min_fill:"1000000"}],5_000_000n,Math.floor(Date.now()/1000)+25);
-    expect(result.draft_id).toBe("draft-1");
-  }
-  expect(signed).toBe(2);expect(headers.every(h=>h.get("authorization")==="Bearer mk_scoped")).toBe(true);
-});
-
-test("one delegated signature covers both destinations of a shared inventory", async () => {
-  const o = { ...order(), state: "live" as const, available_to_quote:"5000000" };
-  const quotes = [
-    { venue: "polymarket", recipient: account.address, supply: o.amount, receive: "5500000", min_fill: "1000000" },
-    { venue: "aster", recipient: account.address, supply: o.amount, receive: "5000000000000000000", min_fill: "1000000" },
-  ];
-  let prompts = 0;
-  const signing = { ...quoteAccount, signTypedData: async () => { prompts++; return "0x00" as const; } };
-  const client = api((_url, init) => {
-    const body = record(JSON.parse(String(init?.body))), expiresAt = Number(body.valid_until) + 3601;
-    expect(body.quotes).toHaveLength(2);
-    expect(body.quote_size).toBe("5000000");
-    return Response.json({ draft_id: "shared", sequence: 2, valid_until: body.valid_until, quote_size: body.quote_size, expires_at: expiresAt, quotes, to_sign: [{ kind: "quote_set", signer: quoteAccount.address, typed_data: {
-      types: { EIP712Domain, ...schemas.QuoteSet }, primaryType: "QuoteSet", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
-      message: { owner: account.address, offerId: o.id, sequence: 2, expiresAt, quotes: quotes.map(q => ({ venue: q.venue, chainId: required(CHAINS[q.venue]).id, token: required(CHAINS[q.venue]).token, recipient: q.recipient, supply: q.supply, receive: q.receive, minFill: q.min_fill })) },
-    } }] });
-  }, "mk_scoped");
-  const quoter = new Quoter(client, "credential-1", signing, testDeployments);
-  expect((await quoter.prepare(o, quotes, 5_000_000n, Math.floor(Date.now() / 1000) + 25)).draft_id).toBe("shared");
-  expect(prompts).toBe(1);
-  await expect(quoter.prepare(o, [required(quotes[0]), required(quotes[0])], 5_000_000n, Math.floor(Date.now() / 1000) + 25)).rejects.toThrow();
-  expect(prompts).toBe(1);
-});
-
 test("funding against an unpinned escrow never reaches the financial key", async () => {
   let prompts = 0;
   const o = order(), signing = { ...account, signTypedData: async () => { prompts++; return "0x00" as const; } };
@@ -97,7 +53,7 @@ test("funding against an unpinned escrow never reaches the financial key", async
 test("provisioning never signs a replaced destination or excessive shortfall", async () => {
   const o=order();let prompts=0;
   const signing={...account,signTypedData:async()=>{prompts++;return "0x00" as const;}};
-  for(const mutate of [(p:PreparedMaker)=>{p.funding.wallet_amount="5000001";},(p:PreparedMaker)=>{p.intent.quote={receive_venue:"aster",receive:"1",min_fill:"1"};}]) {
+  for(const mutate of [(p:PreparedMaker)=>{p.funding.wallet_amount="5000001";}]) {
     const p=prepared(o);mutate(p);
     const client=api(url=>readResponse(url) ?? Response.json(p));
     await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow("The signing request differs from your instructions");
@@ -105,30 +61,54 @@ test("provisioning never signs a replaced destination or excessive shortfall", a
   expect(prompts).toBe(0);
 });
 
-test("external contract quoting reviews its draft without an EOA key and preserves opaque signature bytes", async () => {
-  const safe = "0x1271000000000000000000000000000000000001" as const;
-  const o = { ...order(), quote_signer: safe, state: "live" as const, available_to_quote:"5000000" };
-  const q = { venue: "polymarket", recipient: account.address, supply: o.amount, receive: "5003250", min_fill: "1000000" };
-  const signature = "0x00112233445566778899aabbccddeeff";
-  let submitted = false;
-  const client = api((url, init) => {
-    const body = record(JSON.parse(String(init?.body))), expiresAt = Number(body.valid_until) + 3601;
-    if (url.endsWith("/quotes/batch")) {
-      expect(body.updates).toEqual([{ order_id: o.id, draft_id: "safe-draft", signature }]);
-      submitted = true;
-      return Response.json({ results: [] });
-    }
-    return Response.json({ draft_id: "safe-draft", sequence: 2, valid_until: body.valid_until, quote_size: body.quote_size, expires_at: expiresAt, quotes: [q], to_sign: [{ kind: "quote_set", signer: safe, typed_data: {
-      types: { EIP712Domain, ...schemas.QuoteSet }, primaryType: "QuoteSet", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
-      message: { owner: o.owner_address, offerId: o.id, sequence: 2, expiresAt, quotes: [{ venue: q.venue, chainId: 137, token: required(CHAINS.polymarket).token, recipient: q.recipient, supply: q.supply, receive: q.receive, minFill: q.min_fill }] },
-    } }] });
+const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
+const lineQuotes = () => [{ venue: "polymarket", recipient: account.address, supply: "5000000", receive: "5001000", min_fill: "1000000" }];
+/** An API whose one live Hyperliquid pool, quoted by `signer`, is prepared with `quotes` for `lines`; `seen` gets every request. */
+function linesApi(signer: string, validUntil: number, quotes: ReturnType<typeof lineQuotes>, seen: (url: string, init?: RequestInit) => void) {
+  const pool = { ...order(), quote_signer: signer, state: "live" as const, last_sequence: 1 }, expiresAt = validUntil + 3601;
+  return api((url, init) => {
+    seen(url, init);
+    if (url.endsWith("/quote-lines") && !init?.body) return Response.json({ quote_identity_id: "credential-1", revision: "4", lines: [] });
+    if (url.endsWith("/orders")) return Response.json([pool]);
+    const body = record(JSON.parse(String(init?.body)));
+    if (url.endsWith("/quote-lines/prepare")) return Response.json({ id: "preparation-1", quote_identity_id: "credential-1", expected_revision: body.expected_revision, valid_until: body.valid_until, lines, cancels: [],
+      drafts: [{ order_id: id, venue: "hyperliquid", draft_id: "draft-1", sequence: 2, valid_until: validUntil, expires_at: expiresAt, quote_size: "5000000", quotes, to_sign: [{ kind: "quote_set", signer, typed_data: {
+        types: { EIP712Domain, ...schemas.QuoteSet }, primaryType: "QuoteSet", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
+        message: { owner: account.address, offerId: id, sequence: 2, expiresAt, quotes: quotes.map(q => ({ venue: q.venue, chainId: 137, token: required(CHAINS.polymarket).token, recipient: q.recipient, supply: q.supply, receive: q.receive, minFill: q.min_fill })) } } }] }] });
+    return Response.json({ quote_identity_id: "credential-1", revision: "5", lines });
   }, "mk_scoped");
+}
+
+test("external contract quoting reviews its lines without an EOA key and preserves opaque signature bytes", async () => {
+  const safe = "0x1271000000000000000000000000000000000001" as const;
+  const signature = "0x00112233445566778899aabbccddeeff", validUntil = Math.floor(Date.now() / 1000) + 120;
+  let submitted = false;
+  const client = linesApi(safe, validUntil, lineQuotes(), (url, init) => {
+    if (!url.endsWith("/quote-lines") || !init?.body) return;
+    expect(JSON.parse(String(init.body))).toEqual({ preparation_id: "preparation-1", signatures: [{ draft_id: "draft-1", signature }] });
+    submitted = true;
+  });
   const quoter = new Quoter(client, "credential-1", { address: safe }, testDeployments);
-  const draft = await quoter.prepareUnsigned(o, [q], 5_000_000n, Math.floor(Date.now() / 1000) + 120);
+  const prepared = await quoter.prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil);
+  const draft = required(prepared.drafts[0]);
   expect(required(draft.to_sign[0]).signer).toBe(safe);
-  await quoter.batch([{ order_id: o.id, draft_id: draft.draft_id, signature }]);
+  await quoter.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures: [{ draft_id: draft.draft_id, signature }] } });
   expect(submitted).toBe(true);
-  await expect(new Quoter(client, "credential-1", { address: safe }, []).prepareUnsigned(o, [q], 5_000_000n, Math.floor(Date.now() / 1000) + 120)).rejects.toThrow("balance upgrade is not available");
+  await expect(new Quoter(client, "credential-1", { address: safe }, []).prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil)).rejects.toThrow("balance upgrade is not available");
+});
+
+test("a cancel sends only its 1 to 50 orders and is never replayed", async () => {
+  const requests: [string, unknown][] = [];
+  const client = api((url, init) => {
+    requests.push([url, JSON.parse(String(init?.body))]);
+    return Response.json({ error: { code: "TEMPORARY", message: "Lost acknowledgement", retryable: true } }, { status: 503 });
+  }, "mk_scoped");
+  const quoter = new Quoter(client, "credential-1", quoteAccount);
+  await expect(quoter.cancel([id])).rejects.toThrow();
+  expect(requests).toEqual([["http://localhost:8080/v1/quotes/batch", { cancels: [id] }]]);
+  expect(() => quoter.cancel([])).toThrow("1 to 50");
+  expect(() => quoter.cancel(Array.from({ length: 51 }, () => id))).toThrow("1 to 50");
+  expect(requests).toHaveLength(1);
 });
 
 test("the fill feed keeps the identity's fills from one snapshot and their events, replayed while the stream is down",async()=>{
@@ -190,7 +170,7 @@ test("a Lighter pool is opened for the dedicated owner linked there; escrow fund
   const client=api(url=>{
     if(url.endsWith("/balances"))return Response.json([{venue:"hyperliquid",address:account.address},{venue:"lighter",address:lighterOwner,venue_wallet:"731033"}]);
     if(url.endsWith("/orders"))return Response.json([]);
-    if(url.endsWith("/prepare"))return Response.json({...prepared(o,[]),state:"complete",venue:"lighter",funding:{existing_available:"0",added_amount:o.amount,wallet_amount:"0",venue_amount:o.amount,idle_amount:"0"}});
+    if(url.endsWith("/prepare"))return Response.json({...prepared(o,[]),state:"complete",venue:"lighter",funding:{existing_available:"0",wallet_amount:"0",venue_amount:o.amount,idle_amount:"0"}});
     return new Response("unexpected",{status:500});
   });
   const master=new Maker(client,account,operator,"http://localhost:5173",testDeployments);
@@ -228,26 +208,17 @@ test("a funding is followed by its preparation: a failed top-up throws though th
 });
 
 test("delegated lines are checked, then every pool's set is signed and published together", async () => {
-  const pool = { ...order(), state: "live" as const, last_sequence: 1 };
-  const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
-  const quotes = [{ venue: "polymarket", recipient: account.address, supply: "5000000", receive: "5001000", min_fill: "1000000" }];
-  const posted: Record<string, unknown>[] = [];
-  const validUntil = Math.floor(Date.now() / 1000) + 25, expiresAt = validUntil + 3601;
-  const client = api((url, init) => {
-    if (url.endsWith("/quote-lines") && !init?.body) return Response.json({ quote_identity_id: "credential-1", revision: "4", lines: [] });
-    if (url.endsWith("/orders")) return Response.json([pool]);
-    const body = record(JSON.parse(String(init?.body)));
-    posted.push(body);
-    if (url.endsWith("/quote-lines/prepare")) return Response.json({ id: "preparation-1", quote_identity_id: "credential-1", expected_revision: body.expected_revision, valid_until: body.valid_until, lines, cancels: [],
-      drafts: [{ order_id: id, venue: "hyperliquid", draft_id: "draft-1", expected_revision: null, sequence: 2, valid_until: validUntil, expires_at: expiresAt, quote_size: "5000000", quotes, to_sign: [{ kind: "quote_set", signer: quoteAccount.address, typed_data: {
-        types: { EIP712Domain, ...schemas.QuoteSet }, primaryType: "QuoteSet", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
-        message: { owner: account.address, offerId: id, sequence: 2, expiresAt, quotes: quotes.map(q => ({ venue: q.venue, chainId: 137, token: required(CHAINS.polymarket).token, recipient: q.recipient, supply: q.supply, receive: q.receive, minFill: q.min_fill })) } } }] }] });
-    return Response.json({ quote_identity_id: "credential-1", revision: "5", lines });
-  }, "mk_scoped");
+  const posted: Record<string, unknown>[] = [], headers: Headers[] = [], quotes = lineQuotes();
+  const validUntil = Math.floor(Date.now() / 1000) + 25;
+  const client = linesApi(quoteAccount.address, validUntil, quotes, (_url, init) => {
+    headers.push(new Headers(init?.headers));
+    if (init?.body) posted.push(record(JSON.parse(String(init.body))));
+  });
   const quoter = new Quoter(client, "credential-1", quoteAccount, testDeployments);
   expect((await quoter.publishLines(lines, { polymarket: account.address }, validUntil)).revision).toBe("5");
   expect(posted[0]?.expected_revision).toBe("4");
   expect(array(posted[1]?.signatures)).toHaveLength(1);
+  expect(headers.every(h => h.get("authorization") === "Bearer mk_scoped")).toBe(true);
   // A server asking for a lower price is refused before any signature.
   quotes[0] = { ...required(quotes[0]), receive: "5000999" };
   posted.length = 0;

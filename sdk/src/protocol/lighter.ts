@@ -5,15 +5,15 @@
  * from Lighter's Go libraries and checked against their vectors.
  */
 import { DIAG, EXTERNAL, INTERNAL } from "./lighter-constants.ts";
-import { CHAINS } from "./protocol.ts";
+import { CHAINS, ENVIRONMENT_SLOTS } from "./protocol.ts";
 import { required } from "./validation.ts";
 
 /** Lighter's L2 chain id, which every transaction hash names. */
 export const LIGHTER_CHAIN_ID = required(CHAINS.lighter).id;
 /** The API key index of LaMarge's key on a taker's account in production. */
-export const TAKER_API_KEY = 254;
-/** LaMarge's key indexes: one per environment, as a registration replaces the key at its index (253 in development). */
-export const TAKER_API_KEYS: readonly number[] = [TAKER_API_KEY, 253];
+export const TAKER_API_KEY: number = ENVIRONMENT_SLOTS.production.lighterKeyIndex;
+/** LaMarge's key indexes, one per environment (`ENVIRONMENT_SLOTS`). */
+export const TAKER_API_KEYS: readonly number[] = Object.values(ENVIRONMENT_SLOTS).map(slots => slots.lighterKeyIndex);
 /** A maker bot's API key slot, `LIGHTER_API_KEY_INDEX`: 4 unless set, below LaMarge's taker keys. */
 export function makerKeySlot(value = "4"): number {
   const slot = Number(value);
@@ -28,10 +28,11 @@ export const COLLATERAL_ROUTE = 0;
 /** Lighter's public API, read directly so account data does not depend on LaMarge. */
 export const LIGHTER_API = "https://mainnet.zklighter.elliot.ai";
 
-/** The address owning Lighter account `index`, as Lighter's public API reads it. */
+/** The address owning Lighter account `index`, as Lighter's public API reads it, within ten seconds. */
 export async function lighterAccountOwner(index: number, signal?: AbortSignal, fetcher: ((url: string, init: RequestInit) => Promise<Response>) | undefined = fetch): Promise<string> {
   fetcher ??= fetch;
-  const response = await fetcher(`${LIGHTER_API}/api/v1/account?by=index&value=${index}`, signal ? { signal } : {});
+  const timeout = AbortSignal.timeout(10_000);
+  const response = await fetcher(`${LIGHTER_API}/api/v1/account?by=index&value=${index}`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   const body: unknown = response.ok ? await response.json() as unknown : undefined;
   const accounts: unknown = typeof body === "object" && body !== null ? Reflect.get(body, "accounts") : undefined;
   const account: unknown = Array.isArray(accounts) && accounts.length === 1 ? accounts[0] : undefined;

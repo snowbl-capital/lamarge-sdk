@@ -55,3 +55,31 @@ test("a page behind the cursor stops the feed", async () => {
   await feed.next();
   await expect(feed.next()).rejects.toThrow("cursor moved backwards");
 });
+
+test("a refused connection ends the stream without the unhandled error `ws` raises", async () => {
+  class Socket {
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor() {
+      queueMicrotask(() => {
+        if (!this.onerror) throw new Error("Unhandled error event");
+        this.onerror();
+        this.onclose?.();
+      });
+    }
+    send() {}
+    close() { this.onclose?.(); }
+  }
+  const fetch = Object.assign(async (input: RequestInfo | URL) => new URL(String(input)).pathname === "/v1/snapshot"
+    ? Response.json({ cursor: "3", books: [] }) : Response.json(page("4")), { preconnect: globalThis.fetch.preconnect });
+  const controller = new AbortController();
+  const seen: Change[] = [];
+  for await (const change of changes(createClient({ apiUrl: "http://localhost:8080", fetch }), { scope: "public", signal: controller.signal, WebSocket: Socket })) {
+    seen.push(change);
+    if (seen.length === 2) controller.abort();
+  }
+  expect(seen.map(change => "resync" in change ? `resync ${change.resync.cursor}` : change.next_cursor)).toEqual(["resync 3", "4"]);
+});
+

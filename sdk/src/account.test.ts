@@ -76,7 +76,7 @@ function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: num
   const progress: SetupProgress[] = [];
   // A wait lets the venue show the step it was awaiting.
   const sleep = async () => { const pending = steps.findIndex(step => step.status === "pending"); if (pending >= 0) steps[pending] = { ...required(steps[pending]), status: "done" }; };
-  const run = () => setUpVenue(createClient({ apiUrl: "http://localhost:8080", fetch }), venue, signer, { onProgress: value => progress.push(value), sleep });
+  const run = (pins: { lighterKeyIndex?: number } = {}) => setUpVenue(createClient({ apiUrl: "http://localhost:8080", fetch }), venue, signer, { ...pins, onProgress: value => progress.push(value), sleep });
   return { calls, typed, messages, progress, run };
 }
 
@@ -122,6 +122,13 @@ test("Lighter's key is registered at LaMarge's development index, never at anoth
   expect((await fixture("lighter", [status("api_key")], done, owner, 253).run()).ready).toBe(true);
   const other = fixture("lighter", [status("api_key")], done, owner, 4);
   await expect(other.run()).rejects.toThrow("Unexpected Lighter key registration");
+  expect(other.messages).toEqual([]);
+});
+
+test("a deployment's own Lighter key index refuses the other environment's registration", async () => {
+  const done = (step: Step) => ({ ...step, status: "done" });
+  const other = fixture("lighter", [status("api_key")], done, owner, 253);
+  await expect(other.run({ lighterKeyIndex: 254 })).rejects.toThrow("Unexpected Lighter key registration");
   expect(other.messages).toEqual([]);
 });
 

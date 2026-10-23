@@ -41,16 +41,15 @@ test("an Aster withdrawal is pinned to the account, BSC, USDT, a bounded fee and
   expect(() => checkWithdrawal(action(), "aster", owner, agent, 10n * USDT, now)).toThrow();
 });
 
-test("Aster signs quote sets in its own domain; its former escrow only ends what it holds", () => {
+test("Aster signs only quote sets, in its own domain", () => {
   const chain = pinned();
   const typed = (primaryType: string, verifyingContract: string): Typed => ({ types: { EIP712Domain, ...required(schemas[primaryType]) }, primaryType, domain: { name: "LaMarge", version: "1", chainId: chain.id, verifyingContract }, message: Object.fromEntries(required(schemas[primaryType]?.[primaryType]).map(field => [field.name, "0"])) });
+  // Deprecated, kept for SDK users: Aster's former BSC escrow.
   expect(escrowOf("aster")).toBe(ESCROW);
   expect(escrowOf("hyperliquid")).toBe(ESCROW);
   expect(() => checkEscrowTyped(typed("QuoteSet", chain.escrow), "aster")).not.toThrow();
   expect(() => checkEscrowTyped(typed("QuoteSet", ESCROW), "aster")).toThrow("Unexpected signing domain");
-  expect(() => checkEscrowTyped(typed("CloseOffer", ESCROW), "aster")).not.toThrow();
-  expect(() => checkEscrowTyped(typed("CloseOffer", chain.escrow), "aster")).toThrow("Unexpected signing domain");
-  for (const primary of ["FundOffer", "PayTake"]) for (const escrow of [chain.escrow, ESCROW]) expect(() => checkEscrowTyped(typed(primary, escrow), "aster")).toThrow("Unexpected signing request");
+  for (const primary of ["FundOffer", "PayTake", "CloseOffer", "RefundPayment"]) for (const escrow of [chain.escrow, ESCROW]) expect(() => checkEscrowTyped(typed(primary, escrow), "aster")).toThrow("Unexpected signing request");
 });
 
 test("a take into Aster names its own escrow", () => {

@@ -1,11 +1,9 @@
 import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
-/** `replace` names a position in the current set; without it, the quote adds a price level on `receive_venue`. */
-export type MakerQuoteIntent = { receive_venue: string; receive: string; min_fill: string; quote_validity_seconds?: number | null | undefined; replace?: { sequence: number; index: number } | undefined };
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
 export type FundingSource = "wallet" | "venue";
-type MakerIntent = { venue: string; amount: string; quote?: MakerQuoteIntent | null; quote_identity_id?: string | null | undefined; client_request_id: string; funding_source: FundingSource };
+type MakerIntent = { venue: string; amount: string; quote_identity_id?: string | null | undefined; client_request_id: string; funding_source: FundingSource };
 export type MakerOrderSnapshot = {
   id: string; venue: string; owner_address: string; quote_signer: string; quote_identity_id: string;
   state: string; revision: string; last_sequence: number; available_to_quote: string;
@@ -14,11 +12,11 @@ export type MakerOrderSnapshot = {
 export type PreparedMaker = {
   id: string; client_request_id: string; state: string; venue: string; order: MakerOrderSnapshot;
   expires_at: string; expected_revision: string; sequence: number | null; to_sign: SignItem[];
-  intent: { amount: string; quote: MakerQuoteIntent | null; quote_identity_id: string; funding_source: string };
-  funding: { existing_available: string; added_amount: string; wallet_amount: string; venue_amount: string; idle_amount: string };
+  intent: { amount: string; quote_identity_id: string; funding_source: string };
+  funding: { existing_available: string; wallet_amount: string; venue_amount: string; idle_amount: string };
 };
-type MakerAuthority = { owner: string; quoteSigner: string; quoteIdentityId: string; operator: string; recipient?: string; existingOrder: MakerOrderSnapshot | null };
-/** Bind all new capital and the complete replacement quote set before any wallet request. */
+type MakerAuthority = { owner: string; quoteSigner: string; quoteIdentityId: string; operator: string; existingOrder: MakerOrderSnapshot | null };
+/** Bind all new capital, and what is re-signed of the current quote set, before any wallet request. */
 export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: MakerIntent, authority: MakerAuthority, now = Date.now() / 1000): asserts prepared is T & { to_sign: Verified<SignItem[]> } {
   const { owner, quoteSigner, quoteIdentityId, operator, existingOrder } = authority;
   const { order, funding, intent, to_sign: items } = prepared;
@@ -34,57 +32,36 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
   insist(intent.funding_source === input.funding_source, differs("intent.funding_source"));
   insist(prepared.expected_revision === order.revision, differs("expected_revision"));
   checkDeadline(Math.floor(Date.parse(prepared.expires_at) / 1000), 3600, now);
-  const asked = input.quote ?? null, echoed = intent.quote;
-  insist(asked === null ? echoed === null : echoed !== null, differs("intent.quote"));
-  if (asked && echoed) {
-    insist(echoed.receive_venue === asked.receive_venue, differs("intent.quote.receive_venue"));
-    insist(echoed.receive === asked.receive, differs("intent.quote.receive"));
-    insist(echoed.min_fill === asked.min_fill, differs("intent.quote.min_fill"));
-    insist((echoed.quote_validity_seconds ?? 0) === (asked.quote_validity_seconds ?? 0), differs("intent.quote.quote_validity_seconds"));
-    insist(echoed.replace?.sequence === asked.replace?.sequence && echoed.replace?.index === asked.replace?.index, differs("intent.quote.replace"));
-  }
-  insist(!asked?.replace || existingOrder?.quote_set?.sequence === asked.replace.sequence, "Quotes changed; review again");
   if (existingOrder) {
     insist(same(order.id, existingOrder.id), differs("order.id"));
     insist(existingOrder.venue === input.venue && same(existingOrder.owner_address, owner) && same(existingOrder.quote_signer, quoteSigner) && existingOrder.quote_identity_id === quoteIdentityId, differs("existing order"));
     insist(order.last_sequence === existingOrder.last_sequence && order.available_to_quote === existingOrder.available_to_quote && uint(order.revision) >= uint(existingOrder.revision), "Maker capital changed; review again");
   } else insist(order.last_sequence === 0 && uint(order.available_to_quote) === 0n, differs("order"));
   const amount = uint(input.amount), available = existingOrder ? uint(existingOrder.available_to_quote) : 0n;
-  const added = uint(funding.added_amount), idle = uint(funding.idle_amount), wallet = uint(funding.wallet_amount), venue = uint(funding.venue_amount), existing = uint(funding.existing_available);
+  const idle = uint(funding.idle_amount), wallet = uint(funding.wallet_amount), venue = uint(funding.venue_amount), existing = uint(funding.existing_available);
   const deposit = wallet + venue;
   insist(amount > 0n, differs("amount"));
   insist(existing >= available, differs("funding.existing_available"));
-  insist(added === idle + deposit, differs("funding.added_amount"));
+  insist(amount === idle + deposit, differs("funding.idle_amount"));
   insist((input.funding_source === "venue" ? wallet : venue) === 0n, differs(input.funding_source === "venue" ? "funding.wallet_amount" : "funding.venue_amount"));
-  const kept: (QuoteIntent & { index: number })[] = [];
+  const quotes: QuoteIntent[] = [];
   // A deposit for a delegated quoter does not publish prices on its behalf.
   const prior = existingOrder && !["closed", "failed"].includes(existingOrder.state) ? existingOrder.quote_set : null;
-  if ((asked || !input.quote_identity_id) && prior && Date.parse(prior.valid_until) / 1000 > now) {
+  if (!input.quote_identity_id && prior && Date.parse(prior.valid_until) / 1000 > now) {
     for (const [index, q] of prior.quotes.entries()) {
       const remaining = uint(q.available), supply = uint(q.supply), receive = uint(q.receive);
       insist(remaining <= supply && remaining <= available, differs(`quote_set.quotes[${index}].available`));
       if (remaining < uint(q.min_fill) || remaining === 0n) continue;
-      kept.push({ venue: q.venue, recipient: q.recipient, supply: String(remaining), receive: String((remaining * receive + supply - 1n) / supply), min_fill: q.min_fill, index });
+      quotes.push({ venue: q.venue, recipient: q.recipient, supply: String(remaining), receive: String((remaining * receive + supply - 1n) / supply), min_fill: q.min_fill });
     }
   }
-  if (asked) {
-    // A venue's levels need capital for their sum; other venues share it. A change adds only
-    // the amount by which it raises that sum above both the available capital and the current sum.
-    const levels = kept.filter(q => q.venue === asked.receive_venue);
-    const before = levels.reduce((sum, q) => sum + uint(q.supply), 0n);
-    const after = levels.filter(q => q.index !== asked.replace?.index).reduce((sum, q) => sum + uint(q.supply), amount);
-    const covered = before > available ? before : available;
-    insist(added === (after > covered ? after - covered : 0n), differs("funding.added_amount"));
-  } else insist(added === amount, differs("funding.added_amount"));
   // The available balance pays first; the source deposits the rest.
   const spare = existing - available;
-  insist(deposit === (added > spare ? added - spare : 0n), differs("funding.wallet_amount + funding.venue_amount"));
-  const quotes: QuoteIntent[] = kept.filter(q => q.index !== asked?.replace?.index).map(({ index: _, ...q }) => q);
-  if (asked) quotes.push({ venue: asked.receive_venue, recipient: required(authority.recipient), supply: input.amount, receive: asked.receive, min_fill: asked.min_fill });
-  // The server's stable order: by venue, a venue's levels as they were, a new one last.
+  insist(deposit === (amount > spare ? amount - spare : 0n), differs("funding.wallet_amount + funding.venue_amount"));
+  // The server's stable order: by venue, each venue's quotes as the current set had them.
   quotes.sort((a, b) => a.venue < b.venue ? -1 : a.venue > b.venue ? 1 : 0);
   const kinds = items.map(item => item.kind);
-  insist(new Set(kinds).size === kinds.length && kinds.includes("fund") === (added > 0n) && kinds.includes("quote_set") === (quotes.length > 0) && kinds.includes("margin_move") === (venue > 0n), differs("to_sign"));
+  insist(new Set(kinds).size === kinds.length && kinds.includes("fund") && kinds.includes("quote_set") === (quotes.length > 0) && kinds.includes("margin_move") === (venue > 0n), differs("to_sign"));
   const sequence = prepared.sequence === null ? null : uint(prepared.sequence);
   insist(quotes.length ? sequence !== null && sequence > BigInt(order.last_sequence) : sequence === null, differs("sequence"));
   for (const item of items) {
@@ -102,16 +79,15 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
       insist(same(item.signer, owner), differs("fund.signer"));
       insist(same(m.owner, owner), differs("fund.owner"));
       insist(same(m.offerId, order.id), differs("fund.offerId"));
-      insist(uint(m.amount) === added, differs("fund.amount"));
+      insist(uint(m.amount) === amount, differs("fund.amount"));
       insist(uint(m.deposit) === deposit, differs("fund.deposit"));
       insist(same(m.quoteSigner, quoteSigner), differs("fund.quoteSigner"));
       insist(same(m.operator, operator), differs("fund.operator"));
       insist(floor > BigInt(order.last_sequence) && floor <= BigInt(Number.MAX_SAFE_INTEGER) && (sequence === null || floor === sequence), differs("fund.minQuoteSequence"));
       checkDeadline(m.deadline, 3600, now);
     } else if (item.kind === "quote_set") {
-      const expiry = Number(uint(m.expiresAt)), validity = asked?.quote_validity_seconds ?? 0;
-      insist(Number.isSafeInteger(validity) && validity >= 0 && validity <= 300, differs("quote_validity_seconds"));
-      insist(!asked ? prior !== null && prior !== undefined && expiry === Math.floor(Date.parse(prior.expires_at) / 1000) : validity === 0 ? expiry === NEVER_VALID_UNTIL + MAKER_TIMEOUT_SECONDS + 1 : expiry > now + MAKER_TIMEOUT_SECONDS && expiry <= now + validity + MAKER_TIMEOUT_SECONDS + 31, differs("quote_set.expiresAt"));
+      const expiry = Number(uint(m.expiresAt));
+      insist(prior && expiry === Math.floor(Date.parse(prior.expires_at) / 1000), differs("quote_set.expiresAt"));
       insist(sequence !== null && sequence <= BigInt(Number.MAX_SAFE_INTEGER), differs("sequence"));
       checkSignedQuote(item, order, quotes, Number(sequence), expiry);
     } else throw new Error("Unexpected maker signing operation");

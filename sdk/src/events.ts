@@ -13,6 +13,8 @@ export type SocketConstructor = new (url: string) => {
   onopen: (() => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
   onclose: (() => void) | null;
+  /** `ws` throws an error event nobody listens to; a close follows it anyway. */
+  onerror?: (() => void) | null;
   send(data: string): void;
   close(): void;
 };
@@ -45,6 +47,7 @@ async function* stream(client: Client, after: string, scope: "public" | "private
   socket.onopen = () => socket.send(JSON.stringify(scope === "private" ? { token: client.token, after } : { after }));
   socket.onmessage = (event: { data: unknown }) => push(typeof event.data === "string" ? event.data : null);
   socket.onclose = () => push(null);
+  socket.onerror = () => {};
   const close = () => socket.close();
   signal.addEventListener("abort", close, { once: true });
   try {

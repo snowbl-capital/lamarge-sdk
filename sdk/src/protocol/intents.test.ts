@@ -1,4 +1,4 @@
-import { checkPermit, array, record, required, checkMakerIntent, checkTakeIntent, type MakerQuoteIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
+import { checkPermit, array, record, required, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
 import { expect, test } from "bun:test";
 const owner=`0x${"11".repeat(20)}`, receiver=`0x${"22".repeat(20)}`, operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
 const now=Math.floor(Date.now()/1000);
@@ -6,7 +6,7 @@ function typed(primaryType:string,message:Record<string,unknown>):Typed {return 
 const input={venue:"hyperliquid",amount:"10000000",client_request_id:"request-1",quote_identity_id:"delegated",funding_source:"wallet" as const};
 const order:MakerOrderSnapshot={id,state:"live",venue:input.venue,owner_address:owner,quote_signer:receiver,quote_identity_id:"delegated",revision:"1",last_sequence:0,available_to_quote:"0",quote_set:null};
 const funding=():SignItem=>({kind:"fund",signer:owner,typed_data:typed("FundOffer",{owner,offerId:id,amount:input.amount,deposit:input.amount,quoteSigner:receiver,operator,minQuoteSequence:"1",nonce:"4",deadline:String(now+3600)})});
-const preparation=(items:SignItem[]):PreparedMaker=>({id:"preparation-1",client_request_id:input.client_request_id,state:"preparing",venue:input.venue,order,expected_revision:"1",sequence:null,to_sign:items,expires_at:new Date((now+3600)*1000).toISOString(),intent:{amount:input.amount,quote:null,quote_identity_id:"delegated",funding_source:"wallet"},funding:{existing_available:"0",added_amount:input.amount,wallet_amount:input.amount,venue_amount:"0",idle_amount:"0"}});
+const preparation=(items:SignItem[]):PreparedMaker=>({id:"preparation-1",client_request_id:input.client_request_id,state:"preparing",venue:input.venue,order,expected_revision:"1",sequence:null,to_sign:items,expires_at:new Date((now+3600)*1000).toISOString(),intent:{amount:input.amount,quote_identity_id:"delegated",funding_source:"wallet"},funding:{existing_available:"0",wallet_amount:input.amount,venue_amount:"0",idle_amount:"0"}});
 const authority={owner,quoteSigner:receiver,quoteIdentityId:"delegated",operator,recipient:receiver,existingOrder:null};
 const validate=(items:SignItem[],returned=preparation(items))=>checkMakerIntent(returned,input,authority,now);
 
@@ -21,7 +21,7 @@ test("financial provisioning permits only the requested authority, domain, capit
 });
 test("a deposit takes the available balance first and only the rest from its source",()=>{
   const fund=funding();fund.typed_data.message.deposit="6000000";
-  const idle=(patch:Partial<PreparedMaker["funding"]>)=>({...preparation([fund]),funding:{existing_available:"4000000",added_amount:input.amount,idle_amount:"4000000",wallet_amount:"6000000",venue_amount:"0",...patch}});
+  const idle=(patch:Partial<PreparedMaker["funding"]>)=>({...preparation([fund]),funding:{existing_available:"4000000",idle_amount:"4000000",wallet_amount:"6000000",venue_amount:"0",...patch}});
   expect(()=>validate([fund],idle({}))).not.toThrow();
   expect(()=>validate([fund],idle({existing_available:"3000000"}))).toThrow();
   expect(()=>validate([fund],idle({idle_amount:"0",wallet_amount:input.amount}))).toThrow();
@@ -102,60 +102,28 @@ test("one take signature binds both amounts, destination, quote and payment of e
 });
 
 
-test("maker quotes respect Never by default and explicit finite expiry", () => {
-  const quoteInput = { ...input, quote_identity_id: undefined, quote: { receive_venue: "polymarket", receive: "10050000", min_fill: "1000000" } };
-  const quote = (expiresAt: number): SignItem => ({kind: "quote_set", signer: receiver, typed_data: typed("QuoteSet", {
-    owner, offerId: id, sequence: 1, expiresAt,
-    quotes: [{venue: "polymarket", chainId: 137, token: required(CHAINS.polymarket).token, recipient: receiver, supply: input.amount, receive: quoteInput.quote.receive, minFill: quoteInput.quote.min_fill}],
-  })});
-  const never = quote(NEVER_VALID_UNTIL + MAKER_TIMEOUT_SECONDS + 1);
-  const finite = quote(now + 60 + MAKER_TIMEOUT_SECONDS + 1);
-  const check = (q: SignItem, validity?: number) => {
-    const asked = {...quoteInput, quote: {...quoteInput.quote, quote_validity_seconds: validity}};
-    const prepared = {...preparation([funding(),q]), sequence:1, intent:{amount:asked.amount,quote:asked.quote,quote_identity_id:"delegated",funding_source:asked.funding_source}};
-    checkMakerIntent(prepared,asked,authority,now);
-  };
-  expect(() => check(never)).not.toThrow();
-  expect(() => check(never, 0)).not.toThrow();
-  expect(() => check(finite)).toThrow();
-  expect(() => check(finite, 60)).not.toThrow();
-  expect(() => check(never, 60)).toThrow();
-});
-
-test("maker topup binds only the shortfall and preserves every other remaining price", () => {
+test("a browser top-up adds all it asks, binds only the shortfall and preserves every remaining price", () => {
   const oldQuote={venue:"aster",recipient:receiver,supply:"50000000",receive:"55000000000000000000",min_fill:"1000000",available:"30000000"};
   const existing:MakerOrderSnapshot={...order,last_sequence:7,available_to_quote:"50000000",quote_set:{sequence:7,active:true,valid_until:new Date((NEVER_VALID_UNTIL)*1000).toISOString(),expires_at:new Date((NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1)*1000).toISOString(),quotes:[oldQuote]}};
-  const asked={venue:input.venue,amount:"100000000",client_request_id:"topup",funding_source:"wallet" as const,quote:{receive_venue:"polymarket",receive:"101000000",min_fill:"1000000"}};
+  const asked={venue:input.venue,amount:"50000000",client_request_id:"topup",funding_source:"wallet" as const};
   const fund=funding(); Object.assign(fund.typed_data.message,{amount:"50000000",deposit:"40000000",minQuoteSequence:"12"});
   const quote:SignItem={kind:"quote_set",signer:receiver,typed_data:typed("QuoteSet",{owner,offerId:id,sequence:12,expiresAt:NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1,quotes:[
     {venue:"aster",chainId:56,token:required(CHAINS.aster).token,recipient:receiver,supply:"30000000",receive:"33000000000000000000",minFill:"1000000"},
-    {venue:"polymarket",chainId:137,token:required(CHAINS.polymarket).token,recipient:receiver,supply:asked.amount,receive:asked.quote.receive,minFill:asked.quote.min_fill},
   ]})};
-  const prepared:PreparedMaker={...preparation([fund,quote]),client_request_id:asked.client_request_id,order:existing,sequence:12,intent:{amount:asked.amount,quote:asked.quote,quote_identity_id:"delegated",funding_source:"wallet"},funding:{existing_available:"60000000",added_amount:"50000000",idle_amount:"10000000",wallet_amount:"40000000",venue_amount:"0"}};
+  const prepared:PreparedMaker={...preparation([fund,quote]),client_request_id:asked.client_request_id,order:existing,sequence:12,intent:{amount:asked.amount,quote_identity_id:"delegated",funding_source:"wallet"},funding:{existing_available:"60000000",idle_amount:"10000000",wallet_amount:"40000000",venue_amount:"0"}};
   const check=(p=prepared)=>checkMakerIntent(p,asked,{...authority,existingOrder:existing},now);
   expect(()=>check()).not.toThrow();
   const mutations:((p:PreparedMaker)=>void)[]=[
     p=>p.funding.wallet_amount="50000000",p=>p.funding.idle_amount="0",p=>required(p.to_sign[0]).typed_data.message.deposit="50000000",p=>required(p.to_sign[0]).typed_data.message.minQuoteSequence="8",p=>p.sequence=7,p=>p.order.id=owner,
+    p=>{Object.assign(p.funding,{wallet_amount:"30000000"});Object.assign(required(p.to_sign[0]).typed_data.message,{amount:"40000000",deposit:"30000000"});},
     p=>record(array(required(p.to_sign[1]).typed_data.message.quotes)[0]).supply="50000000",
     p=>record(array(required(p.to_sign[1]).typed_data.message.quotes)[0]).receive="1",
     p=>record(array(required(p.to_sign[1]).typed_data.message.quotes)[0]).recipient=operator,
-    p=>required(p.to_sign[1]).typed_data.message.quotes=[array(required(p.to_sign[1]).typed_data.message.quotes)[1]],
+    p=>required(p.to_sign[1]).typed_data.message.quotes=[],
     p=>required(p.to_sign[1]).typed_data.message.quotes=[...array(required(p.to_sign[1]).typed_data.message.quotes),array(required(p.to_sign[1]).typed_data.message.quotes)[0]],
   ];
   for(const mutate of mutations){const p=structuredClone(prepared);mutate(p);expect(()=>check(p)).toThrow("The signing request differs from your instructions");}
 });
-
-test("maker repricing signs no funding and rejects unexpected prerequisites",()=>{
-  const existing={...order,last_sequence:3,available_to_quote:input.amount};
-  const asked={...input,quote:{receive_venue:"polymarket",receive:input.amount,min_fill:"1000000"}};
-  const q:SignItem={kind:"quote_set",signer:receiver,typed_data:typed("QuoteSet",{owner,offerId:id,sequence:4,expiresAt:NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1,quotes:[{venue:"polymarket",chainId:137,token:required(CHAINS.polymarket).token,recipient:receiver,supply:input.amount,receive:input.amount,minFill:"1000000"}]})};
-  const p:PreparedMaker={...preparation([q]),order:existing,sequence:4,intent:{amount:input.amount,quote:asked.quote,quote_identity_id:"delegated",funding_source:"wallet"},funding:{existing_available:input.amount,added_amount:"0",idle_amount:"0",wallet_amount:"0",venue_amount:"0"}};
-  const check=(prepared=p)=>checkMakerIntent(prepared,asked,{...authority,existingOrder:existing},now);
-  expect(()=>check()).not.toThrow();
-  expect(()=>check({...p,to_sign:[funding(),q]})).toThrow();
-  expect(()=>check({...p,sequence:3})).toThrow();
-});
-
 
 test("deposit-only preparations preserve remaining quotes without extending their expiry",()=>{
   const q={venue:"polymarket",recipient:receiver,supply:"10000000",receive:"10050000",min_fill:"1000000",available:"6000000"};
@@ -164,38 +132,11 @@ test("deposit-only preparations preserve remaining quotes without extending thei
   const asked={venue:input.venue,amount:input.amount,client_request_id:input.client_request_id,funding_source:input.funding_source};
   const fund=funding();fund.typed_data.message.minQuoteSequence="5";
   const quote:SignItem={kind:"quote_set",signer:receiver,typed_data:typed("QuoteSet",{owner,offerId:id,sequence:5,expiresAt:expiry,quotes:[{venue:q.venue,chainId:137,token:required(CHAINS.polymarket).token,recipient:q.recipient,supply:q.available,receive:"6030000",minFill:q.min_fill}]})};
-  const p:PreparedMaker={...preparation([fund,quote]),order:existing,sequence:5,funding:{existing_available:existing.available_to_quote,added_amount:asked.amount,idle_amount:"0",wallet_amount:asked.amount,venue_amount:"0"}};
+  const p:PreparedMaker={...preparation([fund,quote]),order:existing,sequence:5,funding:{existing_available:existing.available_to_quote,idle_amount:"0",wallet_amount:asked.amount,venue_amount:"0"}};
   const check=(prepared=p)=>checkMakerIntent(prepared,asked,{...authority,existingOrder:existing},now);
   expect(()=>check()).not.toThrow();
   const extended=structuredClone(p);required(extended.to_sign[1]).typed_data.message.expiresAt=NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1;
   expect(()=>check(extended)).toThrow();
   const inflated=structuredClone(p);record(array(required(inflated.to_sign[1]).typed_data.message.quotes)[0]).supply="20000000";
   expect(()=>check(inflated)).toThrow();
-});
-
-test("a maker price level funds its venue's sum and a replacement keeps the other levels in order",()=>{
-  const level=(receive:string,available="10000000")=>({venue:"polymarket",recipient:receiver,supply:"10000000",receive,min_fill:"1000000",available});
-  const snapshot=(atq:string,quotes:ReturnType<typeof level>[]):MakerOrderSnapshot=>({...order,last_sequence:2,available_to_quote:atq,quote_set:{sequence:2,active:true,valid_until:new Date(NEVER_VALID_UNTIL*1000).toISOString(),expires_at:new Date((NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1)*1000).toISOString(),quotes}});
-  const signed=(...quotes:{supply:string;receive:string}[]):SignItem=>({kind:"quote_set",signer:receiver,typed_data:typed("QuoteSet",{owner,offerId:id,sequence:3,expiresAt:NEVER_VALID_UNTIL+MAKER_TIMEOUT_SECONDS+1,
-    quotes:quotes.map(q=>({venue:"polymarket",chainId:137,token:required(CHAINS.polymarket).token,recipient:receiver,supply:q.supply,receive:q.receive,minFill:"1000000"}))})});
-  const check=(existing:MakerOrderSnapshot,quote:MakerQuoteIntent,amount:string,added:string,items:SignItem[])=>{
-    const asked={venue:input.venue,amount,client_request_id:"level",quote,funding_source:input.funding_source};
-    checkMakerIntent({...preparation(items),client_request_id:"level",order:existing,sequence:3,intent:{amount,quote,quote_identity_id:"delegated",funding_source:"wallet"},
-      funding:{existing_available:existing.available_to_quote,added_amount:added,idle_amount:"0",wallet_amount:added,venue_amount:"0"}},asked,{...authority,existingOrder:existing},now);
-  };
-  const fund=funding();Object.assign(fund.typed_data.message,{amount:"10000000",deposit:"10000000",minQuoteSequence:"3"});
-  const funded=snapshot("20000000",[level("10000000"),level("10100000")]);
-  const added={receive_venue:"polymarket",receive:"10200000",min_fill:"1000000"};
-  const third={supply:"10000000",receive:"10200000"};
-  expect(()=>check(funded,added,"10000000","10000000",[fund,signed(level("10000000"),level("10100000"),third)])).not.toThrow();
-  expect(()=>check(funded,added,"10000000","10000000",[fund,signed(level("10100000"),level("10000000"),third)])).toThrow();
-  expect(()=>check(funded,added,"10000000","0",[signed(level("10000000"),level("10100000"),third)])).toThrow();
-  const replacing={...added,receive:"4900000",replace:{sequence:2,index:0}};
-  const replaced={supply:"5000000",receive:"4900000"};
-  expect(()=>check(funded,replacing,"5000000","0",[signed(level("10100000"),replaced)])).not.toThrow();
-  expect(()=>check(funded,replacing,"5000000","0",[signed(level("10000000"),replaced)])).toThrow();
-  expect(()=>check(funded,{...replacing,replace:{sequence:1,index:0}},"5000000","0",[signed(level("10100000"),replaced)])).toThrow("Quotes changed");
-  // Another market took half the capital: repricing a level at its size adds nothing.
-  const drawn=snapshot("10000000",[level("10000000"),level("10100000")]);
-  expect(()=>check(drawn,{...added,receive:"9900000",replace:{sequence:2,index:0}},"10000000","0",[signed(level("10100000"),{supply:"10000000",receive:"9900000"})])).not.toThrow();
 });

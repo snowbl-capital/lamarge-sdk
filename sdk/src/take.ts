@@ -2,11 +2,12 @@ import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, takePaymentKind } from "./protocol/intents.ts";
 import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
-import { ASTER_TRANSFER_CHAIN_ID, checkAsterRequest, insist, same } from "./protocol/protocol.ts";
+import { ASTER_TRANSFER_CHAIN_ID, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
 import { isRecord, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
+import { signWithdrawal } from "./withdraw.ts";
 
 export type Fill = Answer<"getFills">[number];
 export type TakeInput = components["schemas"]["TakeInput"];
@@ -34,6 +35,8 @@ export interface TakeOptions {
   now?: (() => number) | undefined;
   /** Runs the whole take inside it, from reserving to submitting: a lock other processes or browser tabs share, so none takes a reservation still being signed for abandoned. */
   lock?: (<T>(run: () => Promise<T>) => Promise<T>) | undefined;
+  /** A transfer's prepared withdrawal the take was reserved against: signed before the payment, to the signer, and submitted with it. */
+  withdrawal?: { amount: string; typed_data: Typed } | undefined;
 }
 
 /** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
@@ -84,8 +87,9 @@ export async function signPayment(client: Client, prepared: Prepared, input: Tak
 export async function take(client: Client, signer: Signer, input: TakeInput, options: TakeOptions = {}): Promise<Fill[]> {
   const { lock, ...unlocked } = options;
   if (lock) return lock(() => take(client, signer, input, unlocked));
-  const { store = memoryStore(), signal } = options;
+  const { store = memoryStore(), signal, withdrawal } = options;
   input = { ...input, max_parts: input.max_parts ?? MAX_PARTS };
+  insist(!withdrawal || BigInt(withdrawal.amount) > 0n && BigInt(withdrawal.amount) <= BigInt(input.amount_in), "The withdrawal differs from the take it funds");
   const balances = options.balances ?? await client.call("getBalances", { signal });
   const payer = balances.find(balance => balance.venue === input.from);
   const recipient = balances.find(balance => balance.venue === input.to)?.address;
@@ -99,12 +103,15 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   // Kept with the request it signs: the same signature never goes with another request.
   const kept: unknown = await store.load(key);
   let signatures = signedItems(isRecord(kept) ? kept.items : kept);
-  if (signatures && isRecord(kept)) insist(canonical(kept.to_sign) === canonical(to_sign), "The take's payment differs from the one already signed");
+  if (signatures && isRecord(kept)) insist(canonical(kept.to_sign) === canonical(to_sign) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
   if (!signatures) {
     try {
-      signatures = await signPayment(client, prepared, input, signer, payer, recipient, { at: (options.now ?? Date.now)() / 1000, signal, before: options.beforeSigning });
+      const at = (options.now ?? Date.now)() / 1000;
+      const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at, options.beforeSigning);
+      const paid = await signPayment(client, prepared, input, signer, payer, recipient, { at, signal, before: options.beforeSigning, payWindow: withdrawal ? ROUTE_PAY_WINDOW_SECONDS : undefined });
+      signatures = moved ? [...paid, { kind: "margin_move", signature: moved }] : paid;
       signal?.throwIfAborted();
-      await store.save(key, { items: signatures, to_sign });
+      await store.save(key, { items: signatures, to_sign, ...withdrawal ? { withdrawal: withdrawal.typed_data } : {} });
     } catch (error) {
       // A transfer's own recovery decides what happens to its reservation.
       if (!input.transfer_intent_id) await client.call("deleteTake", { path: { id: reserved.id } }).catch(() => null);

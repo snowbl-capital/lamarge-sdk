@@ -3,7 +3,7 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { CHAINS, insist, same, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import type { BeforeSigning, Signer } from "./signer.ts";
 import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
@@ -97,9 +97,15 @@ function asked(intent: TransferIntent, by: { id: string } | { clientId: string }
   return intent;
 }
 
+/** The server sends the withdrawal of a transfer signed at once at the latest this long before its take's `pay_by`. */
+const AT_ONCE_SEND_MARGIN_MS = 30_000;
+
+/** Where a transfer's withdrawal signed alone is kept until the server records it. */
+const withdrawalKey = (id: string) => `transfer-withdrawal:${id}`;
+
 /** The transfer's withdrawal from the venue account, to the signer, for exactly `amount`. Once the server records it, the transfer names it: the stored signature can go. */
 async function withdrawFor(client: Client, signer: Signer, intent: TransferIntent, amount: bigint, store: SignatureStore, now: () => number, signal?: AbortSignal, beforeSigning?: BeforeSigning) {
-  const key = `transfer-withdrawal:${intent.id}`;
+  const key = withdrawalKey(intent.id);
   return exclusive(store, key, async () => {
     try {
       const { result } = await submitWithdrawal({
@@ -193,6 +199,24 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     const [, read] = await Promise.all([reviewQuote(client, takeInput(intent), now(), signal), balances ?? client.call("getBalances", { signal })]);
     return pay(read);
   };
+  const checkWithdrawalState = () => {
+    if (intent.withdrawal?.state === "refused") throw new TransferPending(intent, "refused");
+    if (intent.withdrawal?.state === "unknown") throw new TransferPending(intent, "unknown");
+  };
+  const readIntent = async (funding_plan: boolean) => {
+    intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan }, signal }), { id: intent.id });
+    checkIntent();
+  };
+  /** Whether the take reserved against `preparation` can still be signed with it in time for the server to send the withdrawal. */
+  const sendable = (preparation: { amount: string; typed_data: Typed }, prepared: Answer<"getV1TakesId">) => {
+    if (signableUntil(prepared) * 1000 - AT_ONCE_SEND_MARGIN_MS <= now()) return false;
+    try {
+      checkWithdrawal(preparation.typed_data, intent.from, signer.address, signer.address, BigInt(preparation.amount), now() / 1000);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   /** The take already reserved, signed or paid, settled first; a replaced one is priced and taken again. Null when there is none. */
   const recoverTake = async (): Promise<Fill[] | null> => {
     let renewed = false;
@@ -200,22 +224,29 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
       stage("taking");
       let prepared = await client.call("getV1TakesId", { path: { id: intent.take_id }, signal });
       const unsigned = () => prepared.take.fills.length > 0 && prepared.take.fills.every(unsignedReservation);
-      // Past what it can still be signed by, an Aster transfer's nonce included, it is replaced.
-      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED") && signableUntil(prepared) * 1000 <= now()) {
+      // Reserved against the withdrawal prepared for it: signed and submitted with it.
+      const preparation = !intent.withdrawal && !intent.grouped ? intent.withdrawal_preparation : null;
+      // Past what it can still be signed by, an Aster transfer's nonce or a withdrawal to send with it included, it is replaced.
+      if (unsigned() && prepared.take.fills.some(fill => fill.state === "RESERVED") && (signableUntil(prepared) * 1000 <= now() || preparation && !sendable(preparation, prepared))) {
         // Cancellation serializes with acceptance. A late or uncertain signature is never replaced.
         await client.call("deleteTake", { path: { id: intent.take_id }, signal });
         prepared = await client.call("getV1TakesId", { path: { id: intent.take_id }, signal });
       }
       if (!unsigned() || !prepared.take.fills.every(fill => fill.state === "EXPIRED")) {
-        if (!prepared.to_sign.length || prepared.take.fills.some(fill => fill.state !== "RESERVED")) return prepared.take.fills;
-        return take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock });
+        if (!prepared.to_sign.length || prepared.take.fills.some(fill => fill.state !== "RESERVED")) {
+          // Signed with its withdrawal: one refused, or of unknown outcome, never pays it.
+          checkWithdrawalState();
+          return prepared.take.fills;
+        }
+        return take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, lock: options.lock, withdrawal: preparation ?? undefined });
       }
-      // A deterministic replacement survives a lost response or a restart, with the same terms.
+      // A deterministic replacement survives a lost response or a restart, with the same terms. One
+      // whose withdrawal was never sent is funded again.
       intent = await replace(`retry:${intent.id}`);
       checkIntent();
-      await store.save(funded(intent.id), true);
+      if (!preparation) await store.save(funded(intent.id), true);
       await onIntent?.(intent);
-      renewed = true;
+      renewed = !preparation;
     }
     // The original take was already funded: repricing never triggers another withdrawal.
     return renewed ? repriced() : null;
@@ -226,13 +257,30 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   // Paid inside the venue: nothing to fund, the take's transfer comes from the venue account.
   if (VENUE_SETTLED.has(intent.from)) { stage("taking"); return pay(); }
 
-  const checkWithdrawalState = () => {
-    if (intent.withdrawal?.state === "refused") throw new TransferPending(intent, "refused");
-    if (intent.withdrawal?.state === "unknown") throw new TransferPending(intent, "unknown");
-  };
-  const readIntent = async (funding_plan: boolean) => {
-    intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan }, signal }), { id: intent.id });
-    checkIntent();
+  /**
+   * The take reserved against the withdrawal prepared for it, then signed and submitted with it:
+   * the server sends the withdrawal, then the payment as soon as its funds reach the wallet. Null
+   * when the withdrawal was submitted meanwhile: nothing was signed, it is followed as any other.
+   */
+  const takeAtOnce = async (withdrawal: { amount: string; typed_data: Typed }, balances?: Answer<"getBalances">): Promise<Fill[] | null> => {
+    // Checked before reserving: a withdrawal that can no longer be signed reserves nothing.
+    checkWithdrawal(withdrawal.typed_data, intent.from, signer.address, signer.address, BigInt(withdrawal.amount), now() / 1000);
+    const run = async () => {
+      let prepared: Answer<"postTake">;
+      try {
+        prepared = await client.call("postTake", { body: takeInput(intent), signal });
+      } catch (error) {
+        if (error instanceof LaMargeError && error.code === "STATE_CONFLICT") return null;
+        throw error;
+      }
+      stage("taking");
+      const fills = await take(client, signer, takeInput(intent), { store, signal, prepared, balances, recipient: request.recipient, beforeSigning, now, withdrawal });
+      // Sent on acceptance: one refused, or of unknown outcome, never pays the take.
+      await readIntent(false);
+      checkWithdrawalState();
+      return fills;
+    };
+    return options.lock ? options.lock(run) : run();
   };
   // A wallet deposit without payment setup signs its permit first; the take waits until it is final.
   let authorizing = false;
@@ -267,6 +315,14 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     if (!intent.withdrawal_preparation) await reviewQuote(client, takeInput(intent), now(), signal);
     stage("funding");
     try {
+      // Signed at once with its take where the plan says so, unless the withdrawal was signed alone already.
+      if (plan?.signed_at_once && await store.load(withdrawalKey(intent.id)) === undefined) {
+        const preparation = intent.withdrawal_preparation
+          ?? { amount: withdrawal.toString(), typed_data: (await client.call("prepareTransferWithdrawal", { path: { id: intent.id }, body: { amount: withdrawal.toString() }, signal })).typed_data };
+        insist(BigInt(preparation.amount) === withdrawal, "Funding amount changed; review the transfer again");
+        const signed = await takeAtOnce(preparation, funds?.balances);
+        if (signed) return signed;
+      }
       intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
     } catch (error) {
       // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.

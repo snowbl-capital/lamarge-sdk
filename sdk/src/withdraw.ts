@@ -1,7 +1,7 @@
 import { LaMargeError, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
-import { CHAINS, checkWithdrawal, escrowOf, insist, same, type Typed } from "./protocol/protocol.ts";
+import { CHAINS, checkWithdrawal, escrowOf, insist, isPinnedEscrow, same, type Typed } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
 import { signItems, signTyped, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
 import { exclusive, memoryStore, typedData, type SignatureStore } from "./store.ts";
@@ -102,7 +102,7 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
   });
 }
 
-/** Reads the pinned escrows, as a viem `PublicClient` per chain id does with `readContract`. */
+/** Reads the escrows, as a viem `PublicClient` per chain id does with `readContract`. */
 export type ChainReaders = Record<number, { readContract(request: { address: `0x${string}`; abi: readonly unknown[]; functionName: string; args: readonly unknown[]; blockTag?: "finalized" | "latest" }): Promise<unknown> }>;
 
 const LOCKS = [{ type: "function", name: "locks", stateMutability: "view",
@@ -126,13 +126,19 @@ export type RefundFill = Pick<components["schemas"]["Fill"], "id" | "role" | "ma
   | "maker_owner" | "payer" | "swap_id" | "order_id" | "amount_in" | "hashlock" | "deliver_by" | "delivery_hash">;
 
 /**
- * The pinned contracts, read directly: the payment lock at a finalized block, the maker's lock at
- * the latest, where the destination has one, and the consent digest, which an old ABI cannot
- * answer. A server's label cannot authorize giving up a payment for capital locked or delivered.
+ * The deployment's escrows, read directly: the payment lock at a finalized block, the maker's slot
+ * at the latest, where the destination is an escrow (its delivery, or before deliveries its lock),
+ * and the consent digest, which an old ABI cannot answer. A server's label cannot authorize giving
+ * up a payment for capital delivered or locked. `escrows`, by venue, names each one read, which
+ * must be pinned: the payment's is the consent's domain. Without it, production's are read.
  */
-export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders): Promise<void> {
+export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows?: Readonly<Record<string, string | undefined>>): Promise<void> {
   const reader = (venue: string) => required(readers[required(CHAINS[venue], "Unknown venue").id], `No reader for ${venue}'s chain`);
-  const escrow = (venue: string) => address(escrowOf(venue));
+  const escrow = (venue: string) => {
+    const named = escrows ? escrows[venue] : escrowOf(venue);
+    insist(isPinnedEscrow(venue, named), "API deployment differs from the reviewed deployment");
+    return address(named);
+  };
   const [payment, maker] = await Promise.all([
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: LOCKS, functionName: "locks", args: [address(fill.payer), ZERO, hex(fill.swap_id)], blockTag: "finalized" }),
     fill.deliver_by ? null : reader(fill.to_venue).readContract({ address: escrow(fill.to_venue), abi: LOCKS, functionName: "locks", args: [address(fill.maker_owner), hex(fill.order_id), hex(fill.swap_id)], blockTag: "latest" }),
@@ -143,14 +149,16 @@ export async function checkEscrowLocks(fill: RefundFill, deadline: number, reade
 }
 
 /**
- * As the maker of an abandoned fill, gives the taker's locked payment back before `t2`. Without a
- * reader of each chain the fill touches, nothing is signed.
+ * As the maker of a fill abandoned inside its venue, gives the taker's locked payment back before
+ * `t2`. Without a reader of the paying chain, nothing is signed; the escrow read is the one the
+ * consent names, the deployment's.
  */
 export async function refundPayment(client: Client, signer: Signer, fill: RefundFill, readers: ChainReaders, signal?: AbortSignal): Promise<void> {
   const prepared = await client.call("preparePaymentRefund", { path: { id: fill.id }, signal });
   checkPaymentRefund(fill, prepared);
-  await checkEscrowLocks(fill, prepared.deadline, readers);
+  const escrows = { [fill.from_venue]: required(prepared.to_sign[0]).typed_data.domain.verifyingContract };
+  await checkEscrowLocks(fill, prepared.deadline, readers, escrows);
   const [signed] = await signItems(signer, prepared.to_sign);
-  await checkEscrowLocks(fill, prepared.deadline, readers);
+  await checkEscrowLocks(fill, prepared.deadline, readers, escrows);
   await client.call("submitPaymentRefund", { path: { id: fill.id }, body: { deadline: prepared.deadline, signature: required(signed).signature }, signal, retry: true });
 }

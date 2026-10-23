@@ -79,22 +79,22 @@ function linesApi(signer: string, validUntil: number, quotes: ReturnType<typeof 
   }, "mk_scoped");
 }
 
-test("external contract quoting reviews its lines without an EOA key and preserves opaque signature bytes", async () => {
-  const safe = "0x1271000000000000000000000000000000000001" as const;
-  const signature = "0x00112233445566778899aabbccddeeff", validUntil = Math.floor(Date.now() / 1000) + 120;
+test("a quote key held elsewhere reviews its lines here and its signature goes as given", async () => {
+  const elsewhere = "0x5e00000000000000000000000000000000000001" as const;
+  const signature = `0x${"ab".repeat(65)}`, validUntil = Math.floor(Date.now() / 1000) + 120;
   let submitted = false;
-  const client = linesApi(safe, validUntil, lineQuotes(), (url, init) => {
+  const client = linesApi(elsewhere, validUntil, lineQuotes(), (url, init) => {
     if (!url.endsWith("/quote-lines") || !init?.body) return;
     expect(JSON.parse(String(init.body))).toEqual({ preparation_id: "preparation-1", signatures: [{ draft_id: "draft-1", signature }] });
     submitted = true;
   });
-  const quoter = new Quoter(client, "credential-1", { address: safe }, testDeployments);
+  const quoter = new Quoter(client, "credential-1", { address: elsewhere }, testDeployments);
   const prepared = await quoter.prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil);
   const draft = required(prepared.drafts[0]);
-  expect(required(draft.to_sign[0]).signer).toBe(safe);
+  expect(required(draft.to_sign[0]).signer).toBe(elsewhere);
   await quoter.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures: [{ draft_id: draft.draft_id, signature }] } });
   expect(submitted).toBe(true);
-  await expect(new Quoter(client, "credential-1", { address: safe }, []).prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil)).rejects.toThrow("balance upgrade is not available");
+  await expect(new Quoter(client, "credential-1", { address: elsewhere }, []).prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil)).rejects.toThrow("balance upgrade is not available");
 });
 
 test("a cancel sends only its 1 to 50 orders and is never replayed", async () => {

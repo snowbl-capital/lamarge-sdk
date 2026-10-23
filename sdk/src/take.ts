@@ -1,8 +1,8 @@
 import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
-import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, takePaymentKind } from "./protocol/intents.ts";
+import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, signableUntil, takePaymentKind } from "./protocol/intents.ts";
 import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
-import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
+import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
 import { isRecord, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
@@ -19,6 +19,12 @@ type AsterItem = components["schemas"]["AsterTransferItem"];
 // Kinds are open strings, so the union narrows through these guards.
 const isLighter = (item: Item): item is LighterItem => item.kind === "lighter_transfer";
 const isAster = (item: Item): item is AsterItem => item.kind === "aster_transfer";
+/** Where a take's signatures wait until they are accepted. */
+export const takeKey = (id: string) => `take:${id}`;
+/** The seconds after which the server no longer accepts a take signed at once with its withdrawal. */
+export const atOnceCutoff = (prepared: Prepared) => signableUntil(prepared) - AT_ONCE_SEND_MARGIN_SECONDS;
+/** Whether a request of a take signed at once can still be asked at `at` seconds. */
+export const signableAtOnce = (prepared: Prepared, at: number) => atOnceCutoff(prepared) - AT_ONCE_SIGNING_SECONDS > at;
 
 export interface TakeOptions {
   store?: SignatureStore | undefined;
@@ -42,7 +48,7 @@ export interface TakeOptions {
 /** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
 export interface PaymentOptions { at: number; signal?: AbortSignal | undefined; before?: BeforeSigning | undefined; payWindow?: number | undefined; route?: boolean | undefined }
 
-/** Each venue pays its own way: the escrow payment, or the one transfer LaMarge sends inside Aster or Lighter once the maker is locked. */
+/** Each venue pays its own way: the escrow payment, or the one transfer inside Aster or Lighter, which LaMarge sends before the delivery. */
 export async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Balance, recipient: string, options: PaymentOptions) {
   const { take, to_sign } = prepared;
   const { at, signal, before } = options;
@@ -99,7 +105,7 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   const prepared = options.prepared ?? await client.call("postTake", { body: input, signal });
   const { take: reserved, to_sign } = prepared;
   if (!to_sign.length || input.transfer_intent_id && reserved.fills.some(fill => fill.state !== "RESERVED")) return reserved.fills;
-  const key = `take:${reserved.id}`;
+  const key = takeKey(reserved.id);
   // Kept with the request it signs: the same signature never goes with another request.
   const kept: unknown = await store.load(key);
   let signatures = signedItems(isRecord(kept) ? kept.items : kept);
@@ -108,8 +114,10 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
     try {
       // Each request is checked at its own signing time: a wallet may hold the first one open.
       const at = () => (options.now ?? Date.now)() / 1000;
+      const inTime = () => insist(!withdrawal || signableAtOnce(prepared, at()), "Too little time is left to sign the take");
+      inTime();
       const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at(), options.beforeSigning);
-      insist(!withdrawal || Math.min(...reserved.fills.map(fill => Date.parse(fill.pay_by) / 1000)) - AT_ONCE_SEND_MARGIN_SECONDS > at(), "Too little time is left to sign the take");
+      inTime();
       const paid = await signPayment(client, prepared, input, signer, payer, recipient, { at: at(), signal, before: options.beforeSigning, payWindow: withdrawal ? ROUTE_PAY_WINDOW_SECONDS : undefined });
       signatures = moved ? [...paid, { kind: "margin_move", signature: moved }] : paid;
       signal?.throwIfAborted();

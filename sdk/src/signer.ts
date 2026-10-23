@@ -19,7 +19,7 @@ export interface TypedDataRequest {
 export interface Signer {
   readonly address: Hex;
   signMessage(request: { message: string }): Promise<Hex>;
-  /** Optional for a contract quote delegate (ERC-1271), whose signature is collected elsewhere. */
+  /** Optional for a quote key that signs elsewhere (`Quoter.prepareLinesUnsigned`). */
   signTypedData?(request: TypedDataRequest): Promise<Hex>;
 }
 

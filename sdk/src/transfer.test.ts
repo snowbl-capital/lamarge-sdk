@@ -25,7 +25,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   unreadable?: number; from?: string; setup?: string; permitReads?: string[]; funds?: Record<string, string>[]; withdrawal?: string; withdrawn?: string;
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
-  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number } = {}) {
+  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string } = {}) {
   const calls: string[] = [];
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
@@ -129,6 +129,17 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       { venue: "polymarket", address: options.linkedRecipient ?? payer, venue_wallet: null, chain_balance: "0", chain_error: null, chain_read_at: at(0), escrow_balance: "0", deposit_balance: "0" },
     ],
     "POST /v1/takes": () => {
+      if (options.submittedMeanwhile) {
+        // Another run of the same transfer submitted the prepared withdrawal alone.
+        options.submittedMeanwhile = false;
+        intent.withdrawal = withdrawal("relayed");
+        unsent = false;
+        return Response.json({ error: { code: "STATE_CONFLICT", reason: "withdrawal_submitted", message: "the withdrawal was submitted meanwhile: take again", request_id: "r", retryable: false } }, { status: 409 });
+      }
+      if (options.conflict) {
+        intent.withdrawal = withdrawal("relayed");
+        return Response.json({ error: { code: "STATE_CONFLICT", message: options.conflict, request_id: "r", retryable: false } }, { status: 409 });
+      }
       if (unsent && !options.atOnce) return Response.json({ error: { code: "STATE_CONFLICT", message: "the prepared withdrawal must be resolved before taking", request_id: "r", retryable: false } }, { status: 409 });
       intent.take_id = "take-1";
       delete options.takeFill;
@@ -721,7 +732,7 @@ test("a declined take signature after funding is signed again on the same take w
 const atOnce = { client_transfer_id: "move-1", from: "hyperliquid", to: "polymarket", amount_in: "1000000", min_out: "1000000", recipient: payer, funding: "venue" } as const;
 
 test("a venue-funded transfer is signed at once: the take reserved against its prepared withdrawal, both committed together, no arrival waited for", async () => {
-  const { client, calls, bodies } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true });
+  const { client, calls, bodies } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 120 });
   const signer = counting();
   const seen: string[] = [];
   const stages: string[] = [];
@@ -763,7 +774,7 @@ test("a committed take signed at once waits for its funds, even past its pay_by:
 });
 
 test("a take signed at once whose withdrawal is refused reports the refusal, on every run, and signs nothing more", async () => {
-  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, withdrawn: "refused" });
+  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, withdrawn: "refused", payWindow: 120 });
   const signer = counting();
   const store = memoryStore();
   const refused = await transfer(client, signer, atOnce, { store }).catch((error: unknown) => error);
@@ -774,17 +785,35 @@ test("a take signed at once whose withdrawal is refused reports the refusal, on 
   expect(count(calls, "POST /v1/takes/take-1/signatures")).toBe(1);
 });
 
-test("a take signed at once whose signature is refused releases its reservation, and one with too little time left asks for no payment", async () => {
+test("a take signed at once whose signature is refused releases its reservation, and one with too little time left asks for nothing more", async () => {
   const declined = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 120 });
   await expect(transfer(declined.client, counting(type => type === "PayTake"), atOnce)).rejects.toThrow("User rejected the request");
   expect(declined.calls).toContain("DELETE /v1/takes/take-1");
   expect(declined.calls).not.toContain("POST /v1/takes/take-1/signatures");
-  // The wallet held the withdrawal's prompt past the take's last moment to be signed.
-  const slow = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 40 });
+  // The wallet held the withdrawal's prompt until too little time was left to sign and submit the payment.
+  const slow = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 120 });
   let time = Date.now();
   const signer = counting();
-  const late = transfer(slow.client, signer, atOnce, { now: () => time, beforeSigning: signing => { if (signing.kind === "withdrawal") time += 15_000; } });
+  const late = transfer(slow.client, signer, atOnce, { now: () => time, beforeSigning: signing => { if (signing.kind === "withdrawal") time += 65_000; } });
   await expect(late).rejects.toThrow("Too little time is left to sign the take");
   expect(signer.kinds).toEqual(["HyperliquidTransaction:SendAsset"]);
   expect(slow.calls).toContain("DELETE /v1/takes/take-1");
+  // Reserved with too little time already: not even the withdrawal is asked.
+  const short = api({ chainBalance: "400000", withdrawalAmount: "600000", atOnce: true, payWindow: 55 });
+  const unasked = counting();
+  await expect(transfer(short.client, unasked, atOnce)).rejects.toThrow("Too little time is left to sign the take");
+  expect(unasked.signed).toBe(0);
+  expect(short.calls).toContain("DELETE /v1/takes/take-1");
+});
+
+test("a take signed at once whose withdrawal another run submitted meanwhile follows that withdrawal and signs only its payment", async () => {
+  const { client, calls } = api({ chainBalance: "1000000", withdrawalAmount: "600000", atOnce: true, submittedMeanwhile: true });
+  const signer = counting();
+  const fills = await transfer(client, signer, atOnce);
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.kinds).toEqual(["PayTake"]);
+  expect(calls).not.toContain("POST /v1/transfers/transfer-1/withdrawal");
+  // Any other conflict stands, whatever the transfer shows afterwards.
+  const other = api({ chainBalance: "1000000", withdrawalAmount: "600000", atOnce: true, conflict: "another financial preparation is open" });
+  await expect(transfer(other.client, counting(), atOnce)).rejects.toThrow("another financial preparation is open");
 });

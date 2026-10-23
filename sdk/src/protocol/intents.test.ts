@@ -1,4 +1,4 @@
-import { checkPermit, array, record, required, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
+import { checkPermit, array, record, required, RETIRED_V5_DEPLOYMENTS, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
 import { expect, test } from "bun:test";
 const owner=`0x${"11".repeat(20)}`, receiver=`0x${"22".repeat(20)}`, operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
 const now=Math.floor(Date.now()/1000);
@@ -93,8 +93,10 @@ test("take signing respects the caller's limit on parts", () => {
 });
 
 test("one take signature binds both amounts, destination, quote and payment of every fill before signing",()=>{
- const mutations:[(p:Record<string,unknown>)=>void,string][]=[[p=>p.amountOut="1000001","amountOut"],[p=>p.amount="1","amount"],[p=>p.receiveRecipient=receiver,"receiveRecipient"],[p=>p.receiveChainId=999,"receive"],[p=>p.receiveToken=owner,"receive"],[p=>p.receiveEscrow=owner,"receive"],[p=>p.hashlock=id,"hashlock"],[p=>p.recipient=operator,"recipient"],[p=>p.refundAt=now+86400,"refundAt"],[p=>p.orderId=fill.hashlock,"orderId"],[p=>p.sequence=2,"sequence"],[p=>p.swapId=fill.hashlock,"swapId"],[p=>p.deadline=now+60,"deadline"],[p=>p.payer=receiver,"payer"],[p=>p.dex=1,"dex"]];
+ const mutations:[(p:Record<string,unknown>)=>void,string][]=[[p=>p.amountOut="1000001","amountOut"],[p=>p.amount="1","amount"],[p=>p.receiveRecipient=receiver,"receiveRecipient"],[p=>p.receiveChainId=999,"receive"],[p=>p.receiveToken=owner,"receive"],[p=>p.receiveEscrow=owner,"receive"],[p=>p.receiveEscrow=required(RETIRED_V5_DEPLOYMENTS.find(d=>d.chainId===137)).address,"receive"],[p=>p.hashlock=id,"hashlock"],[p=>p.recipient=operator,"recipient"],[p=>p.refundAt=now+86400,"refundAt"],[p=>p.orderId=fill.hashlock,"orderId"],[p=>p.sequence=2,"sequence"],[p=>p.swapId=fill.hashlock,"swapId"],[p=>p.deadline=now+60,"deadline"],[p=>p.payer=receiver,"payer"],[p=>p.dex=1,"dex"]];
  for(const [mutate,field] of mutations){const item=payTake();mutate(paymentOf(item));expect(()=>checkTakeIntent([item],[fill],take,owner,owner,now)).toThrow(new RegExp(`: payments\\.${field}$`));}
+ // Delivered from an escrow offer, T1 is the delivery's deadline, two minutes after pay_by.
+ const delivered={...fill,t1:new Date((now+45+120)*1000).toISOString()};expect(()=>checkTakeIntent([payTake()],[delivered],take,owner,owner,now)).not.toThrow();
  const day={...fill,t2:new Date((now+86100)*1000).toISOString()};const dayLock={...lock(),refundAt:now+86100};expect(()=>checkTakeIntent([payTake([dayLock])],[day],take,owner,owner,now)).not.toThrow();
  const later={...fill,t2:new Date((now+86400+60)*1000).toISOString()};expect(()=>checkTakeIntent([payTake()],[later],take,owner,owner,now)).toThrow("The signing request differs from your instructions: fills.t2");
  const signer=payTake();signer.signer=receiver;expect(()=>checkTakeIntent([signer],[fill],take,owner,owner,now)).toThrow();

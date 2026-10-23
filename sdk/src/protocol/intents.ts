@@ -1,6 +1,6 @@
 import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
 export type FundingSource = "wallet" | "venue";
 type MakerIntent = { venue: string; amount: string; quote_identity_id?: string | null | undefined; client_request_id: string; funding_source: FundingSource };
@@ -138,8 +138,8 @@ export function checkLighterTakeIntent(items: TakeItems, fills: TakeFill[], inpu
   insist(uint(terms.usdc_fee) <= LIGHTER_MAX_TAKER_FEE, "Lighter's fee on the transfer is above 1 USDC");
 }
 /** A take paid from Aster: the taker's wallet signs a transfer of the fill's amount to the maker's
- * account under the fill id, with a nonce far enough ahead for LaMarge to lock the maker and
- * within Aster's nonce window. */
+ * account under the fill id, with a nonce far enough ahead for LaMarge to relay it and within
+ * Aster's nonce window. */
 export function checkAsterTakeIntent(items: TakeItems, fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, now = Date.now() / 1000): void {
   const { terms, fill } = checkVenueTake(items, "aster_transfer", fills, input, payer, recipient, now);
   insist("domain" in terms, "Unexpected Aster transfer");
@@ -218,7 +218,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(uint(p.sequence) === BigInt(fill.sequence), differs("payments.sequence"));
     insist(uint(p.amountOut) === BigInt(fill.amount_out), differs("payments.amountOut"));
     insist(same(p.receiveRecipient, recipient), differs("payments.receiveRecipient"));
-    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && same(p.receiveEscrow, receive.escrow), differs("payments.receive"));
+    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && isPinnedEscrow(input.to, p.receiveEscrow), differs("payments.receive"));
   }
   // Only the shortfall is pulled from the payer. The allowance is reusable, but no unrelated operation is signed.
   const deposit = uint(m.deposit);

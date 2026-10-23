@@ -14,7 +14,7 @@ import { required } from "./protocol/validation.ts";
 
 export type Order = components["schemas"]["Order"];
 export type Credential = components["schemas"]["CredentialCreated"];
-/** An EOA key, or a deployed ERC-1271 delegate whose signature is collected elsewhere (`prepareLinesUnsigned`). */
+/** A key signing with ECDSA (the escrow refuses a contract's approval for a delivery), here or elsewhere (`prepareLinesUnsigned`). */
 export type QuoteSigner = Pick<Signer, "address" | "signTypedData">;
 /** A fill as the event journal shows it, its venues named as in REST fills. */
 export type FeedFill = Omit<components["schemas"]["FillPreview"], "from" | "to"> & { from_venue: string; to_venue: string };
@@ -143,7 +143,7 @@ export class Quoter {
   lines() { return this.timed(() => this.client.call("getQuoteLines")); }
   /**
    * Prepares a complete replacement of the identity's price lines and checks every draft against
-   * them; signing is the caller's, as for a contract delegate. `recipients` pins, per venue the
+   * them; signing is the caller's, as for a key held elsewhere. `recipients` pins, per venue the
    * lines buy on, the maker's address paid there.
    */
   async prepareLinesUnsigned(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {

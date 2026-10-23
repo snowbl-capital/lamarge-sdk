@@ -1,4 +1,4 @@
-import { requireV5Deployment } from "./deployments.ts";
+import { ESCROW_DEPLOYMENTS } from "./deployments.ts";
 import { CHAINS, checkDeadline, checkEscrowTyped, checkRegistry, insist, same, type SignItem } from "./protocol.ts";
 import { required, type Verified } from "./validation.ts";
 
@@ -32,7 +32,7 @@ export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; 
   // The server says why it has no plan, such as a balance short of the amount.
   const plan = required(intent.funding_plan, intent.funding_plan_error?.message ?? "Funding details unavailable; try again shortly");
   const chain = required(CHAINS[intent.from], "Unknown funding venue");
-  requireV5Deployment(chain.id, chain.escrow);
+  insist(ESCROW_DEPLOYMENTS.some(deployment => deployment.chainId === chain.id), "The balance upgrade is not available on this venue yet");
   insist(plan.venue === intent.from && same(plan.owner, intent.payer) && plan.amount === intent.amount_in
     && BigInt(plan.deposit) <= BigInt(plan.amount) && BigInt(plan.withdrawal_amount) <= BigInt(plan.amount), "Funding details changed; review the transfer");
   const age = now - Date.parse(plan.observed_at);
@@ -55,7 +55,7 @@ const DEXES: Record<string, number[]> = { hyperliquid: [0, 4_294_967_295], polym
 
 type PreparedClose = { venue: string; order_id: string; to_margin: boolean; dex: number; nonce: string; deadline: number; to_sign: SignItem[] };
 
-/** One `close_offer` by the owner, in the pinned escrow domain, to the requested destination, good for an hour at most. */
+/** One `close_offer` by the owner, in the domain of `chain`'s escrow, the deployment's as the API lists it, to the requested destination, good for an hour at most. */
 export function checkCloseOffer<P extends PreparedClose>(prepared: P, order: { venue: string; owner: string; order_id: string }, chain: { id: number; token: string; decimals: number; escrow: string },
   now = Date.now() / 1000, toMargin = true): prepared is P & { to_sign: Verified<P["to_sign"]> } {
   if (prepared.to_sign.length !== 1) return false;
@@ -66,7 +66,7 @@ export function checkCloseOffer<P extends PreparedClose>(prepared: P, order: { v
     checkEscrowTyped(item.typed_data, order.venue);
   } catch { return false; }
   const { primaryType, message } = item.typed_data;
-  return item.kind === "close_offer" && same(item.signer, order.owner) && primaryType === "CloseOffer" && same(message.owner, order.owner)
+  return item.kind === "close_offer" && same(item.typed_data.domain.verifyingContract, chain.escrow) && same(item.signer, order.owner) && primaryType === "CloseOffer" && same(message.owner, order.owner)
     && same(message.offerId, order.order_id) && message.toMargin === toMargin && prepared.to_margin === toMargin
     && (toMargin ? (DEXES[order.venue] ?? []).includes(prepared.dex) : prepared.dex === 0)
     && String(message.dex) === String(prepared.dex) && String(message.nonce) === prepared.nonce && String(message.deadline) === String(prepared.deadline)
@@ -78,9 +78,9 @@ type RefundFill = {
   amount_in: string; hashlock: string; deliver_by?: string | null | undefined; delivery_hash?: string | null | undefined;
 };
 
-/** The maker of an abandoned fill may give the taker's locked payment back before `t2`. */
+/** The maker of a fill abandoned inside its venue may give the taker's locked payment back before `t2`; from an escrow offer, the operator returns it at once. */
 export const canRefundPayment = <F extends RefundFill>(fill: F) =>
-  fill.role === "maker" && fill.maker_leg === "ABANDONED" && fill.payment_leg === "LOCKED" && Date.parse(fill.t2) > Date.now();
+  fill.role === "maker" && fill.maker_leg === "ABANDONED" && fill.payment_leg === "LOCKED" && Boolean(fill.deliver_by) && Date.parse(fill.t2) > Date.now();
 
 /** The one `refund_payment` consent of `fill`, signed by its payment's beneficiary, good until `t2` at most. */
 export function checkPaymentRefund<F extends RefundFill, P extends { deadline: number; to_sign: SignItem[] }>(fill: F, prepared: P, now = Date.now() / 1000): asserts prepared is P & { to_sign: Verified<P["to_sign"]> } {
@@ -95,10 +95,15 @@ export function checkPaymentRefund<F extends RefundFill, P extends { deadline: n
   checkDeadline(message.deadline, 3600, now);
 }
 
-/** An escrow lock as `locks(owner, offerId, swapId)` returns it: amount, hashlock, recipient, refundAt, state, dex. */
+/** An escrow lock as `locks(owner, offerId, swapId)` returns it: amount, hashlock, recipient, refundAt, state (0 none, 1 locked, 2 claimed, 3 refunded), dex. */
 export type EscrowLock = readonly [bigint, string, string, bigint, number, number];
 
-/** The payment lock refunds `fill.amount_in` to its payer at `t2`, and the maker's lock, where the destination has one, was never made: consenting gives up nothing delivered. */
+/**
+ * The payment lock refunds `fill.amount_in` to its payer at `t2`, and, on an escrow destination,
+ * the maker's slot `locks(maker_owner, order_id, swap_id)` was never used: neither delivered (a
+ * delivery is kept there as a claimed lock) nor, before deliveries, locked. Consenting gives up
+ * nothing delivered.
+ */
 export function checkRefundLocks<F extends RefundFill>(fill: F, payment: EscrowLock, maker: EscrowLock | null): void {
   // A fill keeps the settlement it was taken under: delivered inside the venue, it has a deadline.
   const inVenue = Boolean(fill.deliver_by);

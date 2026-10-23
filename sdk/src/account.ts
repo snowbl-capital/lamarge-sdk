@@ -1,8 +1,7 @@
 import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
 import { checkLinkChallenge, checkSetupKind } from "./protocol/consents.ts";
-import { requireV5Deployment } from "./protocol/deployments.ts";
 import { fromHex, lighterAccountOwner, registrationMessage, TAKER_API_KEYS } from "./protocol/lighter.ts";
-import { CHAINS, checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
+import { checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import { signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 
@@ -34,8 +33,7 @@ async function signStep(client: Client, step: SetupStep, venue: string, owner: S
   insist(same(request.signer, owner.address), "Setup asks another account to sign");
   checkSetupKind(step.step, request.kind);
   if (request.kind === "permit") {
-    const chain = required(CHAINS[venue]);
-    requireV5Deployment(chain.id, chain.escrow);
+    // Its spender: an escrow pinned on the venue's chain.
     const item = { kind: request.kind, signer: request.signer, typed_data: required(request.typed_data) };
     checkPermit(item, venue, owner.address, 600, now() / 1000);
     await before?.({ kind: "setup", venue, step });

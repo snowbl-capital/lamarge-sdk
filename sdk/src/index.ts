@@ -8,7 +8,7 @@ export { changes, type Change, type ChangeOptions, type EventPage, type Snapshot
 export { fresh, FRESH_MS, prefunded, sweepable } from "./funds.ts";
 export { memoryStore, type SignatureStore } from "./store.ts";
 export { checkQuote, MAX_PARTS, minimumTake, QuoteUnavailable, sweep, type Sweep } from "./book.ts";
-export { take, type Balance, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
+export { take, takeKey, type Balance, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
 export { transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferRequest, type TransferStage } from "./transfer.ts";
 export { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type Order, type QuoteSigner } from "./maker.ts";

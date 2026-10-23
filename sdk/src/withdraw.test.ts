@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { createClient } from "./client.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas } from "./protocol/protocol.ts";
-import { record, required } from "./protocol/validation.ts";
+import { address, record, required } from "./protocol/validation.ts";
 import { memoryStore } from "./store.ts";
-import { refundPayment, withdraw, type ChainReaders } from "./withdraw.ts";
+import { checkEscrowLocks, refundPayment, withdraw, type ChainReaders } from "./withdraw.ts";
 
 const owner = `0x${"11".repeat(20)}` as const, other = `0x${"22".repeat(20)}`, swap = `0x${"aa".repeat(32)}`, hashlock = `0x${"bb".repeat(32)}`;
 const now = () => Math.floor(Date.now() / 1000);
@@ -97,32 +97,52 @@ test("an Aster withdrawal is refused before any request", async () => {
 });
 
 const t2 = new Date((now() + 3600) * 1000).toISOString();
+/** A maker's fill whose delivery inside Lighter was abandoned, its payment locked on HyperEVM. */
 const fill = {
-  id: "fill-1", role: "maker", maker_leg: "ABANDONED", payment_leg: "LOCKED", t2, from_venue: "hyperliquid", to_venue: "polymarket", maker_recipient: owner,
-  maker_owner: owner, payer: other, swap_id: swap, order_id: `0x${"cc".repeat(32)}`, amount_in: "1000000", hashlock, deliver_by: null, delivery_hash: null,
+  id: "fill-1", role: "maker", maker_leg: "ABANDONED", payment_leg: "LOCKED", t2, from_venue: "hyperliquid", to_venue: "lighter", maker_recipient: owner,
+  maker_owner: owner, payer: other, swap_id: swap, order_id: `0x${"cc".repeat(32)}`, amount_in: "1000000", hashlock, deliver_by: t2 as string | null, delivery_hash: null,
 };
-const refundApi = () => fake({
+const refundApi = (escrow = ESCROW) => fake({
   "POST /v1/fills/fill-1/refund/prepare": () => {
     const deadline = now() + 600;
     return { deadline, to_sign: [{ kind: "refund_payment", fill_id: "fill-1", signer: owner,
-      typed_data: { types: { EIP712Domain, ...schemas.RefundPayment }, primaryType: "RefundPayment", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW }, message: { payer: other, swapId: swap, deadline } } }] };
+      typed_data: { types: { EIP712Domain, ...schemas.RefundPayment }, primaryType: "RefundPayment", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: escrow }, message: { payer: other, swapId: swap, deadline } } }] };
   },
   "POST /v1/fills/fill-1/refund": () => null,
 });
-const readers = (paymentState = 1): ChainReaders => ({
-  999: { readContract: async request => request.functionName === "locks" ? [1_000_000n, hashlock, owner, BigInt(Math.floor(Date.parse(t2) / 1000)), paymentState, 0] : `0x${"dd".repeat(32)}` },
-  137: { readContract: async () => [0n, `0x${"0".repeat(64)}`, `0x${"0".repeat(40)}`, 0n, 0, 0] },
+/** Each chain's reads: the payment lock in `paymentState`, the maker's slot in `makerState`, and the escrows read. */
+const readers = (paymentState = 1, makerState = 0, read: string[] = []): ChainReaders => ({
+  999: { readContract: async request => { read.push(`999:${request.address}`); return request.functionName === "locks" ? [1_000_000n, hashlock, owner, BigInt(Math.floor(Date.parse(t2) / 1000)), paymentState, 0] : `0x${"dd".repeat(32)}`; } },
+  137: { readContract: async request => { read.push(`137:${request.address}`); return [makerState ? 1_000_000n : 0n, `0x${"0".repeat(64)}`, makerState ? other : `0x${"0".repeat(40)}`, 0n, makerState, 0]; } },
 });
 
-test("a refund is signed only once the pinned escrows confirm the locks", async () => {
+test("a refund is signed only once the escrow its consent names confirms the payment lock", async () => {
   const { client, calls } = refundApi();
   const signer = counting();
-  await expect(refundPayment(client, signer, structuredClone(fill), { 999: required(readers()[999]) })).rejects.toThrow("No reader for polymarket");
+  await expect(refundPayment(client, signer, structuredClone(fill), {})).rejects.toThrow("No reader for hyperliquid");
   await expect(refundPayment(client, signer, structuredClone(fill), readers(2))).rejects.toThrow("no longer permit this refund");
+  await expect(refundPayment(client, signer, { ...structuredClone(fill), delivery_hash: "1234" }, readers())).rejects.toThrow("This fill was delivered");
+  // From an escrow offer, the operator returns the payment itself.
+  await expect(refundPayment(client, signer, { ...structuredClone(fill), to_venue: "polymarket", deliver_by: null }, readers())).rejects.toThrow("cannot be refunded early");
   expect(signer.signed).toBe(0);
-  await refundPayment(client, signer, structuredClone(fill), readers());
+  const read: string[] = [];
+  await refundPayment(client, signer, structuredClone(fill), readers(1, 0, read));
   expect(signer.signed).toBe(1);
+  expect(new Set(read)).toEqual(new Set([`999:${address(ESCROW)}`]));
   expect(calls.at(-1)).toBe("POST /v1/fills/fill-1/refund");
+  await expect(refundPayment(refundApi(other).client, signer, structuredClone(fill), readers())).rejects.toThrow("Unexpected signing domain");
+});
+
+test("the escrows read are pinned, and an escrow destination's slot must be unused: neither delivered nor locked", async () => {
+  const escrowed = { ...structuredClone(fill), to_venue: "polymarket", deliver_by: null }, deadline = now() + 600;
+  const both = { hyperliquid: ESCROW, polymarket: ESCROW };
+  await checkEscrowLocks(escrowed, deadline, readers(), both);
+  // Production's, without the deployment's named.
+  await checkEscrowLocks(escrowed, deadline, readers());
+  for (const state of [1, 2]) await expect(checkEscrowLocks(escrowed, deadline, readers(1, state), both)).rejects.toThrow("no longer permit this refund");
+  for (const escrows of [{ hyperliquid: ESCROW, polymarket: other }, { polymarket: ESCROW }, { hyperliquid: other, polymarket: ESCROW }]) {
+    await expect(checkEscrowLocks(escrowed, deadline, readers(), escrows)).rejects.toThrow("API deployment differs");
+  }
 });
 
 test("two calls with one id share one signature, and a pending outcome is read again with it", async () => {

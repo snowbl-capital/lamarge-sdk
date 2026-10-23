@@ -2,7 +2,7 @@ import type { Client } from "./client.ts";
 import { checkLoginChallenge, checkRegistry, insist, VENUE_SETTLED } from "./protocol/protocol.ts";
 import type { Signer } from "./signer.ts";
 
-/** Every chain the API names must be the reviewed deployment pinned in this release of the SDK, settled as pinned; only a disabled venue names none. */
+/** Every chain the API names must be a reviewed deployment pinned in this release of the SDK, settled as pinned; only a disabled venue names none. */
 export async function checkDeployment(client: Client, signal?: AbortSignal): Promise<void> {
   for (const venue of await client.call("getVenues", { signal })) {
     insist(venue.chain || !venue.enabled, "API deployment differs from the reviewed deployment");

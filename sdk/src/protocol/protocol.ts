@@ -1,8 +1,15 @@
 import { address, array, hex, record, required, type Verified } from "./validation.ts";
-import { ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
-/** The reviewed proxy, the same address on HyperEVM and Polygon (contracts/README.md#deployments). */
+import { ESCROW_DEPLOYMENTS, ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
+/**
+ * Production's proxy, the same address on HyperEVM and Polygon (contracts/README.md#deployments).
+ * @deprecated Production's only: a deployment's escrows are its venues' `chain.escrow` (`getVenues`), checked against `ESCROW_DEPLOYMENTS`.
+ */
 export const ESCROW = "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6";
-/** Each venue's escrow chain, token decimals and permit domain. A venue the API enables but that is not pinned here is not traded. */
+/**
+ * Each venue's escrow chain, token decimals and permit domain, and `escrow`: production's escrow on
+ * an escrow venue, the contract of its signing domain on a venue settled inside itself. A venue the
+ * API enables but that is not pinned here is not traded.
+ */
 export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string }> = {
   hyperliquid: { id: 999, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6, permit: "USDC", version: "2", escrow: ESCROW },
   polymarket: { id: 137, token: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", decimals: 6, permit: "Polymarket USD", version: "1", escrow: ESCROW },
@@ -12,7 +19,7 @@ export const CHAINS: Record<string, { id: number; token: string; decimals: numbe
   aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
   lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
 };
-/** Venues where the maker delivers inside the venue, read by the server, instead of an escrow lock. */
+/** Venues where the maker delivers inside the venue, read by the server, instead of the operator from his escrow offer. */
 export const VENUE_SETTLED = new Set(["lighter", "aster"]);
 /** A route whose first take pays inside a venue and goes through an escrow venue: LaMarge can have it signed at once. */
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
@@ -20,7 +27,12 @@ export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) 
 export const ROUTE_PAY_WINDOW_SECONDS = 210;
 /** A take signed at once with its withdrawal is accepted until this long before its `pay_by`, while the withdrawal can still be sent. */
 export const AT_ONCE_SEND_MARGIN_SECONDS = 30;
-/** The escrow holding a venue's commitments; Aster's former BSC escrow for Aster. @deprecated Read `CHAINS[venue].escrow`. */
+/** Left before that cutoff for each request of a take signed at once: signed, then submitted with the others. The server offers signing at once only to windows that leave it. */
+export const AT_ONCE_SIGNING_SECONDS = 30;
+/**
+ * Production's escrow holding a venue's commitments; Aster's former BSC escrow for Aster.
+ * @deprecated Production's only: a deployment's escrows are its venues' `chain.escrow` (`getVenues`), checked against `ESCROW_DEPLOYMENTS`.
+ */
 export function escrowOf(venue: string): string {
   const chain = CHAINS[venue];
   insist(chain, "Unknown venue");
@@ -120,13 +132,22 @@ function checkTypes(typed: Typed) {
   insist(Object.keys(typed.types).length === Object.keys(expected).length && Object.entries(expected).every(([name, fields]) => JSON.stringify(typed.types[name]) === JSON.stringify(fields)), "Unexpected signing types");
   insist(Object.keys(typed.message).length === required(schema[typed.primaryType]).length, "Unexpected signing fields");
 }
-/** Exact EIP-712 field types and pinned domain, before any wallet prompt. */
-export function checkEscrowTyped(typed: Typed, venue: string): void {
+/**
+ * Whether `venue`'s requests may name `contract` as their escrow: on an escrow venue, any pinned
+ * deployment of its chain in `manifest`, whichever environment's; on a venue settled inside itself,
+ * its one pinned signing domain.
+ */
+export function isPinnedEscrow(venue: string, contract: unknown, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): boolean {
   const chain = CHAINS[venue];
-  insist(chain, "Unknown venue");
+  if (!chain || typeof contract !== "string") return false;
+  return VENUE_SETTLED.has(venue) ? same(contract, chain.escrow) : escrowDeployment(chain.id, contract, manifest) !== undefined;
+}
+/** Exact EIP-712 field types and a pinned domain, before any wallet prompt: `manifest` lists the escrows a request may name. */
+export function checkEscrowTyped(typed: Typed, venue: string, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): void {
+  insist(CHAINS[venue], "Unknown venue");
   // A venue settled inside itself signs only quote sets, in its own domain.
   insist(!VENUE_SETTLED.has(venue) || typed.primaryType === "QuoteSet", "Unexpected signing request");
-  checkEscrowTypedAt(typed, venue, chain.escrow);
+  checkEscrowTypedAt(typed, venue, escrow => isPinnedEscrow(venue, escrow, manifest));
 }
 /** Proof verification accepts the current protocol on reviewed deployments only. */
 export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: DeploymentManifest = ESCROW_PROOF_DEPLOYMENTS): EscrowDeployment {
@@ -135,23 +156,28 @@ export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: Dep
   const chain = CHAINS[venue];
   const deployment = chain && escrowDeployment(chain.id, escrow, manifest);
   insist(deployment && deployment.version === 5, "Unexpected signing domain");
-  checkEscrowTypedAt(typed, venue, escrow);
+  checkEscrowTypedAt(typed, venue, contract => same(contract, escrow));
   return deployment;
 }
-function checkEscrowTypedAt(typed: Typed, venue: string, escrow: string): void {
+/** `pinned`: whether the escrow the request names, its domain's or a permit's spender, may be. */
+function checkEscrowTypedAt(typed: Typed, venue: string, pinned: (escrow: unknown) => boolean): void {
   checkTypes(typed);
   const chain = CHAINS[venue];
   insist(chain, differs("venue"));
   insist(!["Withdraw", "HyperliquidTransaction:SendAsset", "Action", "Message"].includes(typed.primaryType), differs("primaryType"));
   const permit = typed.primaryType === "Permit";
   if (permit) insist(chain.permit !== undefined && chain.version !== undefined, "The token has no permit");
-  insist(typed.domain.chainId === chain.id && same(typed.domain.verifyingContract, permit ? chain.token : escrow) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
-  if (permit) insist(same(typed.message.spender, escrow), "Unexpected permit spender");
+  insist(typed.domain.chainId === chain.id && (permit ? same(typed.domain.verifyingContract, chain.token) : pinned(typed.domain.verifyingContract)) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
+  if (permit) insist(pinned(typed.message.spender), "Unexpected permit spender");
 }
-/** A venue's chain as the API lists it: the pinned chain, token, decimals and escrow, and, when it says one, the token's permit domain, none on a venue settled inside itself. */
-export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined }) {
+/**
+ * A venue's chain as the API lists it: the pinned chain, token and decimals, an escrow `manifest`
+ * pins on that chain (the signing domain's contract on a venue settled inside itself) and, when it
+ * says one, the token's permit domain, none on a venue settled inside itself.
+ */
+export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined }, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
   const known = CHAINS[venue], permit = chain.permit;
-  insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && same(chain.escrow, known.escrow)
+  insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && isPinnedEscrow(venue, chain.escrow, manifest)
     && (permit === undefined || (permit === null ? known.permit === undefined : permit.name === known.permit && permit.version === known.version)), "API deployment differs from the reviewed deployment");
 }
 export function checkDeadline(value: unknown, seconds: number, now = Date.now() / 1000) {

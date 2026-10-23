@@ -146,13 +146,13 @@ test("a substituted registry cannot authorize another escrow", () => {
 });
 
 const maker = `0x${"11".repeat(20)}`, taker = `0x${"22".repeat(20)}`;
-/** A maker's fill whose maker leg was abandoned while the taker's payment stays locked, and its refund consent. */
+/** A maker's fill whose delivery inside Lighter was abandoned while the taker's payment stays locked, and its refund consent. */
 function fixture() {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const payment = {
-    id: "fill", role: "maker", maker_leg: "ABANDONED", payment_leg: "LOCKED", from_venue: "hyperliquid", to_venue: "polymarket",
+    id: "fill", role: "maker", maker_leg: "ABANDONED", payment_leg: "LOCKED", from_venue: "hyperliquid", to_venue: "lighter",
     maker_recipient: maker, payer: taker, swap_id: `0x${"12".repeat(32)}`, hashlock: taker, amount_in: "10000000",
-    t1: new Date().toISOString(), t2: new Date((deadline + 600) * 1000).toISOString(), deliver_by: null as string | null, delivery_hash: null as string | null,
+    t1: new Date().toISOString(), t2: new Date((deadline + 600) * 1000).toISOString(), deliver_by: new Date().toISOString() as string | null, delivery_hash: null as string | null,
   };
   const to_sign: SignItem[] = [{ kind: "refund_payment", fill_id: payment.id, signer: maker, typed_data: {
     domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: required(CHAINS.hyperliquid).escrow },
@@ -162,11 +162,12 @@ function fixture() {
   return { payment, prepared: { deadline, to_sign } };
 }
 
-test("only an abandoned maker payment can be reviewed for an early refund", () => {
+test("only a maker payment abandoned inside its venue can be reviewed for an early refund", () => {
   const { payment, prepared } = fixture();
   expect(canRefundPayment(payment)).toBe(true);
   expect(() => checkPaymentRefund(payment, prepared)).not.toThrow();
-  for (const change of [{ role: "taker" as const }, { maker_leg: "LOCKED" as const },
+  // From an escrow offer, the operator returns it at once.
+  for (const change of [{ role: "taker" as const }, { maker_leg: "LOCKED" as const }, { to_venue: "polymarket", deliver_by: null },
     { maker_leg: "CLAIMED" as const }, { payment_leg: "REFUNDED" as const }, { t2: "2000-01-01T00:00:00Z" }]) {
     expect(() => checkPaymentRefund({ ...payment, ...change }, prepared)).toThrow("This payment cannot be refunded early");
   }
@@ -206,11 +207,12 @@ test("refund consent binds the payment, recipient, chain, contract, fields and e
 
 test("an early refund needs the payment locked, and no maker lock or venue delivery", () => {
   type Lock = [bigint, string, string, bigint, number, number];
-  const { payment } = fixture();
+  const payment = { ...fixture().payment, to_venue: "polymarket", deliver_by: null };
   const lock = (state: number): Lock => [BigInt(payment.amount_in), payment.hashlock, payment.maker_recipient, BigInt(Math.floor(Date.parse(payment.t2) / 1000)), state, 0];
   const none: Lock = [0n, `0x${"00".repeat(32)}`, `0x${"00".repeat(20)}`, 0n, 0, 0];
   expect(() => checkRefundLocks(payment, lock(1), none)).not.toThrow();
-  expect(() => checkRefundLocks(payment, lock(1), lock(1))).toThrow("The onchain locks no longer permit this refund");
+  // The maker's slot holds a delivery, kept as a claimed lock, or before deliveries a maker lock.
+  for (const state of [1, 2, 3]) expect(() => checkRefundLocks(payment, lock(1), lock(state))).toThrow("The onchain locks no longer permit this refund");
   expect(() => checkRefundLocks(payment, lock(1), null)).toThrow("Unsupported refund chain");
   // Delivered inside the venue: no maker lock exists, and a recorded delivery forbids consent.
   const lighter = { ...payment, to_venue: "lighter", deliver_by: payment.t1 };

@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 /** The browser bundle of the main and protocol entries, minified and gzipped. */
-const BUDGET_BYTES = 30_600;
+const BUDGET_BYTES = 30_900;
 
 const root = resolve(import.meta.dir, "..");
 const work = mkdtempSync(join(tmpdir(), "lamarge-sdk-"));

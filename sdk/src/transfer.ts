@@ -3,13 +3,13 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { AT_ONCE_SEND_MARGIN_SECONDS, CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
+import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import type { BeforeSigning, Signer } from "./signer.ts";
 import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
 import { submitWithdrawal } from "./withdraw.ts";
 import { checkQuote, MAX_PARTS } from "./book.ts";
-import { take, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
+import { atOnceCutoff, signableAtOnce, take, takeKey, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
 
 export type TransferIntent = Answer<"getTransfer">;
 
@@ -211,10 +211,12 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan }, signal }), { id: intent.id });
     checkIntent();
   };
-  /** Whether a take reserved against `preparation` can still be submitted with it: in time for the server to send the withdrawal, and signed already or still signable. */
+  /** Whether a take reserved against `preparation` can still be submitted with it: in time for the server to send the withdrawal, and signed already or still signable in time. */
   const sendable = async (preparation: { amount: string; typed_data: Typed }, prepared: Answer<"getV1TakesId">) => {
-    if ((signableUntil(prepared) - AT_ONCE_SEND_MARGIN_SECONDS) * 1000 <= now()) return false;
-    if (await store.load(`take:${prepared.take.id}`) !== undefined) return true;
+    const cutoff = atOnceCutoff(prepared) * 1000;
+    if (cutoff <= now()) return false;
+    if (await store.load(takeKey(prepared.take.id)) !== undefined) return true;
+    if (!signableAtOnce(prepared, now() / 1000)) return false;
     try {
       checkWithdrawal(preparation.typed_data, intent.from, signer.address, signer.address, BigInt(preparation.amount), now() / 1000);
       return true;
@@ -280,7 +282,14 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     // Checked before reserving: a withdrawal that can no longer be signed reserves nothing.
     checkWithdrawal(withdrawal.typed_data, intent.from, signer.address, signer.address, BigInt(withdrawal.amount), now() / 1000);
     const run = async () => {
-      const prepared = await client.call("postTake", { body: takeInput(intent), signal });
+      let prepared: Answer<"postTake">;
+      try {
+        prepared = await client.call("postTake", { body: takeInput(intent), signal });
+      } catch (error) {
+        // Submitted meanwhile by another run: followed as any other withdrawal, never sent again.
+        if (error instanceof LaMargeError && error.reason === "withdrawal_submitted" && await readIntent(false).then(() => intent.withdrawal, () => null)) return null;
+        throw error;
+      }
       stage("taking");
       return signAtOnce(prepared, withdrawal, { balances });
     };
@@ -324,9 +333,9 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
         const preparation = intent.withdrawal_preparation
           ?? { amount: withdrawal.toString(), typed_data: (await client.call("prepareTransferWithdrawal", { path: { id: intent.id }, body: { amount: withdrawal.toString() }, signal })).typed_data };
         insist(BigInt(preparation.amount) === withdrawal, "Funding amount changed; review the transfer again");
-        return await takeAtOnce(preparation, funds?.balances);
-      }
-      intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
+        const signed = await takeAtOnce(preparation, funds?.balances);
+        if (signed) return signed;
+      } else intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
     } catch (error) {
       // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.
       if (error instanceof LaMargeError && error.reason === "funds_arriving") throw new TransferPending(intent, "arrival_unconfirmed");
@@ -334,7 +343,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     }
     checkWithdrawalState();
     // The plan read before it is no sign of its arrival: the transfer is read again, with its plan once relayed.
-    await readIntent(intent.withdrawal.state === "relayed");
+    await readIntent(intent.withdrawal?.state === "relayed");
     reread = true;
   }
   insist(intent.withdrawal || funds !== null, "A fresh balance is required; try again shortly");

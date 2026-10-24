@@ -909,7 +909,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare a grouped route
-         * @description For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign. The withdrawal from the intermediate venue, when the route needs one, is the second transfer's `withdrawal_preparation`. Sign in order: the first take's request, the withdrawal, the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.
+         * @description For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.
          */
         post: operations["prepareGroupedRoute"];
         /**
@@ -933,7 +933,7 @@ export interface paths {
         put?: never;
         /**
          * Commit a route's signatures
-         * @description Every signature of a prepared route at once: each take's items by `fill_id`, the withdrawal as a `margin_move` item. Accepted together before `commit_by`, or none; the operator then withdraws once the first take delivered and pays the second take once its funds arrived. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.
+         * @description Every signature of a prepared route at once: each take's items by `fill_id`. Accepted together before `commit_by`, or none; the first take is then delivered into the payer's available balance on the intermediate chain, and the operator pays the second take from it. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.
          */
         post: operations["commitGroupedRoute"];
         delete?: never;
@@ -1096,8 +1096,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Prepare a withdrawal
-         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less transfers relayed since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal on the venue is `STATE_CONFLICT`. On Aster the signed amount adds the venue fee. Relay within ten minutes.
+         * Prepare a withdrawal or a send
+         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less what left the account since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal or send on the venue is `STATE_CONFLICT`. On Aster a withdrawal's signed amount adds the venue fee; a send has none. `to: account` sends to `recipient`, another existing account on the same venue: never your own address, venue wallet or deposit address; on Hyperliquid a user or sub-account in mode `default` or `unifiedAccount`, without code on HyperEVM. A Polymarket send is an `OpTypedData`: the wallet signs only a hash, so rebuild it from `op` before signing. An Aster send goes out within 50 s of its nonce. Relay within ten minutes.
          */
         post: operations["postWithdrawalPrepare"];
         delete?: never;
@@ -1392,6 +1392,8 @@ export interface components {
     schemas: {
         /** @description A venue id from `GET /v1/venues`. */
         VenueId: string;
+        /** @description Basis points; the escrow refuses more than 100. */
+        FeeBps: number;
         /** @description Decimal base units of the venue's token (`decimals` in `GET /v1/venues`), below 2^256: with 6 decimals, `"1000000"` is 1 token. */
         Amount: string;
         /** @description Any case accepted; responses are lowercase except inside typed data and signed messages. */
@@ -1478,6 +1480,8 @@ export interface components {
             to: components["schemas"]["VenueId"];
             /** @description Most one fill takes from one level, in `to` base units. */
             max_fill: components["schemas"]["Amount"];
+            /** @description The pair's taker fee now, for a take consenting to it with `max_fee_bps`. Levels show the makers' prices without it. */
+            taker_fee_bps: components["schemas"]["FeeBps"];
             levels: components["schemas"]["Level"][];
         };
         Route: {
@@ -1497,6 +1501,10 @@ export interface components {
                 amount_out: components["schemas"]["Amount"];
                 /** @description Price levels the take goes through. */
                 parts: number;
+                /** @description The take's fee at `taker_fee_bps`, included in its amounts: in `from` base units, or in `to` base units when it pays from Lighter or Aster. */
+                taker_fee: components["schemas"]["Amount"];
+                /** @description The pair's fee now, which the take's `max_fee_bps` must accept; 0 without the request's `max_fee_bps`. */
+                taker_fee_bps: components["schemas"]["FeeBps"];
             }[];
         };
         /** @description One quote of an order: the taker pays `receive` on `from` per `supply` on `to`. */
@@ -1526,14 +1534,21 @@ export interface components {
             digest: components["schemas"]["Bytes32"];
         };
         TradeProof: {
-            /** @enum {integer} */
-            version: 1;
+            /**
+             * @description 2 for a trade with a taker fee, which `taker_fee` and `taker_fee_venue` give.
+             * @enum {integer}
+             */
+            version: 1 | 2;
             /** Format: uuid */
             id: string;
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
+            /** @description Version 2: the fee the `swap_id` carries. Paid from an escrow, `amount_in` less it pays the maker's price for `amount_out`; paid from Lighter or Aster, `amount_in` pays the price of `amount_out` plus it, which the maker's offer delivered to the fee recipient. */
+            taker_fee?: components["schemas"]["Amount"];
+            /** @description Version 2: the venue whose token `taker_fee` is in. */
+            taker_fee_venue?: components["schemas"]["VenueId"];
             swap_id: components["schemas"]["Bytes32"];
             order_id: components["schemas"]["Bytes32"];
             sequence: number;
@@ -1728,9 +1743,17 @@ export interface components {
             /** @description One per venue (escrow chains, then Lighter and Aster), by output venue. */
             assets: components["schemas"]["StatsAsset"][];
             trades_30d: number;
-            /** @constant */
+            /**
+             * @deprecated
+             * @description Makers pay no fee.
+             * @constant
+             */
             maker_fee_bps: 0;
-            /** @constant */
+            /**
+             * @deprecated
+             * @description Taker fees are per pair, in each book's `taker_fee_bps`.
+             * @constant
+             */
             taker_fee_bps: 0;
         };
         /** @description EIP-712 typed data for `eth_signTypedData_v4`. Keep each integer as prepared, JSON number or decimal string. */
@@ -1740,6 +1763,37 @@ export interface components {
             domain: components["schemas"]["Eip712Domain"];
             message: {
                 [key: string]: unknown;
+            };
+        };
+        /** @description A Polymarket Perps operation (`primaryType` `Op`, a domain without `verifyingContract`): `message.data` is `keccak256` of the MessagePack of `[op.type, [op.args.account, op.args.token, op.args.amount, op.args.to]]`, those exact strings. Sign `domain`, `types`, `primaryType` and `message` only. */
+        OpTypedData: {
+            types: components["schemas"]["Eip712Types"];
+            /** @enum {string} */
+            primaryType: "Op" | (string & {});
+            domain: {
+                name: string;
+                version: string;
+                chainId: number;
+            };
+            message: {
+                data: string;
+                salt: number;
+                /** @description Milliseconds. */
+                ts: number;
+            };
+            op: {
+                /** @enum {string} */
+                type: "internalTransfer" | (string & {});
+                args: {
+                    /** @description Checksummed. */
+                    account: string;
+                    /** @description Checksummed. */
+                    token: string;
+                    /** @description Decimal pUSD. */
+                    amount: string;
+                    /** @description Checksummed. */
+                    to: string;
+                };
             };
         };
         Eip712Types: {
@@ -2013,6 +2067,8 @@ export interface components {
             then?: components["schemas"]["TransferThen"];
             /** @description The transfer with `then` this one continues, from its `to` and `recipient` to its `then`, once no part of its take can deliver more: at most its `continuable`. It replaces an earlier continuation that neither took nor sent a withdrawal still in flight. */
             previous_transfer_id?: components["schemas"]["Uuid"];
+            /** @description The highest taker fee its take accepts: a pair whose fee is higher is `VALIDATION_ERROR` with reason `fee_above_max`. Without it, its take pays no fee. Its take must send the same; a route's second take accepts `then.max_fee_bps`. */
+            max_fee_bps?: components["schemas"]["FeeBps"];
         };
         TransferThen: {
             to: components["schemas"]["VenueId"];
@@ -2022,6 +2078,8 @@ export interface components {
             amount_in: components["schemas"]["Amount"];
             /** @description Least the route accepts on `to` for that `amount_in`; a continuation paying another amount scales it. */
             min_out: components["schemas"]["Amount"];
+            /** @description The highest taker fee the second take accepts, a route signed at once's included. A continuation sends its own. Without it, that take pays no fee. */
+            max_fee_bps?: components["schemas"]["FeeBps"];
             /** @description `to`'s chain id, in an intent. */
             readonly chain_id?: number;
         };
@@ -2050,6 +2108,8 @@ export interface components {
             amount_in: components["schemas"]["Amount"];
             min_out: components["schemas"]["Amount"];
             max_parts: number;
+            /** @description As sent; absent when the transfer consented to no fee. */
+            max_fee_bps?: components["schemas"]["FeeBps"];
             payer: components["schemas"]["Address"];
             recipient: components["schemas"]["Address"];
             from_chain_id: number;
@@ -2121,6 +2181,8 @@ export interface components {
              * @default 8
              */
             max_parts?: number;
+            /** @description The highest taker fee accepted, as the book's `taker_fee_bps`: a higher one is `VALIDATION_ERROR` with reason `fee_above_max`, before anything is reserved. Without it the take pays no fee. Part of the request's identity for retries. */
+            max_fee_bps?: components["schemas"]["FeeBps"];
         };
         /** @description One order's share of a take, as its taker or maker sees it. */
         Fill: {
@@ -2144,8 +2206,17 @@ export interface components {
             to_venue: components["schemas"]["VenueId"];
             /** @description What the taker receives on `to_venue`. */
             amount_out: components["schemas"]["Amount"];
-            /** @description What the taker pays on `from_venue`, `ceil(amount_out × receive / supply)`. */
+            /** @description What the taker pays on `from_venue`: `ceil(maker_out × receive / supply)`, plus `taker_fee` when it is in `from_venue`'s token. */
             amount_in: components["schemas"]["Amount"];
+            /** @description The taker fee, fixed at acceptance, in `taker_fee_venue` base units and carried by `swap_id`: paid from an escrow, part of the payment, which the claim pays to the fee recipient; paid from Lighter or Aster, delivered by the maker's offer on top of `amount_out`. `0` without a fee. */
+            taker_fee: components["schemas"]["Amount"];
+            taker_fee_bps: components["schemas"]["FeeBps"];
+            /** @description `from_venue`, or `to_venue` when the taker pays from Lighter or Aster; null without fee. */
+            taker_fee_venue: components["schemas"]["VenueId"] | null;
+            /** @description What leaves the maker's order, in `to_venue` base units, against its funds and quotes. */
+            maker_out: components["schemas"]["Amount"];
+            /** @description What the maker receives of the payment, in `from_venue` base units. */
+            maker_in: components["schemas"]["Amount"];
             /** @description The taker's linked address on `from_venue`. */
             payer: components["schemas"]["Address"];
             /** @description The order's owner on `to_venue`. */
@@ -2227,12 +2298,17 @@ export interface components {
             /** Format: uuid */
             id: string;
             venue: components["schemas"]["VenueId"];
-            /** @description On Aster, the venue fee included. */
+            /**
+             * @description `send`: to another account on the same venue (`to: account`).
+             * @enum {string}
+             */
+            kind: "withdrawal" | "send" | (string & {});
+            /** @description On an Aster withdrawal, the venue fee included. */
             amount: components["schemas"]["Amount"];
-            /** @description Polymarket: the linked wallet, signer or deposit address; elsewhere the linked address. */
+            /** @description A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address. */
             destination: components["schemas"]["Address"];
             state: components["schemas"]["WithdrawalState"];
-            /** @description Polymarket's or Aster's withdrawal id once relayed; null on Hyperliquid. */
+            /** @description Polymarket's withdrawal or transfer id, or Aster's withdrawal or transfer id, once relayed; null on Hyperliquid. */
             venue_ref: string | null;
             error: string | null;
             created_at: components["schemas"]["Timestamp"];
@@ -2573,6 +2649,8 @@ export interface components {
             client_take_id: components["schemas"]["ClientId"];
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
+            /** @description Its fills' `taker_fee`, in their `taker_fee_venue` base units. */
+            taker_fee: components["schemas"]["Amount"];
             fills: components["schemas"]["Fill"][];
         };
         TakePreparation: {
@@ -2662,6 +2740,14 @@ export interface components {
             maker_destination: "venue" | "escrow" | null;
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
+            /** @description The taker fee, in `taker_fee_venue` base units. */
+            taker_fee: components["schemas"]["Amount"];
+            taker_fee_bps: components["schemas"]["FeeBps"];
+            taker_fee_venue: components["schemas"]["VenueId"] | null;
+            /** @description What the maker receives of the payment. */
+            maker_in: components["schemas"]["Amount"];
+            /** @description What leaves the maker's order. */
+            maker_out: components["schemas"]["Amount"];
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
             pay_by: components["schemas"]["Timestamp"];
@@ -2830,6 +2916,14 @@ export interface components {
             maker_destination: "venue" | "escrow" | null;
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
+            /** @description The taker fee, in `taker_fee_venue` base units. */
+            taker_fee: components["schemas"]["Amount"];
+            taker_fee_bps: components["schemas"]["FeeBps"];
+            taker_fee_venue: components["schemas"]["VenueId"] | null;
+            /** @description What the maker receives of the payment. */
+            maker_in: components["schemas"]["Amount"];
+            /** @description What leaves the maker's order. */
+            maker_out: components["schemas"]["Amount"];
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
             pay_by: components["schemas"]["Timestamp"];
@@ -2912,6 +3006,14 @@ export interface components {
             to_venue: components["schemas"]["VenueId"];
             amount_out: components["schemas"]["Amount"];
             amount_in: components["schemas"]["Amount"];
+            /** @description The taker fee, in `taker_fee_venue` base units. */
+            taker_fee: components["schemas"]["Amount"];
+            taker_fee_bps: components["schemas"]["FeeBps"];
+            taker_fee_venue: components["schemas"]["VenueId"] | null;
+            /** @description What the maker receives of the payment. */
+            maker_in: components["schemas"]["Amount"];
+            /** @description What leaves the maker's order. */
+            maker_out: components["schemas"]["Amount"];
             payment_leg: components["schemas"]["PaymentLeg"];
             maker_leg: components["schemas"]["MakerLeg"];
             state: components["schemas"]["FillState"];
@@ -2930,6 +3032,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             venue: components["schemas"]["VenueId"];
+            /** @enum {string} */
+            kind: "withdrawal" | "send" | (string & {});
             amount: components["schemas"]["Amount"];
             destination: components["schemas"]["Address"];
             state: components["schemas"]["WithdrawalState"];
@@ -2945,6 +3049,14 @@ export interface components {
             to: components["schemas"]["VenueId"];
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
+            /** @description The taker fee, in `taker_fee_venue` base units. */
+            taker_fee: components["schemas"]["Amount"];
+            taker_fee_bps: components["schemas"]["FeeBps"];
+            taker_fee_venue: components["schemas"]["VenueId"] | null;
+            /** @description What the maker receives of the payment. */
+            maker_in: components["schemas"]["Amount"];
+            /** @description What leaves the maker's order. */
+            maker_out: components["schemas"]["Amount"];
             settled_at: components["schemas"]["Timestamp"];
             /** @description The taker's master address, not a linked venue address. */
             taker_address: components["schemas"]["Address"];
@@ -3342,6 +3454,8 @@ export interface operations {
                 amount_in: components["schemas"]["Amount"];
                 /** @description Least the taker receives for `amount_in`, in `to` base units: the worst price it takes. A smaller amount is held to the same price, in proportion. */
                 min_out?: components["schemas"]["Amount"];
+                /** @description The highest taker fee the takes would accept: each leg is priced at its pair's fee, a leg whose fee is higher left out, as the take would refuse it. Without it, legs pay no fee, as takes without `max_fee_bps` do. */
+                max_fee_bps?: components["schemas"]["FeeBps"];
             };
             header?: never;
             path?: never;
@@ -5369,10 +5483,12 @@ export interface operations {
                     venue: components["schemas"]["VenueId"];
                     amount: components["schemas"]["Amount"];
                     /**
-                     * @description Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer` only.
+                     * @description Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`.
                      * @enum {string}
                      */
-                    to: "wallet" | "signer" | "escrow";
+                    to: "wallet" | "signer" | "escrow" | "account";
+                    /** @description With `to: account` only: the other account. On Polymarket, its Perps owner (signer) address, not its wallet. */
+                    recipient?: components["schemas"]["Address"];
                 };
             };
         };
@@ -5384,7 +5500,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        typed_data: components["schemas"]["TypedData"];
+                        typed_data: components["schemas"]["TypedData"] | components["schemas"]["OpTypedData"];
                     };
                 };
             };
@@ -5410,7 +5526,7 @@ export interface operations {
                 "application/json": {
                     venue: components["schemas"]["VenueId"];
                     /** @description Exactly as `POST /v1/withdrawals/prepare` returned it. */
-                    typed_data: components["schemas"]["TypedData"];
+                    typed_data: components["schemas"]["TypedData"] | components["schemas"]["OpTypedData"];
                     signature: components["schemas"]["Signature"];
                     envelope?: components["schemas"]["AsterEnvelope"];
                 };

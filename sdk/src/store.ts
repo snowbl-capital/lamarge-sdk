@@ -1,4 +1,4 @@
-import type { Typed } from "./protocol/protocol.ts";
+import type { TransferTyped, Typed } from "./protocol/protocol.ts";
 import { array, hex, isRecord, record } from "./protocol/validation.ts";
 import type { SignedItem } from "./signer.ts";
 
@@ -39,6 +39,22 @@ export function typedData(value: unknown): Typed {
   })]));
   return { types, primaryType: typed.primaryType, message: record(typed.message),
     domain: { name: domain.name, chainId: domain.chainId, verifyingContract: domain.verifyingContract, ...(typeof domain.version === "string" ? { version: domain.version } : {}) } };
+}
+
+/** A withdrawal's or send's typed data read back from a store or the API: a Polymarket operation keeps the `op` its hash covers, without a contract. */
+export function transferTypedData(value: unknown): TransferTyped {
+  const typed = record(value);
+  if (typed.primaryType !== "Op") return typedData(value);
+  const domain = record(typed.domain), message = record(typed.message), op = record(typed.op), args = record(op.args);
+  const text = (value: unknown) => { if (typeof value !== "string") throw new Error("Unreadable typed data"); return value; };
+  const whole = (value: unknown) => { if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error("Unreadable typed data"); return value; };
+  if (typeof domain.chainId !== "number" || "verifyingContract" in domain || op.type !== "internalTransfer") throw new Error("Unreadable typed data");
+  const { types } = typedData({ ...typed, domain: { ...domain, verifyingContract: "" } });
+  return {
+    types, primaryType: "Op", domain: { name: text(domain.name), version: text(domain.version), chainId: domain.chainId },
+    message: { data: text(message.data), salt: whole(message.salt), ts: whole(message.ts) },
+    op: { type: "internalTransfer", args: { account: text(args.account), token: text(args.token), amount: text(args.amount), to: text(args.to) } },
+  };
 }
 
 /** Lost with the process: enough for one run, not for recovery after a restart. */

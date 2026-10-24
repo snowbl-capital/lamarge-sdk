@@ -1,4 +1,4 @@
-import { checkPermit, array, record, required, RETIRED_V5_DEPLOYMENTS, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
+import { checkPermit, array, record, required, ESCROW_DEPLOYMENTS, RETIRED_V5_DEPLOYMENTS, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
 import { expect, test } from "bun:test";
 const owner=`0x${"11".repeat(20)}`, receiver=`0x${"22".repeat(20)}`, operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
 const now=Math.floor(Date.now()/1000);
@@ -62,6 +62,17 @@ test("take validates total spend, slippage, one payment per fill, deadlines and 
   expect(()=>check([payTake()],[{...fill,delivery_to:null}])).not.toThrow();
   expect(()=>check([payTake()],[{...fill,delivery_to:"42"}])).toThrow("another account than yours");
 });
+test("a take's fee rides on its payment, as its swap id carries it, within the taker's consent",()=>{
+  // 3,000 on a price of 1,000,000: 30 basis points.
+  const swapId=`0xde65f326692b00000000000000000bb8${"cc".repeat(16)}`;
+  const charged={...fill,swap_id:swapId,amount_in:"1003000",taker_fee:"3000"};
+  const items=()=>[payTake([{...lock(),swapId,amount:"1003000"}])];
+  const check=(max:number|undefined,fills=[charged])=>checkTakeIntent(items(),fills,{...take,amount_in:"1003000",max_fee_bps:max},owner,owner,now);
+  expect(()=>check(30)).not.toThrow();
+  expect(()=>check(29)).toThrow("above what you accepted");
+  expect(()=>check(undefined)).toThrow("above what you accepted");
+  expect(()=>check(30,[{...charged,taker_fee:"0"}])).toThrow("taker_fee");
+});
 test("a take deposits only its payer's shortfall with a reusable allowance",()=>{
   const check=(items:SignItem[])=>checkTakeIntent(items,[fill],take,owner,owner,now);
   const deposit=(amount="400000")=>payTake([lock()],amount);
@@ -101,6 +112,17 @@ test("one take signature binds both amounts, destination, quote and payment of e
  const later={...fill,t2:new Date((now+86400+60)*1000).toISOString()};expect(()=>checkTakeIntent([payTake()],[later],take,owner,owner,now)).toThrow("The signing request differs from your instructions: fills.t2");
  const signer=payTake();signer.signer=receiver;expect(()=>checkTakeIntent([signer],[fill],take,owner,owner,now)).toThrow();
  const types=payTake();types.typed_data.types.LockPayment=required(types.typed_data.types.LockPayment).filter(f=>f.name!=="receiveRecipient");expect(()=>checkTakeIntent([types],[fill],take,owner,owner,now)).toThrow();
+});
+test("a take pays and is delivered in one environment's escrows", () => {
+  const escrow = (environment: string, chainId: number) => required(ESCROW_DEPLOYMENTS.find(d => d.environment === environment && d.chainId === chainId)).address;
+  const signed = (environment: string, delivered: string) => {
+    const item = payTake([{ ...lock(), receiveEscrow: escrow(delivered, 137) }]);
+    item.typed_data.domain.verifyingContract = escrow(environment, 999);
+    return () => checkTakeIntent([item], [fill], take, owner, owner, now);
+  };
+  for (const environment of ["production", "development"]) expect(signed(environment, environment)).not.toThrow();
+  expect(signed("production", "development")).toThrow(/: payments\.receive$/);
+  expect(signed("development", "production")).toThrow(/: payments\.receive$/);
 });
 
 

@@ -1,11 +1,11 @@
 # @lamarge/sdk
 
-The TypeScript client of the [LaMarge API](https://docs.lamarge.trade), for apps, takers and makers. It runs in browsers, Bun and Node 22.12+, ships ESM only and has no runtime dependency. Usage, with examples: [docs.lamarge.trade/sdk](https://docs.lamarge.trade/sdk).
+The TypeScript client of the [LaMarge API](https://docs.lamarge.trade), for apps, takers and makers. It runs in browsers, Bun and Node 22.12+ and ships ESM only. Its one runtime dependency, `@noble/hashes`, hashes Polymarket's operations (keccak256), as viem does. Usage, with examples: [docs.lamarge.trade/sdk](https://docs.lamarge.trade/sdk).
 
 | Entry | Contents |
 | --- | --- |
 | `@lamarge/sdk` | `createClient`, every public operation by its `operationId` (`client.call`), `LaMargeError`, sign-in, signing of checked items, taker flows, `Maker`, `Quoter`, the event feed, `VenueDeliverer` |
-| `@lamarge/sdk/protocol` | The reviewed deployments and every check run before a signature: EIP-712 schemas and domains, intents, withdrawals, Aster and Lighter messages, units |
+| `@lamarge/sdk/protocol` | The reviewed deployments and every check run before a signature: EIP-712 schemas and domains, intents, withdrawals and sends, Aster and Lighter messages, units |
 | `@lamarge/sdk/aster` | `AsterDeliverer`: an active maker's transfers inside Aster. Needs `viem`, an optional peer dependency |
 | `@lamarge/sdk/lighter` | `LighterDeliverer`: an active maker's transfers inside Lighter, signed by a `LighterSigner` the application holds (lighter-ts-sdk or Lighter's Go signer) |
 

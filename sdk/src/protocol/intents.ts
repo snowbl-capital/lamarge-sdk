@@ -1,5 +1,7 @@
 import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { required, type Verified } from "./validation.ts";
+import { escrowDeployment } from "./deployments.ts";
+import { checkFee } from "./fees.ts";
 import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
 export type FundingSource = "wallet" | "venue";
@@ -93,8 +95,8 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
     } else throw new Error("Unexpected maker signing operation");
   }
 }
-type TakeIntent = { from: string; to: string; amount_in: string; min_out: string; max_parts?: number };
-export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined };
+type TakeIntent = { from: string; to: string; amount_in: string; min_out: string; max_parts?: number; max_fee_bps?: number | undefined };
+export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined; taker_fee?: string | undefined };
 /** What a take from `venue` signs to pay: a transfer inside Aster or Lighter, an escrow `pay_take` elsewhere. */
 export const takePaymentKind = (venue: string): string => venue === "aster" ? "aster_transfer" : venue === "lighter" ? "lighter_transfer" : "pay_take";
 type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { api_key_index: number; from_account_index: number; amount: string; usdc_fee: string; memo: string } };
@@ -124,6 +126,8 @@ function checkVenueTake(items: TakeItems, kind: string, fills: TakeFill[], input
   insist(item.fill_id === fill.id, differs("fill_id"));
   insist(BigInt(fill.amount_in) <= BigInt(input.amount_in), differs("fills.amount_in"));
   insist(BigInt(fill.amount_out) >= BigInt(input.min_out), differs("fills.amount_out"));
+  // Paid inside a venue, the fee comes out of what the maker's offer delivers.
+  checkFee(fill, true, input.max_fee_bps);
   checkDelivery(fill, recipient);
   const payBy = Date.parse(fill.pay_by) / 1000, t1 = Date.parse(fill.t1) / 1000;
   insist(payBy > now && payBy <= now + 90, differs("fills.pay_by"));
@@ -155,17 +159,18 @@ export function signableUntil(prepared: { take: { fills: readonly { pay_by: stri
   return Math.min(...prepared.take.fills.map(fill => Date.parse(fill.pay_by) / 1000), ...nonces);
 }
 type RouteTransfer = { id: string; from: string; to: string; amount_in: string; min_out: string; payer: string; recipient: string; previous_transfer_id: string | null;
-  withdrawal_preparation: { amount: string; typed_data: Typed } | null };
+  withdrawal_preparation: { amount: string; typed_data: Typed } | null; max_fee_bps?: number | undefined };
 /**
  * A route signed at once, before its first signature: its second transfer goes on from `hub`, the
  * account on the venue between, to the route's end, for at most what the first take delivers, at
  * least a hundredth of the plan and at the planned price; its withdrawal from the venue between
  * brings no more than that, to `hub`. Each take's payment is checked as any take's when signed.
  */
-export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string } | null | undefined }, delivering: readonly { amount_out: string }[],
-  second: RouteTransfer, hub: string, now = Date.now() / 1000): void {
+export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string; max_fee_bps?: number | undefined } | null | undefined },
+  delivering: readonly { amount_out: string }[], second: RouteTransfer, hub: string, now = Date.now() / 1000): void {
   const then = first.then;
-  insist(then && second.previous_transfer_id === first.id && second.from === first.to && second.to === then.to && same(second.payer, hub) && same(second.recipient, then.recipient), "The route's second transfer differs from the route");
+  insist(then && second.previous_transfer_id === first.id && second.from === first.to && second.to === then.to && same(second.payer, hub) && same(second.recipient, then.recipient)
+    && second.max_fee_bps === then.max_fee_bps, "The route's second transfer differs from the route");
   const delivers = delivering.reduce((sum, fill) => sum + uint(fill.amount_out), 0n), pays = uint(second.amount_in), planned = uint(then.amount_in);
   insist(pays > 0n && pays <= delivers && pays * 100n >= planned && uint(second.min_out) >= uint(then.min_out) * pays / planned, "The route's second take differs from its plan");
   const withdrawal = second.withdrawal_preparation;
@@ -190,6 +195,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
   insist(takes.length === 1 && items.length === 1, "A reserved take must already be funded and authorized");
   const take = required(takes[0]), typed = take.typed_data, m = typed.message;
   checkEscrowTyped(typed, input.from);
+  const paidIn = escrowDeployment(typed.domain.chainId, typed.domain.verifyingContract);
   insist(typed.primaryType === "PayTake", differs("primaryType"));
   insist(same(take.signer, payer) && same(m.payer, payer), differs("payer"));
   insist(take.fill_id !== undefined && fills.some(fill => fill.id === take.fill_id), differs("fill_id"));
@@ -211,6 +217,8 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(same(p.recipient, fill.maker_recipient), differs("payments.recipient"));
     insist(same(p.hashlock, fill.hashlock) && /^0x[0-9a-f]{64}$/i.test(fill.hashlock), differs("payments.hashlock"));
     insist(uint(p.amount) === BigInt(fill.amount_in), differs("payments.amount"));
+    // The fee rides on the payment, which the claim splits: the maker's price is the rest.
+    checkFee(fill, false, input.max_fee_bps);
     insist(uint(p.refundAt) === BigInt(Math.floor(t2)), differs("payments.refundAt"));
     insist(uint(p.deadline) === BigInt(Math.floor(payBy)), differs("payments.deadline"));
     insist(uint(p.dex) === 0n || input.from === "hyperliquid" && uint(p.dex) === 4294967295n, differs("payments.dex"));
@@ -218,7 +226,9 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(uint(p.sequence) === BigInt(fill.sequence), differs("payments.sequence"));
     insist(uint(p.amountOut) === BigInt(fill.amount_out), differs("payments.amountOut"));
     insist(same(p.receiveRecipient, recipient), differs("payments.receiveRecipient"));
-    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && isPinnedEscrow(input.to, p.receiveEscrow), differs("payments.receive"));
+    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && isPinnedEscrow(input.to, p.receiveEscrow)
+      // Paid and delivered in one environment's escrows.
+      && (VENUE_SETTLED.has(input.to) || escrowDeployment(receive.id, String(p.receiveEscrow))?.environment === paidIn?.environment), differs("payments.receive"));
   }
   // Only the shortfall is pulled from the payer. The allowance is reusable, but no unrelated operation is signed.
   const deposit = uint(m.deposit);

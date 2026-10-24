@@ -1,16 +1,23 @@
 import { LaMargeError, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
-import { CHAINS, checkWithdrawal, escrowOf, insist, isPinnedEscrow, same, type Typed } from "./protocol/protocol.ts";
+import { CHAINS, checkSend, checkWithdrawal, escrowOf, insist, isOpTyped, isPinnedEscrow, same, signedAt, type TransferTyped } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
 import { signItems, signTyped, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
-import { exclusive, memoryStore, typedData, type SignatureStore } from "./store.ts";
+import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "./store.ts";
 
 export type Withdrawal = components["schemas"]["Withdrawal"];
 
-/** Checks a withdrawal against its terms at `at` seconds and the caller's own checks, then signs it. */
-export async function signWithdrawal(signer: Signer, typed: Typed, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning): Promise<Hex> {
-  checkWithdrawal(typed, venue, signer.address, destination, amount, at);
+/** A withdrawal's or, with `send`, a send's checks against its terms at `at` seconds. */
+function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, at: number, send: boolean): void {
+  if (send) checkSend(typed, venue, signer, destination, amount, at);
+  else if (isOpTyped(typed)) throw new Error("Unsupported signing request");
+  else checkWithdrawal(typed, venue, signer, destination, amount, at);
+}
+
+/** Checks a withdrawal, or a send to `destination` with `send`, against its terms at `at` seconds and the caller's own checks, then signs it. */
+export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false): Promise<Hex> {
+  checkTransfer(typed, venue, signer.address, destination, amount, at, send);
   await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
   return signTyped(signer, typed);
 }
@@ -22,21 +29,19 @@ export async function signWithdrawal(signer: Signer, typed: Typed, venue: string
  */
 export async function submitWithdrawal(options: {
   key: string; context?: Record<string, unknown>; venue: string; signer: Signer; destination: string; amount: bigint; store: SignatureStore; signal?: AbortSignal | undefined;
-  prepare: () => Promise<Typed>; submit: (typed: Typed, signature: `0x${string}`) => Promise<Withdrawal>; beforeSigning?: BeforeSigning | undefined;
-  now?: (() => number) | undefined;
+  prepare: () => Promise<TransferTyped>; submit: (typed: TransferTyped, signature: `0x${string}`) => Promise<Withdrawal>; beforeSigning?: BeforeSigning | undefined;
+  now?: (() => number) | undefined; send?: boolean | undefined;
 }): Promise<{ result: Withdrawal; saved: Record<string, unknown> }> {
-  const { key, venue, signer, destination, amount, store, signal } = options;
+  const { key, venue, signer, destination, amount, store, signal, send = false } = options;
   const stored: unknown = await store.load(key);
-  let saved = stored === undefined || record(stored).typed === undefined ? undefined : { typed: typedData(record(stored).typed), signature: hex(record(stored).signature) };
+  let saved = stored === undefined || record(stored).typed === undefined ? undefined : { typed: transferTypedData(record(stored).typed), signature: hex(record(stored).signature) };
   if (!saved) {
     const typed = await options.prepare();
-    saved = { typed, signature: await signWithdrawal(signer, typed, venue, destination, amount, (options.now ?? Date.now)() / 1000, options.beforeSigning) };
+    saved = { typed, signature: await signWithdrawal(signer, typed, venue, destination, amount, (options.now ?? Date.now)() / 1000, options.beforeSigning, send) };
     signal?.throwIfAborted();
     await store.save(key, { ...options.context, ...saved });
   }
-  const message = saved.typed.message;
-  const signedAt = venue === "hyperliquid" ? Number(message.nonce) / 1000 : Number(message.ts);
-  checkWithdrawal(saved.typed, venue, signer.address, destination, amount, signedAt);
+  checkTransfer(saved.typed, venue, signer.address, destination, amount, signedAt(saved.typed), send);
   const kept = { ...options.context, ...saved };
   return { result: await options.submit(saved.typed, saved.signature), saved: kept };
 }
@@ -46,7 +51,9 @@ function withdrawalOf(value: unknown): Withdrawal {
   const row = record(value);
   const text = (name: string) => { const field = row[name]; insist(typeof field === "string", "Unreadable stored withdrawal"); return field; };
   const optional = (name: string) => row[name] === null ? null : text(name);
-  return { id: text("id"), venue: text("venue"), amount: text("amount"), destination: text("destination"), state: text("state"),
+  // Withdrawals stored before sends existed carry no kind.
+  const kind = row.kind === undefined ? "withdrawal" : text("kind");
+  return { id: text("id"), venue: text("venue"), kind, amount: text("amount"), destination: text("destination"), state: text("state"),
     venue_ref: optional("venue_ref"), error: optional("error"), created_at: text("created_at"), relayed_at: optional("relayed_at") };
 }
 
@@ -57,24 +64,29 @@ export interface WithdrawalRequest {
   id: string;
   venue: string;
   amount: bigint;
-  /** `signer`, the linked address; `wallet`, its venue wallet. */
-  to: "wallet" | "signer";
+  /** `signer`, the linked address; `wallet`, its venue wallet; `account`, a send to `recipient`. */
+  to: "wallet" | "signer" | "account";
+  /** With `to: "account"`: another account on the same venue. On Polymarket, its Perps owner (signer) address. */
+  recipient?: string;
 }
 
 /**
- * Withdraws exactly `amount` from the signer's Hyperliquid or Polymarket account. Its signature
- * and outcome stay in `store` under `id`: running the same request again returns the outcome or
+ * Withdraws exactly `amount` from the signer's Hyperliquid or Polymarket account, or with
+ * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster. Its signature and
+ * outcome stay in `store` under `id`: running the same request again returns the outcome or
  * submits the same signature, and a refused one asks for a new id. Aster relays a withdrawal in a
- * second envelope this flow does not sign yet.
+ * second envelope this flow does not sign yet; a send needs none.
  */
 export async function withdraw(client: Client, signer: Signer, request: WithdrawalRequest,
   options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}): Promise<Withdrawal> {
   const { id, venue, amount, to } = request;
   const { store = memoryStore(), signal } = options;
-  insist(venue === "hyperliquid" || venue === "polymarket", `Withdrawals from ${venue} are not supported here`);
+  const send = to === "account";
+  insist(venue === "hyperliquid" || venue === "polymarket" || send && venue === "aster", `Withdrawals from ${venue} are not supported here`);
+  insist(send === (request.recipient !== undefined), "A recipient goes with to: account, and only with it");
   const key = `withdrawal:${id}`;
   return exclusive(store, key, async () => {
-    const context = { venue, amount: amount.toString(), to, signer: signer.address.toLowerCase() };
+    const context = { venue, amount: amount.toString(), to, signer: signer.address.toLowerCase(), ...(send ? { recipient: required(request.recipient).toLowerCase() } : {}) };
     const stored: unknown = await store.load(key);
     if (stored !== undefined) {
       const known = record(stored);
@@ -86,11 +98,12 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
     }
     const balance = (await client.call("getBalances", { signal })).find(row => row.venue === venue);
     insist(balance && same(balance.address, signer.address), "Linked account changed; refresh before signing");
-    const destination = required(to === "wallet" ? balance.venue_wallet : signer.address, "No linked destination wallet");
+    const destination = required(send ? request.recipient : to === "wallet" ? balance.venue_wallet : signer.address, "No linked destination wallet");
+    const body = { venue, amount: amount.toString(), to, ...(send ? { recipient: destination } : {}) };
     try {
       const { result, saved } = await submitWithdrawal({
-        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now,
-        prepare: async () => (await client.call("postWithdrawalPrepare", { body: { venue, amount: amount.toString(), to }, signal })).typed_data,
+        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now, send,
+        prepare: async () => transferTypedData((await client.call("postWithdrawalPrepare", { body, signal })).typed_data),
         submit: (typed, signature) => client.call("postWithdrawal", { body: { venue, typed_data: typed, signature }, signal, retry: true }),
       });
       await store.save(key, { ...saved, result });
@@ -126,11 +139,10 @@ export type RefundFill = Pick<components["schemas"]["Fill"], "id" | "role" | "ma
   | "maker_owner" | "payer" | "swap_id" | "order_id" | "amount_in" | "hashlock" | "deliver_by" | "delivery_hash">;
 
 /**
- * The deployment's escrows, read directly: the payment lock at a finalized block, the maker's slot
- * at the latest, where the destination is an escrow (its delivery, or before deliveries its lock),
- * and the consent digest, which an old ABI cannot answer. A server's label cannot authorize giving
- * up a payment for capital delivered or locked. `escrows`, by venue, names each one read, which
- * must be pinned: the payment's is the consent's domain. Without it, production's are read.
+ * The payment's escrow, read directly: its lock at a finalized block and the consent digest, which
+ * an old ABI cannot answer. Consent applies only to a delivery inside a venue, so a server's label
+ * cannot authorize giving up a payment an escrow delivered. `escrows`, by venue, names the escrow
+ * read, which must be pinned: the consent's domain. Without it, production's is read.
  */
 export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows?: Readonly<Record<string, string | undefined>>): Promise<void> {
   const reader = (venue: string) => required(readers[required(CHAINS[venue], "Unknown venue").id], `No reader for ${venue}'s chain`);
@@ -139,13 +151,13 @@ export async function checkEscrowLocks(fill: RefundFill, deadline: number, reade
     insist(isPinnedEscrow(venue, named), "API deployment differs from the reviewed deployment");
     return address(named);
   };
-  const [payment, maker] = await Promise.all([
+  const [payment] = await Promise.all([
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: LOCKS, functionName: "locks", args: [address(fill.payer), ZERO, hex(fill.swap_id)], blockTag: "finalized" }),
-    fill.deliver_by ? null : reader(fill.to_venue).readContract({ address: escrow(fill.to_venue), abi: LOCKS, functionName: "locks", args: [address(fill.maker_owner), hex(fill.order_id), hex(fill.swap_id)], blockTag: "latest" }),
     // An old ABI cannot answer the consent digest: the call fails.
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: DIGEST, functionName: "refundPaymentDigest", args: [{ payer: address(fill.payer), swapId: hex(fill.swap_id), deadline: BigInt(deadline) }] }),
   ]);
-  checkRefundLocks(fill, lockOf(payment), maker === null ? null : lockOf(maker));
+  // An escrow destination fails the check: its delivery is never refunded by consent.
+  checkRefundLocks(fill, lockOf(payment), null);
 }
 
 /**

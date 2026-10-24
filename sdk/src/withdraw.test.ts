@@ -133,15 +133,14 @@ test("a refund is signed only once the escrow its consent names confirms the pay
   await expect(refundPayment(refundApi(other).client, signer, structuredClone(fill), readers())).rejects.toThrow("Unexpected signing domain");
 });
 
-test("the escrows read are pinned, and an escrow destination's slot must be unused: neither delivered nor locked", async () => {
+test("an escrow destination is never refunded by consent, and the escrow read is pinned", async () => {
   const escrowed = { ...structuredClone(fill), to_venue: "polymarket", deliver_by: null }, deadline = now() + 600;
-  const both = { hyperliquid: ESCROW, polymarket: ESCROW };
-  await checkEscrowLocks(escrowed, deadline, readers(), both);
+  await expect(checkEscrowLocks(escrowed, deadline, readers(), { hyperliquid: ESCROW })).rejects.toThrow("Unsupported refund chain");
+  await checkEscrowLocks(fill, deadline, readers(), { hyperliquid: ESCROW });
   // Production's, without the deployment's named.
-  await checkEscrowLocks(escrowed, deadline, readers());
-  for (const state of [1, 2]) await expect(checkEscrowLocks(escrowed, deadline, readers(1, state), both)).rejects.toThrow("no longer permit this refund");
-  for (const escrows of [{ hyperliquid: ESCROW, polymarket: other }, { polymarket: ESCROW }, { hyperliquid: other, polymarket: ESCROW }]) {
-    await expect(checkEscrowLocks(escrowed, deadline, readers(), escrows)).rejects.toThrow("API deployment differs");
+  await checkEscrowLocks(fill, deadline, readers());
+  for (const escrows of [{ hyperliquid: other }, { polymarket: ESCROW }]) {
+    await expect(checkEscrowLocks(fill, deadline, readers(), escrows)).rejects.toThrow("API deployment differs");
   }
 });
 

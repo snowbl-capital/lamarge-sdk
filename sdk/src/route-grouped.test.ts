@@ -20,9 +20,13 @@ const grouped = (state: string) => ({ state, second_transfer_id: "transfer-secon
 /**
  * Lighter → Hyperliquid → Polymarket. `state`: the route as the first transfer shows it from the
  * start, `closedAfter` reads of it before a committed one closes; `paid`: whether its second take
- * paid; `left`: what the first transfer leaves to continue with once closed.
+ * paid; `left`: what the first transfer leaves to continue with once closed; `kept`: its first take
+ * delivered into the available balance, which holds `escrow`, `mixed` half of it; `venueRead`:
+ * false when Hyperliquid cannot be read; `continued`: a successor of its second transfer already
+ * open; `accept`: a successor is created rather than refused.
  */
-function api(options: { state?: string | null; closedAfter?: number; paid?: boolean; left?: string; from?: string; prepare?: () => Response } = {}) {
+function api(options: { state?: string | null; closedAfter?: number; paid?: boolean; left?: string; from?: string; prepare?: () => Response; kept?: boolean; mixed?: boolean;
+  escrow?: string; venueRead?: boolean; continued?: boolean; accept?: boolean } = {}) {
   const calls: string[] = [];
   const bodies: Record<string, unknown>[] = [];
   let reads = 0, declined = false;
@@ -37,18 +41,26 @@ function api(options: { state?: string | null; closedAfter?: number; paid?: bool
   const second = () => ({ ...base, id: "transfer-second", client_transfer_id: "grouped:transfer-first", client_take_id: "transfer:transfer-second", from: "hyperliquid", to: "polymarket",
     from_chain_id: 999, to_chain_id: 137, amount_in: "6000000", min_out: "5400000", take_id: "take-second", take_final: true, previous_transfer_id: "transfer-first", then: null,
     continuable: null, grouped: grouped(state() ?? "aborted") });
+  const successor = { ...base, id: "transfer-third", client_transfer_id: "renew:transfer-second", client_take_id: "transfer:transfer-third", from: "hyperliquid", to: "polymarket",
+    from_chain_id: 999, to_chain_id: 137, amount_in: "10000000", min_out: "9000000", take_id: null, take_final: false, previous_transfer_id: "transfer-first", then: null,
+    continuable: null, grouped: null, funding_plan: { venue: "hyperliquid", owner, amount: "10000000", deposit: "0", withdrawal_amount: "0", withdrawal_to: null, observed_at: at(0),
+      payment_setup: "done", requests: [{ kind: "pay_take", signer: owner, chain_id: 999 }] } };
   const nonce = String(BigInt(Math.floor(Date.now() / 1000) + 15) * 1_000_000n);
   const aster = { kind: "aster_transfer", signer: owner, fill_id: "fill-take-first",
     typed_data: asterRequest(`asset=USDT&amount=10.0065&toAddress=${owner}&clientTranId=${"0".repeat(32)}&nonce=${nonce}&user=${owner}`, ASTER_TRANSFER_CHAIN_ID) };
   const routes: Record<string, () => unknown> = {
-    "POST /v1/transfers": () => error(409, "STATE_CONFLICT", "stop"),
+    "POST /v1/transfers": () => options.accept ? Response.json(successor, { status: 201 }) : error(409, "STATE_CONFLICT", "stop"),
     "GET /v1/transfers/transfer-first": () => { reads++; return first(); },
     "GET /v1/transfers/transfer-second": second,
-    "GET /v1/transfers": () => ({ data: [second(), first()], next_cursor: null, has_more: false }),
+    "GET /v1/transfers": () => ({ data: [...options.continued ? [successor] : [], second(), first()], next_cursor: null, has_more: false }),
+    "GET /v1/transfers/transfer-third": () => successor,
     "POST /v1/transfers/transfer-first/grouped": options.prepare ?? (() => error(409, "STATE_CONFLICT", "grouped_unavailable")),
-    "GET /v1/balances": () => [{ venue: from, address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null, withdrawable: "100000000",
-      withdrawal_fee: "0", read_at: at(1), chain_balance: "0", escrow_balance: "0", deposit_balance: "0", chain_read_at: at(0) }, { venue: "polymarket", address: owner }],
-    "GET /v1/takes/take-first": () => state() ? { take: { id: "take-first", fills: [fill("take-first", "SETTLED", "10006500", "10000000")] }, to_sign: [] }
+    "GET /v1/balances": () => [{ venue: from, address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null,
+      withdrawable: options.venueRead === false ? null : "100000000", withdrawal_fee: "0", read_at: options.venueRead === false ? null : at(1), chain_balance: "0",
+      escrow_balance: options.escrow ?? "0", deposit_balance: "0", chain_read_at: at(0) }, { venue: "polymarket", address: owner }],
+    "GET /v1/takes/take-first": () => state() ? { take: { id: "take-first", fills: options.mixed
+      ? [{ ...fill("take-first", "SETTLED", "5003250", "5000000"), maker_destination: "escrow" }, { ...fill("take-first", "SETTLED", "5003250", "5000000"), id: "fill-other", maker_destination: "venue" }]
+      : [{ ...fill("take-first", "SETTLED", "10006500", "10000000"), maker_destination: options.kept ? "escrow" : "venue" }] }, to_sign: [] }
       // Signed alone: an Aster reservation past its nonce bound, ten seconds short of its pay_by.
       : { take: { id: "take-first", fills: [{ ...fill("take-first", declined ? "EXPIRED" : "RESERVED", "10006500", "10000000", false), pay_by: at(25) }] }, to_sign: declined ? [] : [aster] },
     "DELETE /v1/takes/take-first": () => { declined = true; return new Response(null, { status: 204 }); },
@@ -112,4 +124,30 @@ test("an Aster first take past its nonce bound, once its route went leg by leg, 
   await expect(route(client, signer, { ...request, from: "aster" }, { ...fast, grouped: true })).rejects.toThrow();
   expect(calls).toContain("DELETE /v1/takes/take-first");
   expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => body.client_transfer_id)).toEqual(["retry:transfer-first"]);
+});
+
+/** A closed route whose second take never paid, its first take's 10 kept in escrow, Hyperliquid unread. */
+const kept = { state: "committed", paid: false, left: "10000000", kept: true, escrow: "10000000", venueRead: false };
+
+test("a route kept in escrow continues from its available balance, Hyperliquid unread, never withdrawing", async () => {
+  const { client, calls, bodies } = api({ ...kept, accept: true });
+  await expect(route(client, signer, request, { ...fast, arrivalWaitMs: 1_000, grouped: true })).rejects.toThrow("NOT_FOUND");
+  expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => [body.client_transfer_id, body.amount_in])).toEqual([["renew:transfer-second", "10000000"]]);
+  // Paid from the available balance, it goes on to price its take.
+  expect(calls).toContain("GET /v1/books");
+  expect(calls.some(call => call.includes("/withdrawal"))).toBe(false);
+});
+
+test("a successor of a route kept in escrow, resumed, pays from it, never withdrawing", async () => {
+  const { client, calls } = api({ ...kept, continued: true });
+  await expect(route(client, signer, request, { ...fast, arrivalWaitMs: 1_000, grouped: true })).rejects.toThrow("NOT_FOUND");
+  expect(calls).toContain("GET /v1/transfers/transfer-third");
+  expect(calls).toContain("GET /v1/books");
+  expect(calls.some(call => call.includes("/withdrawal"))).toBe(false);
+});
+
+test("a first take delivered partly into the venue continues from the venue and the escrow together", async () => {
+  const { client, bodies } = api({ state: "committed", paid: false, left: "10000000", mixed: true, escrow: "5000000" });
+  await expect(route(client, signer, request, { ...fast, arrivalWaitMs: 1_000, grouped: true })).rejects.toThrow("STATE_CONFLICT");
+  expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => [body.client_transfer_id, body.amount_in])).toEqual([["renew:transfer-second", "10000000"]]);
 });

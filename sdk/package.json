@@ -1,6 +1,6 @@
 {
   "name": "@lamarge/sdk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
   "homepage": "https://docs.lamarge.trade/sdk",
@@ -46,6 +46,9 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "check": "bun run api:check && bun run typecheck && bun test && bun run build && bun run check:package",
     "check:package": "bun run scripts/check-package.ts"
+  },
+  "dependencies": {
+    "@noble/hashes": "1.8.0"
   },
   "peerDependencies": {
     "viem": "^2.38.0"

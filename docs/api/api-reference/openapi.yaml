@@ -369,6 +369,15 @@
             "schema": {
               "$ref": "#/components/schemas/Amount"
             }
+          },
+          {
+            "name": "max_fee_bps",
+            "in": "query",
+            "required": false,
+            "description": "The highest taker fee the takes would accept: each leg is priced at its pair's fee, a leg whose fee is higher left out, as the take would refuse it. Without it, legs pay no fee, as takes without `max_fee_bps` do.",
+            "schema": {
+              "$ref": "#/components/schemas/FeeBps"
+            }
           }
         ],
         "responses": {
@@ -3086,7 +3095,7 @@
         ],
         "operationId": "prepareGroupedRoute",
         "summary": "Prepare a grouped route",
-        "description": "For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign. The withdrawal from the intermediate venue, when the route needs one, is the second transfer's `withdrawal_preparation`. Sign in order: the first take's request, the withdrawal, the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.",
+        "description": "For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.",
         "security": [
           {
             "session": []
@@ -3174,7 +3183,7 @@
         ],
         "operationId": "commitGroupedRoute",
         "summary": "Commit a route's signatures",
-        "description": "Every signature of a prepared route at once: each take's items by `fill_id`, the withdrawal as a `margin_move` item. Accepted together before `commit_by`, or none; the operator then withdraws once the first take delivered and pays the second take once its funds arrived. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.",
+        "description": "Every signature of a prepared route at once: each take's items by `fill_id`. Accepted together before `commit_by`, or none; the first take is then delivered into the payer's available balance on the intermediate chain, and the operator pays the second take from it. A retry answers the committed route. `TAKE_EXPIRED`: `commit_by` passed and the route is aborted. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route was aborted. Either way, sign the first take alone.",
         "security": [
           {
             "session": []
@@ -3849,8 +3858,8 @@
         "tags": [
           "Withdrawals"
         ],
-        "summary": "Prepare a withdrawal",
-        "description": "Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less transfers relayed since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal on the venue is `STATE_CONFLICT`. On Aster the signed amount adds the venue fee. Relay within ten minutes.",
+        "summary": "Prepare a withdrawal or a send",
+        "description": "Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less what left the account since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal or send on the venue is `STATE_CONFLICT`. On Aster a withdrawal's signed amount adds the venue fee; a send has none. `to: account` sends to `recipient`, another existing account on the same venue: never your own address, venue wallet or deposit address; on Hyperliquid a user or sub-account in mode `default` or `unifiedAccount`, without code on HyperEVM. A Polymarket send is an `OpTypedData`: the wallet signs only a hash, so rebuild it from `op` before signing. An Aster send goes out within 50 s of its nonce. Relay within ten minutes.",
         "operationId": "postWithdrawalPrepare",
         "security": [
           {
@@ -3880,9 +3889,14 @@
                     "enum": [
                       "wallet",
                       "signer",
-                      "escrow"
+                      "escrow",
+                      "account"
                     ],
-                    "description": "Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer` only."
+                    "description": "Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`."
+                  },
+                  "recipient": {
+                    "$ref": "#/components/schemas/Address",
+                    "description": "With `to: account` only: the other account. On Polymarket, its Perps owner (signer) address, not its wallet."
                   }
                 },
                 "additionalProperties": false
@@ -3902,7 +3916,14 @@
                   ],
                   "properties": {
                     "typed_data": {
-                      "$ref": "#/components/schemas/TypedData"
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/TypedData"
+                        },
+                        {
+                          "$ref": "#/components/schemas/OpTypedData"
+                        }
+                      ]
                     }
                   }
                 }
@@ -3965,7 +3986,14 @@
                     "$ref": "#/components/schemas/VenueId"
                   },
                   "typed_data": {
-                    "$ref": "#/components/schemas/TypedData",
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/TypedData"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OpTypedData"
+                      }
+                    ],
                     "description": "Exactly as `POST /v1/withdrawals/prepare` returned it."
                   },
                   "signature": {
@@ -4795,6 +4823,12 @@
         "type": "string",
         "description": "A venue id from `GET /v1/venues`."
       },
+      "FeeBps": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "description": "Basis points; the escrow refuses more than 100."
+      },
       "Amount": {
         "type": "string",
         "pattern": "^[0-9]{1,78}$",
@@ -5047,6 +5081,7 @@
           "from",
           "to",
           "max_fill",
+          "taker_fee_bps",
           "levels"
         ],
         "properties": {
@@ -5059,6 +5094,10 @@
           "max_fill": {
             "$ref": "#/components/schemas/Amount",
             "description": "Most one fill takes from one level, in `to` base units."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps",
+            "description": "The pair's taker fee now, for a take consenting to it with `max_fee_bps`. Levels show the makers' prices without it."
           },
           "levels": {
             "type": "array",
@@ -5109,7 +5148,9 @@
                 "to",
                 "amount_in",
                 "amount_out",
-                "parts"
+                "parts",
+                "taker_fee",
+                "taker_fee_bps"
               ],
               "properties": {
                 "from": {
@@ -5129,6 +5170,14 @@
                   "minimum": 1,
                   "maximum": 8,
                   "description": "Price levels the take goes through."
+                },
+                "taker_fee": {
+                  "$ref": "#/components/schemas/Amount",
+                  "description": "The take's fee at `taker_fee_bps`, included in its amounts: in `from` base units, or in `to` base units when it pays from Lighter or Aster."
+                },
+                "taker_fee_bps": {
+                  "$ref": "#/components/schemas/FeeBps",
+                  "description": "The pair's fee now, which the take's `max_fee_bps` must accept; 0 without the request's `max_fee_bps`."
                 }
               },
               "additionalProperties": false
@@ -5246,8 +5295,10 @@
           "version": {
             "type": "integer",
             "enum": [
-              1
-            ]
+              1,
+              2
+            ],
+            "description": "2 for a trade with a taker fee, which `taker_fee` and `taker_fee_venue` give."
           },
           "id": {
             "type": "string",
@@ -5264,6 +5315,14 @@
           },
           "amount_out": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "Version 2: the fee the `swap_id` carries. Paid from an escrow, `amount_in` less it pays the maker's price for `amount_out`; paid from Lighter or Aster, `amount_in` pays the price of `amount_out` plus it, which the maker's offer delivered to the fee recipient."
+          },
+          "taker_fee_venue": {
+            "$ref": "#/components/schemas/VenueId",
+            "description": "Version 2: the venue whose token `taker_fee` is in."
           },
           "swap_id": {
             "$ref": "#/components/schemas/Bytes32"
@@ -5999,11 +6058,15 @@
           },
           "maker_fee_bps": {
             "type": "integer",
-            "const": 0
+            "const": 0,
+            "deprecated": true,
+            "description": "Makers pay no fee."
           },
           "taker_fee_bps": {
             "type": "integer",
-            "const": 0
+            "const": 0,
+            "deprecated": true,
+            "description": "Taker fees are per pair, in each book's `taker_fee_bps`."
           }
         }
       },
@@ -6029,6 +6092,111 @@
           "message": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "OpTypedData": {
+        "type": "object",
+        "description": "A Polymarket Perps operation (`primaryType` `Op`, a domain without `verifyingContract`): `message.data` is `keccak256` of the MessagePack of `[op.type, [op.args.account, op.args.token, op.args.amount, op.args.to]]`, those exact strings. Sign `domain`, `types`, `primaryType` and `message` only.",
+        "required": [
+          "types",
+          "primaryType",
+          "domain",
+          "message",
+          "op"
+        ],
+        "properties": {
+          "types": {
+            "$ref": "#/components/schemas/Eip712Types"
+          },
+          "primaryType": {
+            "type": "string",
+            "enum": [
+              "Op"
+            ]
+          },
+          "domain": {
+            "type": "object",
+            "required": [
+              "name",
+              "version",
+              "chainId"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "chainId": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "message": {
+            "type": "object",
+            "required": [
+              "data",
+              "salt",
+              "ts"
+            ],
+            "properties": {
+              "data": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "salt": {
+                "type": "integer"
+              },
+              "ts": {
+                "type": "integer",
+                "description": "Milliseconds."
+              }
+            }
+          },
+          "op": {
+            "type": "object",
+            "required": [
+              "type",
+              "args"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "internalTransfer"
+                ]
+              },
+              "args": {
+                "type": "object",
+                "required": [
+                  "account",
+                  "token",
+                  "amount",
+                  "to"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "description": "Checksummed."
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "Checksummed."
+                  },
+                  "amount": {
+                    "type": "string",
+                    "description": "Decimal pUSD."
+                  },
+                  "to": {
+                    "type": "string",
+                    "description": "Checksummed."
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -6897,6 +7065,10 @@
           "previous_transfer_id": {
             "$ref": "#/components/schemas/Uuid",
             "description": "The transfer with `then` this one continues, from its `to` and `recipient` to its `then`, once no part of its take can deliver more: at most its `continuable`. It replaces an earlier continuation that neither took nor sent a withdrawal still in flight."
+          },
+          "max_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps",
+            "description": "The highest taker fee its take accepts: a pair whose fee is higher is `VALIDATION_ERROR` with reason `fee_above_max`. Without it, its take pays no fee. Its take must send the same; a route's second take accepts `then.max_fee_bps`."
           }
         },
         "additionalProperties": false
@@ -6924,6 +7096,10 @@
           "min_out": {
             "$ref": "#/components/schemas/Amount",
             "description": "Least the route accepts on `to` for that `amount_in`; a continuation paying another amount scales it."
+          },
+          "max_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps",
+            "description": "The highest taker fee the second take accepts, a route signed at once's included. A continuation sends its own. Without it, that take pays no fee."
           },
           "chain_id": {
             "type": "integer",
@@ -7058,6 +7234,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 8
+          },
+          "max_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps",
+            "description": "As sent; absent when the transfer consented to no fee."
           },
           "payer": {
             "$ref": "#/components/schemas/Address"
@@ -7345,6 +7525,10 @@
             "maximum": 8,
             "default": 8,
             "description": "Most maker fills; part of the request's identity for retries."
+          },
+          "max_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps",
+            "description": "The highest taker fee accepted, as the book's `taker_fee_bps`: a higher one is `VALIDATION_ERROR` with reason `fee_above_max`, before anything is reserved. Without it the take pays no fee. Part of the request's identity for retries."
           }
         },
         "additionalProperties": false
@@ -7366,6 +7550,11 @@
           "to_venue",
           "amount_out",
           "amount_in",
+          "taker_fee",
+          "taker_fee_bps",
+          "taker_fee_venue",
+          "maker_out",
+          "maker_in",
           "payer",
           "maker_owner",
           "maker_recipient",
@@ -7443,7 +7632,33 @@
           },
           "amount_in": {
             "$ref": "#/components/schemas/Amount",
-            "description": "What the taker pays on `from_venue`, `ceil(amount_out × receive / supply)`."
+            "description": "What the taker pays on `from_venue`: `ceil(maker_out × receive / supply)`, plus `taker_fee` when it is in `from_venue`'s token."
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The taker fee, fixed at acceptance, in `taker_fee_venue` base units and carried by `swap_id`: paid from an escrow, part of the payment, which the claim pays to the fee recipient; paid from Lighter or Aster, delivered by the maker's offer on top of `amount_out`. `0` without a fee."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps"
+          },
+          "taker_fee_venue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VenueId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`from_venue`, or `to_venue` when the taker pays from Lighter or Aster; null without fee."
+          },
+          "maker_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What leaves the maker's order, in `to_venue` base units, against its funds and quotes."
+          },
+          "maker_in": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the maker receives of the payment, in `from_venue` base units."
           },
           "payer": {
             "$ref": "#/components/schemas/Address",
@@ -7611,6 +7826,7 @@
         "required": [
           "id",
           "venue",
+          "kind",
           "amount",
           "destination",
           "state",
@@ -7627,13 +7843,21 @@
           "venue": {
             "$ref": "#/components/schemas/VenueId"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "withdrawal",
+              "send"
+            ],
+            "description": "`send`: to another account on the same venue (`to: account`)."
+          },
           "amount": {
             "$ref": "#/components/schemas/Amount",
-            "description": "On Aster, the venue fee included."
+            "description": "On an Aster withdrawal, the venue fee included."
           },
           "destination": {
             "$ref": "#/components/schemas/Address",
-            "description": "Polymarket: the linked wallet, signer or deposit address; elsewhere the linked address."
+            "description": "A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address."
           },
           "state": {
             "$ref": "#/components/schemas/WithdrawalState"
@@ -7643,7 +7867,7 @@
               "string",
               "null"
             ],
-            "description": "Polymarket's or Aster's withdrawal id once relayed; null on Hyperliquid."
+            "description": "Polymarket's withdrawal or transfer id, or Aster's withdrawal or transfer id, once relayed; null on Hyperliquid."
           },
           "error": {
             "type": [
@@ -8922,6 +9146,7 @@
           "client_take_id",
           "amount_in",
           "amount_out",
+          "taker_fee",
           "fills"
         ],
         "properties": {
@@ -8937,6 +9162,10 @@
           },
           "amount_out": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "Its fills' `taker_fee`, in their `taker_fee_venue` base units."
           },
           "fills": {
             "type": "array",
@@ -9234,6 +9463,11 @@
           "maker_destination",
           "amount_in",
           "amount_out",
+          "taker_fee",
+          "taker_fee_bps",
+          "taker_fee_venue",
+          "maker_in",
+          "maker_out",
           "from",
           "to",
           "pay_by",
@@ -9301,6 +9535,31 @@
           },
           "amount_out": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The taker fee, in `taker_fee_venue` base units."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps"
+          },
+          "taker_fee_venue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VenueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maker_in": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the maker receives of the payment."
+          },
+          "maker_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What leaves the maker's order."
           },
           "from": {
             "$ref": "#/components/schemas/VenueId"
@@ -9944,6 +10203,11 @@
           "maker_destination",
           "amount_in",
           "amount_out",
+          "taker_fee",
+          "taker_fee_bps",
+          "taker_fee_venue",
+          "maker_in",
+          "maker_out",
           "from",
           "to",
           "pay_by",
@@ -10012,6 +10276,31 @@
           },
           "amount_out": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The taker fee, in `taker_fee_venue` base units."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps"
+          },
+          "taker_fee_venue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VenueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maker_in": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the maker receives of the payment."
+          },
+          "maker_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What leaves the maker's order."
           },
           "from": {
             "$ref": "#/components/schemas/VenueId"
@@ -10327,6 +10616,11 @@
           "to_venue",
           "amount_out",
           "amount_in",
+          "taker_fee",
+          "taker_fee_bps",
+          "taker_fee_venue",
+          "maker_in",
+          "maker_out",
           "payment_leg",
           "maker_leg",
           "state",
@@ -10368,6 +10662,31 @@
           },
           "amount_in": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The taker fee, in `taker_fee_venue` base units."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps"
+          },
+          "taker_fee_venue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VenueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maker_in": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the maker receives of the payment."
+          },
+          "maker_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What leaves the maker's order."
           },
           "payment_leg": {
             "$ref": "#/components/schemas/PaymentLeg"
@@ -10414,6 +10733,7 @@
         "required": [
           "id",
           "venue",
+          "kind",
           "amount",
           "destination",
           "state",
@@ -10430,6 +10750,13 @@
           },
           "venue": {
             "$ref": "#/components/schemas/VenueId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "withdrawal",
+              "send"
+            ]
           },
           "amount": {
             "$ref": "#/components/schemas/Amount"
@@ -10478,6 +10805,11 @@
           "to",
           "amount_in",
           "amount_out",
+          "taker_fee",
+          "taker_fee_bps",
+          "taker_fee_venue",
+          "maker_in",
+          "maker_out",
           "settled_at",
           "taker_address"
         ],
@@ -10496,6 +10828,31 @@
           },
           "amount_out": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "The taker fee, in `taker_fee_venue` base units."
+          },
+          "taker_fee_bps": {
+            "$ref": "#/components/schemas/FeeBps"
+          },
+          "taker_fee_venue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VenueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maker_in": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What the maker receives of the payment."
+          },
+          "maker_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "What leaves the maker's order."
           },
           "settled_at": {
             "$ref": "#/components/schemas/Timestamp"

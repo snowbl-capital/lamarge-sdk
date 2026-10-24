@@ -1,3 +1,6 @@
+import { feeOn, NO_FEE, priceWithin, takeFee } from "./protocol/fees.ts";
+import { insist } from "./protocol/protocol.ts";
+
 // The book as the server matches a take, so a client knows before funding whether a take executes.
 type Level = { order_id: string; supply: string; receive: string; available: string; min_fill: string; valid_until: string };
 
@@ -12,10 +15,11 @@ export interface Sweep { out: bigint; pay: bigint; parts: number }
 
 /**
  * As the server matches: best price first, at most `maxParts`; each part takes the least of what
- * is left, `available` and `maxFill`, is skipped below `min_fill` and pays rounded up. Nothing
- * executes when the parts together stay below `floor`, the receiving venue's minimum deposit.
+ * is left, `available` and `maxFill`, is skipped below `min_fill` and pays rounded up. A fee on
+ * the payment comes on top of the price; one on the delivery comes out of what the maker delivers.
+ * Nothing executes when the parts together stay below `floor`, the receiving venue's minimum deposit.
  */
-export function sweep(levels: Level[], maxFill: bigint, own: Set<string>, amount: bigint, maxParts = MAX_PARTS, floor = 0n, now = Date.now()): Sweep {
+export function sweep(levels: Level[], maxFill: bigint, own: Set<string>, amount: bigint, maxParts = MAX_PARTS, floor = 0n, now = Date.now(), fee = NO_FEE): Sweep {
   let left = amount;
   let out = 0n;
   let parts = 0;
@@ -24,10 +28,12 @@ export function sweep(levels: Level[], maxFill: bigint, own: Set<string>, amount
     if (own.has(level.order_id)) continue;
     const supply = BigInt(level.supply);
     const receive = BigInt(level.receive);
-    const got = [(left * supply) / receive, BigInt(level.available), maxFill].reduce((a, b) => (a < b ? a : b));
+    const priced = fee.onDelivery ? left : priceWithin(left, fee.bps);
+    const got = [(priced * supply) / receive, BigInt(level.available), maxFill].reduce((a, b) => (a < b ? a : b));
     if (got === 0n || got < BigInt(level.min_fill)) continue;
-    out += got;
-    left -= divCeil(got * receive, supply);
+    const paid = divCeil(got * receive, supply);
+    out += fee.onDelivery ? got - feeOn(got, fee.bps) : got;
+    left -= fee.onDelivery ? paid : paid + feeOn(paid, fee.bps);
     parts += 1;
   }
   return out < floor ? { out: 0n, pay: 0n, parts: 0 } : { out, pay: amount - left, parts };
@@ -36,18 +42,19 @@ export function sweep(levels: Level[], maxFill: bigint, own: Set<string>, amount
 /** Smallest payment the book executes, in payment units: each of at most `maxParts` parts meets its
  * maker's minimum and the parts together `floor`. A larger payment never receives less, so a bisection
  * finds it. A take paid inside its venue (Lighter, Aster) buys one fill. */
-export function minimumTake(levels: Level[], maxFill: bigint, own: Set<string>, floor = 0n, now = Date.now(), maxParts = MAX_PARTS): bigint | null {
+export function minimumTake(levels: Level[], maxFill: bigint, own: Set<string>, floor = 0n, now = Date.now(), maxParts = MAX_PARTS, fee = NO_FEE): bigint | null {
   let high = 0n;
   for (const level of live(levels, now)) {
     if (own.has(level.order_id)) continue;
     const most = BigInt(level.available) < maxFill ? BigInt(level.available) : maxFill;
-    high += divCeil(most * BigInt(level.receive), BigInt(level.supply));
+    const paid = divCeil(most * BigInt(level.receive), BigInt(level.supply));
+    high += fee.onDelivery ? paid : paid + feeOn(paid, fee.bps);
   }
-  if (!sweep(levels, maxFill, own, high, maxParts, floor, now).parts) return null;
+  if (!sweep(levels, maxFill, own, high, maxParts, floor, now, fee).parts) return null;
   let low = 0n;
   while (high - low > 1n) {
     const middle = (low + high) / 2n;
-    if (sweep(levels, maxFill, own, middle, maxParts, floor, now).parts) high = middle;
+    if (sweep(levels, maxFill, own, middle, maxParts, floor, now, fee).parts) high = middle;
     else low = middle;
   }
   return high;
@@ -58,10 +65,27 @@ export class QuoteUnavailable extends Error {
   override readonly name = "QuoteUnavailable";
 }
 
-/** That the book pays all of `amount_in` for at least `min_out`, the caller's own orders aside; `floor` is the receiving venue's minimum deposit. */
-export function checkQuote(book: { max_fill: string; levels: Level[] }, own: Set<string>, input: { amount_in: string; min_out: string; max_parts?: number | undefined }, floor = 0n, now = Date.now()): void {
+/** Whether `swept`, the sweep of `amount`, pays all of it but for rounding: what it leaves would
+ * not buy one more unit at the book's best price, the fee on top of it included, whose rounding
+ * down can cost one more payment unit. */
+export function paysAll(levels: Level[], own: Set<string>, amount: bigint, swept: Sweep, fee = NO_FEE, now = Date.now()): boolean {
+  const best = live(levels, now).filter(level => !own.has(level.order_id))
+    .reduce<Level | undefined>((kept, level) => !kept || BigInt(level.receive) * BigInt(kept.supply) < BigInt(kept.receive) * BigInt(level.supply) ? level : kept, undefined);
+  if (!best) return true;
+  const unit = divCeil(BigInt(best.receive), BigInt(best.supply));
+  const cost = fee.onDelivery || fee.bps === 0n ? unit : unit + feeOn(unit, fee.bps) + 1n;
+  return amount - swept.pay < cost;
+}
+
+/** That the book pays all of `amount_in` but for rounding for at least `min_out`, fee included, the caller's own orders aside; `floor` is the receiving venue's minimum deposit. */
+export function checkQuote(book: { max_fill: string; levels: Level[]; taker_fee_bps?: number | undefined }, own: Set<string>,
+  input: { amount_in: string; min_out: string; max_parts?: number | undefined; from?: string | undefined; max_fee_bps?: number | undefined }, floor = 0n, now = Date.now()): void {
   const amount = BigInt(input.amount_in);
-  const next = sweep(book.levels, BigInt(book.max_fill), own, amount, input.max_parts, floor, now);
+  // Where the fee comes from depends on the paying venue.
+  insist(input.max_fee_bps === undefined || input.from, "A take accepting a fee names the venue it pays from");
+  if (input.max_fee_bps !== undefined && (book.taker_fee_bps ?? 0) > input.max_fee_bps) throw new QuoteUnavailable("The fee is above what this transfer accepts");
+  const fee = takeFee(input.from ?? "", book.taker_fee_bps, input.max_fee_bps);
+  const next = sweep(book.levels, BigInt(book.max_fill), own, amount, input.max_parts, floor, now, fee);
   if (!next.parts) throw new QuoteUnavailable("No executable price available");
-  if (next.pay !== amount || next.out < BigInt(input.min_out)) throw new QuoteUnavailable("No price meets this transfer's minimum");
+  if (!paysAll(book.levels, own, amount, next, fee, now) || next.out < BigInt(input.min_out)) throw new QuoteUnavailable("No price meets this transfer's minimum");
 }

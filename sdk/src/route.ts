@@ -5,7 +5,7 @@ import { required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import type { Signer } from "./signer.ts";
 import type { Fill } from "./take.ts";
-import { transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
+import { consent, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
 import { signRoute } from "./grouped.ts";
 
 /** A route's two transfers: the first from `from` to `via`, the second from `via` to `to`, as `GET /v1/routes` plans them. */
@@ -18,10 +18,12 @@ export interface RouteRequest {
   /** The first take: what it pays on `from`, and the least it delivers on `via`. */
   amount_in: string;
   min_out: string;
-  /** The second take as planned: what it pays on `via`, and the least it delivers on `to`. */
-  then: { amount_in: string; min_out: string };
+  /** The second take as planned: what it pays on `via`, the least it delivers on `to`, and the highest taker fee it accepts (none without). */
+  then: { amount_in: string; min_out: string; max_fee_bps?: number | undefined };
   /** The linked account receiving on `to`; the signer, or `via`'s own (`RouteOptions.viaSigner`), receives on `via` and pays from there. */
   recipient: string;
+  /** The highest taker fee the first take accepts, in basis points, as the route's first leg shows it; without it, it pays none. */
+  max_fee_bps?: number | undefined;
   /** How the first transfer pays; the second pays from the account on `via`. */
   funding: Funding;
   /** The route's first transfer, as `onIntent` last named it. */
@@ -41,11 +43,16 @@ export type RouteOptions = Omit<TransferOptions, "onStage"> & {
   grouped?: boolean | undefined;
 };
 
-/** What the first take delivered on `via`, and when its last part was released; null while a part can still deliver. */
+/**
+ * What the first take delivered on `via`, when its last part was released, and whether it was kept
+ * in the payer's available balance there, as a grouped route's is, rather than sent to the venue
+ * account; null while a part can still deliver.
+ */
 function delivered(fills: Fill[]) {
   if (!fills.every(fill => fill.maker_leg === "CLAIMED" || ["SETTLED", "EXPIRED", "REFUNDED", "TAKER_LOSS", "MAKER_LOSS"].includes(fill.state))) return null;
   const claimed = fills.filter(fill => fill.maker_leg === "CLAIMED");
-  return { received: claimed.reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n), released: Math.max(0, ...claimed.map(fill => Date.parse(fill.maker_claimed_at ?? "") || 0)) };
+  return { received: claimed.reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n), released: Math.max(0, ...claimed.map(fill => Date.parse(fill.maker_claimed_at ?? "") || 0)),
+    kept: claimed.length > 0 && claimed.every(fill => fill.maker_destination === "escrow") };
 }
 
 /** The latest transfer continuing `first`, read back through the history down to `first` itself. */
@@ -77,12 +84,14 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   let first: TransferIntent = request.transfer_id
     ? await client.call("getTransfer", { path: { id: request.transfer_id }, signal })
     : await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, ...request.then } }, signal, retry: true });
+      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, amount_in: request.then.amount_in, min_out: request.then.min_out,
+        ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps) }, signal, retry: true });
   const then = first.then;
   // The first transfer is the one asked before anything of it is reserved or signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
   insist(then && first.from === request.from && first.to === request.via && first.from_chain_id === CHAINS[request.from]?.id && first.to_chain_id === CHAINS[request.via]?.id
-    && first.amount_in === request.amount_in && first.min_out === request.min_out && same(first.payer, signer.address) && same(first.recipient, hub.address)
-    && then.to === request.to && same(then.recipient, request.recipient) && then.amount_in === request.then.amount_in && then.min_out === request.then.min_out, "Transfer terms changed; review the original transfer");
+    && first.amount_in === request.amount_in && first.min_out === request.min_out && first.max_fee_bps === request.max_fee_bps && same(first.payer, signer.address) && same(first.recipient, hub.address)
+    && then.to === request.to && same(then.recipient, request.recipient) && then.amount_in === request.then.amount_in && then.min_out === request.then.min_out
+    && then.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
   // Signed at once where it can be: committed, it runs to its end with nothing left to sign. It is named before anything of it is reserved or signed.
   if (options.grouped === true && !first.cancelled_at && groupable(request.from, request.via) && (!first.grouped || first.grouped.state === "prepared")) {
     await onIntent?.(first);
@@ -101,7 +110,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     fills = (await client.call("getV1TakesId", { path: { id: grouped.first_take_id }, signal })).take.fills;
   } else {
     fills = await transfer(client, signer, { client_transfer_id: first.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
+      recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
     stage("relaying");
   }
   const take = fills[0]?.take_id ?? first.take_id;
@@ -118,10 +127,11 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   if (arrived.received === 0n) return { first: fills, second: paid };
   const continuing = (second: TransferIntent) => {
     insist(second.previous_transfer_id === first.id && second.from === request.via && second.to === request.to && same(second.recipient, request.recipient)
-      && BigInt(second.amount_in) <= arrived.received, "Transfer terms changed; review the original transfer");
+      && BigInt(second.amount_in) <= arrived.received && second.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
     stage("continuing");
+    // Kept in escrow, it pays from the available balance and never withdraws from the venue.
     return transfer(client, hub, { client_transfer_id: second.client_transfer_id, from: request.via, to: request.to, amount_in: second.amount_in, min_out: second.min_out,
-      recipient: request.recipient, funding: "venue", transfer_id: second.id, max_parts: second.max_parts }, { ...options, onStage: stage });
+      recipient: request.recipient, funding: arrived.kept ? "wallet" : "venue", transfer_id: second.id, max_parts: second.max_parts, max_fee_bps: request.then.max_fee_bps }, { ...options, onStage: stage });
   };
   // A continuation already opened is followed, never opened again: the one named, else the route's latest, from the history.
   let latest = request.then_transfer_id ? await client.call("getTransfer", { path: { id: request.then_transfer_id }, signal }) : undefined;
@@ -144,20 +154,24 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   // Less than a venue step, or a hundredth of the second take planned, is rounding: it waits on `via`.
   if (amount === 0n || amount * 100n < BigInt(then.amount_in)) return { first: fills, second: paid };
   const minOut = BigInt(then.min_out) * amount / BigInt(then.amount_in);
-  // The venue between credits the delivery after its release: the second transfer waits for a read that shows it.
+  // The venue between credits the delivery after its release, the escrow a delivery kept there: the second transfer waits for a read that shows it.
   for (;;) {
     const row = (await client.call("getBalances", { signal })).find(balance => balance.venue === request.via);
     insist(same(row?.address, hub.address), "Linked account changed; review the transfer again");
     const balance = required(row);
-    const margin = balance.withdrawable === null || !fresh(balance.read_at, now()) ? null : BigInt(balance.withdrawable) - BigInt(balance.withdrawal_fee ?? 0);
-    const held = margin === null ? null : margin + (VENUE_SETTLED.has(request.via) ? 0n : prefunded(balance, now()) ?? 0n);
-    if ((Date.parse(balance.read_at ?? "") || 0) > arrived.released && held !== null && held >= amount) break;
+    let held: bigint | null, read: string | null | undefined;
+    if (arrived.kept) [held, read] = [prefunded(balance, now()), balance.chain_read_at];
+    else {
+      const margin = balance.withdrawable === null || !fresh(balance.read_at, now()) ? null : BigInt(balance.withdrawable) - BigInt(balance.withdrawal_fee ?? 0);
+      [held, read] = [margin === null ? null : margin + (VENUE_SETTLED.has(request.via) ? 0n : prefunded(balance, now()) ?? 0n), balance.read_at];
+    }
+    if ((Date.parse(read ?? "") || 0) > arrived.released && held !== null && held >= amount) break;
     if (now() >= deadline) throw new TransferPending(first, "arrival_unconfirmed");
     await sleep(pollMs);
   }
   // A cancelled one, as when its review was left, held nothing; nor does a route's own second, once closed: its successor goes under a client id derived from it, with what is left now.
   const second = await client.call("postTransfer", { body: { client_transfer_id: latest ? `renew:${latest.id}` : secondId, from: request.via, to: request.to, amount_in: amount.toString(),
-    min_out: minOut.toString(), max_parts: MAX_PARTS, payer: hub.address, recipient: request.recipient, previous_transfer_id: first.id }, signal, retry: true });
+    min_out: minOut.toString(), max_parts: MAX_PARTS, payer: hub.address, recipient: request.recipient, previous_transfer_id: first.id, ...consent(request.then.max_fee_bps) }, signal, retry: true });
   return { first: fills, second: [...paid, ...await continuing(second)] };
 }
 

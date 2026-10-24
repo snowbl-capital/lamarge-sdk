@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
-/** The browser bundle of the main and protocol entries, minified and gzipped. */
-const BUDGET_BYTES = 30_900;
+/** The browser bundle of the main and protocol entries, minified and gzipped. Keccak for Polymarket's operation hash (`@noble/hashes`, which viem apps already bundle) takes about 2,000 of it, taker fees about 700. */
+const BUDGET_BYTES = 34_600;
 
 const root = resolve(import.meta.dir, "..");
 const work = mkdtempSync(join(tmpdir(), "lamarge-sdk-"));
@@ -25,8 +25,13 @@ try {
   const installed = join(project, "node_modules", "@lamarge", "sdk");
   mkdirSync(installed, { recursive: true });
   await $`tar -xzf ${packed} -C ${installed} --strip-components=1`;
-  // The optional peer of the Aster entry, as the integrator provides it.
-  symlinkSync(join(root, "node_modules", "viem"), join(project, "node_modules", "viem"));
+  // The optional peer of the Aster entry, as the integrator provides it, and the dependencies an
+  // install brings.
+  const { dependencies = {} } = await Bun.file(join(root, "package.json")).json() as { dependencies?: Record<string, string> };
+  for (const name of ["viem", ...Object.keys(dependencies)]) {
+    mkdirSync(join(project, "node_modules", name, ".."), { recursive: true });
+    symlinkSync(join(root, "node_modules", name), join(project, "node_modules", name));
+  }
   await Bun.write(join(project, "package.json"), JSON.stringify({ type: "module" }));
   const { exports } = await Bun.file(join(installed, "package.json")).json() as { exports: Record<string, unknown> };
   const entries = Object.keys(exports).filter(key => key !== "./package.json").map(key => join("@lamarge/sdk", key));

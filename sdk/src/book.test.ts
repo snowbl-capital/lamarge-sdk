@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { checkQuote, MAX_PARTS, minimumTake, sweep } from "./book.ts";
+import { takeFee } from "./protocol/fees.ts";
 
 const level = (order_id: string, supply: number, receive: number, available: number, min_fill = 1) => ({
   order_id,
@@ -112,4 +113,28 @@ test("fresh quote validation respects the reviewed amount, minimum and part limi
   expect(() => checkQuote({...book,levels:[]},new Set(),input)).toThrow("No executable price");
   expect(() => checkQuote(split,new Set(),input,5_000_000n)).not.toThrow();
   expect(() => checkQuote(split,new Set(),input,5_000_001n)).toThrow("No executable price");
+});
+
+test("a fee on the payment comes on top of the price, one on the delivery out of the output, as the server plans", () => {
+  const book = [level("maker", 5_000_000, 5_003_250, 5_000_000)];
+  // 2,001,300 pays 2,000,000 at the price, and ⌊2,001,300 × 3 / 10,000⌋ = 600 on top.
+  expect(sweep(book, NO_CAP, none, 2_001_900n, MAX_PARTS, 0n, Date.now(), takeFee("polymarket", 3, 3))).toEqual({ out: 2_000_000n, pay: 2_001_900n, parts: 1 });
+  // From Lighter, the offer delivers 2,000,000 for 2,001,300, ⌊2,000,000 × 3 / 10,000⌋ = 600 of it the fee.
+  expect(sweep(book, NO_CAP, none, 2_001_300n, MAX_PARTS, 0n, Date.now(), takeFee("lighter", 3, 3))).toEqual({ out: 1_999_400n, pay: 2_001_300n, parts: 1 });
+  // Without consent, no fee.
+  expect(takeFee("polymarket", 3, undefined)).toEqual({ bps: 0n, onDelivery: false });
+  const priced = { max_fill: String(NO_CAP), taker_fee_bps: 3, levels: book };
+  expect(() => checkQuote(priced, none, { from: "polymarket", amount_in: "2001900", min_out: "2000000", max_fee_bps: 3 })).not.toThrow();
+  expect(() => checkQuote(priced, none, { from: "polymarket", amount_in: "2001300", min_out: "2000000", max_fee_bps: 3 })).toThrow();
+  expect(() => checkQuote(priced, none, { from: "polymarket", amount_in: "2001900", min_out: "2000000", max_fee_bps: 2 })).toThrow("above what this transfer accepts");
+});
+
+test("a remainder the fee's rounding leaves is no shortfall", () => {
+  // 1:1 at 100 bps: 102,000,000 buys 100,990,099, the one unit left buying nothing more.
+  const book = { max_fill: String(NO_CAP), taker_fee_bps: 100, levels: [level("maker", 1, 1, 1_000_000_000)] };
+  const input = { from: "polymarket", amount_in: "102000000", min_out: "100900000", max_fee_bps: 100 };
+  expect(sweep(book.levels, NO_CAP, none, 102_000_000n, MAX_PARTS, 0n, Date.now(), takeFee("polymarket", 100, 100))).toEqual({ out: 100_990_099n, pay: 101_999_999n, parts: 1 });
+  expect(() => checkQuote(book, none, input)).not.toThrow();
+  // A book that cannot take the rest still falls short.
+  expect(() => checkQuote({ ...book, levels: [level("maker", 1, 1, 50_000_000)] }, none, { ...input, min_out: "0" })).toThrow();
 });

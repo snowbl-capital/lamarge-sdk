@@ -24,6 +24,7 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
     const leg = legs[key], chain = required(CHAINS[leg.from]);
     const count = records.filter(row => row.previous_transfer_id).length;
     return { id: key === "first" || count === 0 ? `transfer-${key}` : `transfer-${key}-${count + 1}`, client_transfer_id: body.client_transfer_id, client_take_id: `take-client-${key}`, ...leg, amount_in: body.amount_in, min_out: body.min_out,
+      ...(body.max_fee_bps === undefined ? {} : { max_fee_bps: body.max_fee_bps }),
       max_parts: 8, payer: key === "first" ? owner : hub, recipient: body.recipient, from_chain_id: chain.id, to_chain_id: required(CHAINS[leg.to]).id, withdrawal: null, take_id: null as string | null,
       withdrawal_preparation: null, take_final: null, then: body.then ?? null, previous_transfer_id: body.previous_transfer_id ?? null,
       continuable: key === "first" && delivery.claimed ? options.continuable ?? "1000000" : null, cancelled_at: null, created_at: at(0),
@@ -114,6 +115,14 @@ test("a route pays the first take, waits for its delivery on the venue between, 
   expect(required(intents.first).then).toMatchObject({ to: "aster", amount_in: "1000000" });
   expect(required(intents.second).previous_transfer_id).toBe("transfer-first");
   expect(calls.indexOf("GET /v1/takes/take-first")).toBeLessThan(calls.lastIndexOf("POST /v1/transfers"));
+});
+
+test("each take of a route accepts its own leg's fee", async () => {
+  const { client, intents } = api();
+  await route(client, signer(), { ...request, max_fee_bps: 2, then: { ...request.then, max_fee_bps: 5 } }, { pollMs: 1 });
+  expect(required(intents.first).max_fee_bps).toBe(2);
+  expect(required(intents.first).then).toMatchObject({ max_fee_bps: 5 });
+  expect(required(intents.second).max_fee_bps).toBe(5);
 });
 
 test("what is left to continue with is read again until LaMarge knows it, within the wait for the arrival", async () => {
@@ -254,7 +263,7 @@ test("a first transfer cancelled for a renewal whose answer was lost is replaced
   const { client, records } = api();
   const store = memoryStore();
   await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-    max_parts: 8, payer: owner, recipient: owner, then: { to: request.to, recipient: request.recipient, ...request.then } } });
+    max_parts: 8, payer: owner, recipient: owner, then: { to: request.to, recipient: request.recipient, amount_in: request.then.amount_in, min_out: request.then.min_out } } });
   required(records[0]).cancelled_at = at(0);
   await store.save("renewal:transfer-first", true);
   const { first } = await route(client, signer(), { ...request, transfer_id: "transfer-first" }, { pollMs: 1, store });

@@ -1,12 +1,12 @@
 import { requireSigningDomains, type DeploymentManifest, ESCROW_DEPLOYMENTS } from "./protocol/deployments.ts";
-import { convert, insist, same, type SignItem, type Typed } from "./protocol/protocol.ts";
+import { convert, insist, same, type SignItem, type TransferTyped } from "./protocol/protocol.ts";
 import { address, record } from "./protocol/validation.ts";
 import type { Answer } from "./client.ts";
 import type { components } from "./generated/api.ts";
 
 export type Hex = `0x${string}`;
 export interface TypedDataRequest {
-  domain: { name: string; version?: string; chainId: number; verifyingContract: Hex };
+  domain: { name: string; version?: string; chainId: number; verifyingContract?: Hex };
   types: Record<string, { name: string; type: string }[]>;
   primaryType: string;
   message: Record<string, unknown>;
@@ -23,18 +23,23 @@ export interface Signer {
   signTypedData?(request: TypedDataRequest): Promise<Hex>;
 }
 
-/** `typed` as the API sends it, in the form wallets sign: the domain's type implied, values converted. */
-export function typedDataRequest(typed: Typed): TypedDataRequest {
+/**
+ * `typed` as the API sends it, in the form wallets sign: the domain's type implied, values
+ * converted, a contract only where the domain has one, and nothing else (a Polymarket `op` stays
+ * out of the wallet's request).
+ */
+export function typedDataRequest(typed: TransferTyped): TypedDataRequest {
   const { EIP712Domain: _, ...types } = typed.types;
+  const { domain } = typed;
   return {
-    domain: { ...typed.domain, verifyingContract: address(typed.domain.verifyingContract) },
+    domain: "verifyingContract" in domain ? { ...domain, verifyingContract: address(domain.verifyingContract) } : domain,
     types,
     primaryType: typed.primaryType,
     message: record(convert(types, typed.primaryType, typed.message)),
   };
 }
 
-export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: Typed): Promise<Hex> {
+export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: TransferTyped): Promise<Hex> {
   insist(signer.signTypedData, "This signer cannot sign typed data");
   return signer.signTypedData(typedDataRequest(typed));
 }
@@ -48,7 +53,7 @@ export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: Ty
  */
 export type Signing =
   | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
-  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: Typed; route?: true }
+  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true }
   | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
   /** `signed`: what a resumed route already signed, never asked again. */
   | { kind: "route"; preparation: Answer<"prepareGroupedRoute">; second: Answer<"getTransfer">; signed: { first: boolean; withdrawal: boolean; second: boolean } };

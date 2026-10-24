@@ -1,3 +1,4 @@
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { address, array, hex, record, required, type Verified } from "./validation.ts";
 import { ESCROW_DEPLOYMENTS, ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
 /**
@@ -66,6 +67,14 @@ export const NEVER_VALID_UNTIL = 253_402_214_400;
 /** The latest a take's payment refunds, `T2`: the escrow's `MAX_LOCK_DURATION`, whatever shorter `FILL_TAKER_TIMEOUT` the server runs. */
 export const TAKER_TIMEOUT_SECONDS = 86_400;
 export type Typed = { types: Record<string, { name: string; type: string }[]>; primaryType: string; domain: { name: string; version?: string; chainId: number; verifyingContract: string }; message: Record<string, unknown> };
+/** A Polymarket operation (`Op`): no contract in its domain, and the `op` its `data` hashes, its strings exactly as sent. */
+export type OpTyped = {
+  types: Typed["types"]; primaryType: "Op"; domain: { name: string; version: string; chainId: number }; message: { data: string; salt: number; ts: number };
+  op: { type: "internalTransfer"; args: { account: string; token: string; amount: string; to: string } };
+};
+/** What a withdrawal or a send signs. */
+export type TransferTyped = Typed | OpTyped;
+export const isOpTyped = (typed: TransferTyped): typed is OpTyped => typed.primaryType === "Op";
 export type SignItem = { kind: string; signer: string; typed_data: Typed; fill_id?: string | undefined };
 export function convert(types: Typed["types"], kind: string, value: unknown): unknown {
   if (kind.endsWith("[]")) return array(value).map((item) => convert(types, kind.slice(0, -2), item));
@@ -104,6 +113,8 @@ export const differs = (field: string) => `${DIFFERS}: ${field}`;
 export const uint = (value: unknown): bigint => { insist(typeof value === "string" && /^\d+$/.test(value) || typeof value === "number" && Number.isSafeInteger(value) && value >= 0, "Invalid signing integer"); return BigInt(value); };
 const fields = (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
 export const EIP712Domain = fields("name:string,version:string,chainId:uint256,verifyingContract:address");
+/** Polymarket's operations sign under a domain without contract. */
+const OpDomain = fields("name:string,version:string,chainId:uint256");
 const quote = fields("venue:string,chainId:uint256,token:address,recipient:address,supply:uint256,receive:uint256,minFill:uint256");
 const lockPayment = fields("payer:address,swapId:bytes32,recipient:address,amount:uint256,hashlock:bytes32,refundAt:uint64,deadline:uint256,orderId:bytes32,sequence:uint64,amountOut:uint256,receiveChainId:uint256,receiveToken:address,receiveEscrow:address,receiveRecipient:address,dex:uint32");
 export const schemas: Record<string, Record<string, { name: string; type: string }[]>> = {
@@ -118,6 +129,7 @@ export const schemas: Record<string, Record<string, { name: string; type: string
   "HyperliquidTransaction:SendAsset": { "HyperliquidTransaction:SendAsset": fields("hyperliquidChain:string,destination:string,sourceDex:string,destinationDex:string,token:string,amount:string,fromSubAccount:string,nonce:uint64") },
   Action: { Action: fields("type:string,destination:address,destination Chain:string,token:string,amount:string,fee:string,nonce:uint256,aster chain:string") },
   Message: { Message: fields("msg:string") },
+  Op: { Op: fields("data:bytes32,salt:uint64,ts:uint64") },
 };
 /** A signed take's payments, each with exactly the `LockPayment` fields. */
 export function takePayments(typed: Typed): Record<string, unknown>[] {
@@ -125,10 +137,10 @@ export function takePayments(typed: Typed): Record<string, unknown>[] {
   insist(payments.length > 0 && payments.length <= 8 && payments.every(payment => Object.keys(payment).length === lockPayment.length), "Unexpected signing fields");
   return payments;
 }
-function checkTypes(typed: Typed) {
+function checkTypes(typed: TransferTyped) {
   const schema = schemas[typed.primaryType];
   insist(schema, "Unsupported signing request");
-  const expected = { EIP712Domain: EIP712Domain, ...schema };
+  const expected = { EIP712Domain: typed.primaryType === "Op" ? OpDomain : EIP712Domain, ...schema };
   insist(Object.keys(typed.types).length === Object.keys(expected).length && Object.entries(expected).every(([name, fields]) => JSON.stringify(typed.types[name]) === JSON.stringify(fields)), "Unexpected signing types");
   insist(Object.keys(typed.message).length === required(schema[typed.primaryType]).length, "Unexpected signing fields");
 }
@@ -258,6 +270,82 @@ export function checkWithdrawal(typed: Typed, venue: string, signer: string, des
     insist(uint(m.fee) === 0n, differs("fee"));
     insist(uint(m.salt) <= 0xffffffffffffffffn, differs("salt"));
     insist(Math.abs(Number(uint(m.ts)) - now) <= 60, "Stale withdrawal timestamp");
+  }
+}
+/** A HyperCore system address: `0x20`, 17 zero bytes and a token index, or HYPE's `0x2222…`. Funds sent there are bridged, never credited to an account. */
+const isHyperliquidSystem = (account: string) => /^0x20{35}/i.test(account) || /^0x(22){20}$/i.test(account);
+/** MessagePack of `[name, [args…]]` for strings shorter than 256 bytes and at most 15 arguments: the only shape a Polymarket internal transfer hashes. */
+function msgpack(name: string, args: string[]): Uint8Array {
+  const bytes: number[] = [0x92];
+  const text = (value: string) => {
+    const encoded = new TextEncoder().encode(value);
+    insist(encoded.length < 256, "Unexpected operation");
+    bytes.push(...(encoded.length < 32 ? [0xa0 | encoded.length] : [0xd9, encoded.length]), ...encoded);
+  };
+  text(name);
+  insist(args.length < 16, "Unexpected operation");
+  bytes.push(0x90 | args.length);
+  args.forEach(text);
+  return Uint8Array.from(bytes);
+}
+/** A Polymarket operation's `data`: keccak256 of its MessagePack, over the exact strings sent. */
+export const opHash = (name: string, args: string[]): string => `0x${Array.from(keccak_256(msgpack(name, args)), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+/**
+ * Checks a send to `recipient`, another account on the same venue (SERVER.md WDR-08), against
+ * the requested amount at `now` seconds. A Polymarket wallet shows only the operation's hash: it is
+ * rebuilt here from `op`, whose terms are checked.
+ */
+export function checkSend(typed: TransferTyped, venue: string, signer: string, recipient: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<TransferTyped> {
+  checkTypes(typed);
+  insist(amount > 0n, differs("amount"));
+  insist(!same(recipient, signer), differs("recipient"));
+  if (isOpTyped(typed) || venue === "polymarket") {
+    insist(venue === "polymarket" && isOpTyped(typed), differs("primaryType"));
+    const m = typed.message, d = typed.domain;
+    insist(d.name === "Polymarket" && d.version === "1" && d.chainId === 137 && !("verifyingContract" in d), differs("domain"));
+    insist(typed.op.type === "internalTransfer" && Object.keys(typed.op.args).length === 4, differs("op"));
+    const { account, token, amount: sent, to } = typed.op.args;
+    insist(same(account, signer), differs("account"));
+    insist(same(token, required(CHAINS.polymarket).token), differs("token"));
+    insist(same(to, recipient), differs("to"));
+    insist(decimalUnits(sent, decimalsOf(venue)) === amount, differs("amount"));
+    insist(m.data === opHash("internalTransfer", [account, token, sent, to]), differs("data"));
+    insist(uint(m.salt) <= 0xffffffffffffffffn, differs("salt"));
+    insist(Math.abs(Number(uint(m.ts)) / 1000 - now) <= 60, "Stale transfer timestamp");
+    return;
+  }
+  const m = typed.message, d = typed.domain;
+  if (venue === "hyperliquid") {
+    insist(typed.primaryType === "HyperliquidTransaction:SendAsset", differs("primaryType"));
+    insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
+    insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
+    insist(typeof m.destination === "string" && m.destination === recipient.toLowerCase() && !isHyperliquidSystem(m.destination), differs("destination"));
+    insist(["", "spot"].includes(String(m.sourceDex)), differs("sourceDex"));
+    insist(["", "spot"].includes(String(m.destinationDex)), differs("destinationDex"));
+    insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
+    insist(m.fromSubAccount === "", differs("fromSubAccount"));
+    insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
+    insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale transfer nonce");
+  } else {
+    insist(venue === "aster", differs("venue"));
+    const transfer = asterTransfer(typed);
+    insist(same(transfer.user, signer), differs("user"));
+    insist(same(transfer.to, recipient), differs("toAddress"));
+    // A send's own id: neither a fill's nor a margin move's.
+    insist(/^s[0-9a-f]{32}$/.test(transfer.id), differs("clientTranId"));
+    insist(transfer.amount === venueUnits(amount, venue), differs("amount"));
+    insist(Math.abs(transfer.nonce - now) <= 60, "Stale transfer nonce");
+  }
+}
+/** When a withdrawal or send was signed, in seconds, from each venue's own unit. */
+export function signedAt(typed: TransferTyped): number {
+  if (isOpTyped(typed)) return typed.message.ts / 1000;
+  const m = typed.message;
+  switch (typed.primaryType) {
+    case "HyperliquidTransaction:SendAsset": return Number(m.nonce) / 1000;
+    case "Action": return Number(m.nonce) / 1_000_000;
+    case "Message": return asterTransfer(typed).nonce;
+    default: return Number(m.ts);
   }
 }
 /** What a venue withdrawal moves out of the margin for `amount` to arrive: Aster adds its fee. */

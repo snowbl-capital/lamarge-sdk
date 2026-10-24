@@ -12,6 +12,14 @@ test("only the reviewed proxy permits balances and deposit receivers", () => {
   expect(() => requireV5Deployment(137, "0x5000000000000000000000000000000000000001")).toThrow("not available");
 });
 
+test("each pinned deployment names its environment, which has one escrow on each chain", () => {
+  for (const environment of ["production", "development"]) {
+    const escrows = ESCROW_DEPLOYMENTS.filter(deployment => deployment.environment === environment);
+    expect(escrows.map(deployment => deployment.chainId).sort()).toEqual([137, 999]);
+  }
+  expect(ESCROW_DEPLOYMENTS.every(deployment => deployment.environment !== undefined)).toBe(true);
+});
+
 test("pure deployment validation accepts only a reviewed chain and address pair", () => {
   const local: DeploymentManifest = [{ version: 5, chainId: 137, address: "0x5000000000000000000000000000000000000001" }];
   expect(requireV5Deployment(137, required(local[0]).address, local).version).toBe(5);

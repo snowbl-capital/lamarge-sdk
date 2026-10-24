@@ -28,6 +28,8 @@ export interface TransferRequest {
   amount_in: string;
   min_out: string;
   max_parts?: number | undefined;
+  /** The highest taker fee accepted, in basis points, as a book's or a route's `taker_fee_bps` shows it: a pair whose fee is higher refuses the take. Without it, the take pays no fee. */
+  max_fee_bps?: number | undefined;
   /** The linked account receiving on `to`; the payer is the signer. */
   recipient: string;
   funding: Funding;
@@ -80,15 +82,18 @@ export const unsignedReservation = (fill: {
   && fill.payment_leg === "NONE" && (fill.maker_leg === "NONE" || fill.maker_leg === "ABANDONED")
   && fill.transactions.length === 0 && !fill.delivery_hash && !fill.payment_locked_at && !fill.maker_claimed_at;
 
+/** A request's consent to fees, the field left out when not given, as the generated request types require. */
+export const consent = (maxFeeBps: number | undefined) => maxFeeBps === undefined ? {} : { max_fee_bps: maxFeeBps };
+
 /** The take a transfer reserves: its own terms, under its client take id. */
 export const takeInput = (intent: TransferIntent): TakeInput => ({ from: intent.from, to: intent.to, amount_in: intent.amount_in, min_out: intent.min_out,
-  max_parts: intent.max_parts, client_take_id: intent.client_take_id, transfer_intent_id: intent.id });
+  max_parts: intent.max_parts, client_take_id: intent.client_take_id, transfer_intent_id: intent.id, ...consent(intent.max_fee_bps) });
 
 function replacement(intent: TransferIntent, clientId: string) {
   const { from, to, amount_in, min_out, max_parts, payer, recipient, then, previous_transfer_id: previous } = intent;
   // The request's `then` carries the route's terms only: `chain_id` is the server's answer.
-  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient,
-    ...(then ? { then: { to: then.to, recipient: then.recipient, amount_in: then.amount_in, min_out: then.min_out } } : {}), ...(previous ? { previous_transfer_id: previous } : {}) };
+  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...consent(intent.max_fee_bps),
+    ...(then ? { then: { to: then.to, recipient: then.recipient, amount_in: then.amount_in, min_out: then.min_out, ...consent(then.max_fee_bps) } } : {}), ...(previous ? { previous_transfer_id: previous } : {}) };
 }
 
 /** The transfer the API answers is the one asked: by its id, or by the client id it was created under. */
@@ -139,7 +144,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   let intent = request.transfer_id
     ? asked(await client.call("getTransfer", { path: { id: request.transfer_id }, query: { funding_plan: true }, signal }), { id: request.transfer_id })
     : asked(await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.to, amount_in: request.amount_in,
-      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient }, signal, retry: true }), { clientId: request.client_transfer_id });
+      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient, ...consent(request.max_fee_bps) }, signal, retry: true }), { clientId: request.client_transfer_id });
   // A replacement repeats nothing: the same terms, under a client id derived from the transfer it replaces.
   const replace = async (clientId: string) => asked(await client.call("postTransfer", { body: replacement(intent, clientId), signal, retry: true }), { clientId });
   // A replacement decided before a lost cancellation answer is completed, never decided again.
@@ -152,7 +157,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   const checkIntent = () => {
     insist(!intent.cancelled_at, "Transfer cancelled");
     insist(intent.max_parts === maxParts && intent.from === request.from && intent.to === request.to && intent.from_chain_id === CHAINS[request.from]?.id && intent.to_chain_id === CHAINS[request.to]?.id && intent.amount_in === request.amount_in
-      && intent.min_out === request.min_out && same(intent.payer, payer) && same(intent.recipient, request.recipient), "Transfer terms changed; review the original transfer");
+      && intent.min_out === request.min_out && intent.max_fee_bps === request.max_fee_bps && same(intent.payer, payer) && same(intent.recipient, request.recipient), "Transfer terms changed; review the original transfer");
   };
   checkIntent();
   /** A transfer whose withdrawal preparation went unsigned over 45 seconds is replaced. */

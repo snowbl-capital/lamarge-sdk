@@ -30,15 +30,6 @@ export const ROUTE_PAY_WINDOW_SECONDS = 210;
 export const AT_ONCE_SEND_MARGIN_SECONDS = 30;
 /** Left before that cutoff for each request of a take signed at once: signed, then submitted with the others. The server offers signing at once only to windows that leave it. */
 export const AT_ONCE_SIGNING_SECONDS = 30;
-/**
- * Production's escrow holding a venue's commitments; Aster's former BSC escrow for Aster.
- * @deprecated Production's only: a deployment's escrows are its venues' `chain.escrow` (`getVenues`), checked against `ESCROW_DEPLOYMENTS`.
- */
-export function escrowOf(venue: string): string {
-  const chain = CHAINS[venue];
-  insist(chain, "Unknown venue");
-  return venue === "aster" ? ESCROW : chain.escrow;
-}
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 /** Aster's BSC chain, where its approvals and withdrawals are signed. */
 export const ASTER_CHAIN_ID = 56;
@@ -220,12 +211,6 @@ export function venueUnits(value: bigint, venue: string): bigint {
   const step = venueStep(venue);
   return (value + step - 1n) / step * step;
 }
-/** What `venue` moves for `held` to reach `needed`: an 18-decimal wallet keeps the dust past the shortfall. Never above `needed`. */
-export function shortfall(needed: bigint, held: bigint, venue: string): bigint {
-  if (held >= needed) return 0n;
-  const rounded = venueUnits(needed - held, venue);
-  return rounded < needed ? rounded : needed;
-}
 /** One token in native units, the automatic deposit sweep threshold. */
 export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(venue));
 /** Venue withdrawals can only move this amount to the reviewed destination. */
@@ -272,8 +257,8 @@ export function checkWithdrawal(typed: Typed, venue: string, signer: string, des
     insist(Math.abs(Number(uint(m.ts)) - now) <= 60, "Stale withdrawal timestamp");
   }
 }
-/** A HyperCore system address: `0x20`, 17 zero bytes and a token index, or HYPE's `0x2222…`. Funds sent there are bridged, never credited to an account. */
-const isHyperliquidSystem = (account: string) => /^0x20{35}/i.test(account) || /^0x(22){20}$/i.test(account);
+/** A HyperCore system address: `0x20`, then zeros up to a token index in its last five hex digits, or HYPE's `0x2222…`. Funds sent there are bridged, never credited to an account. */
+const isHyperliquidSystem = (account: string) => /^0x20{34}/i.test(account) || /^0x(22){20}$/i.test(account);
 /** MessagePack of `[name, [args…]]` for strings shorter than 256 bytes and at most 15 arguments: the only shape a Polymarket internal transfer hashes. */
 function msgpack(name: string, args: string[]): Uint8Array {
   const bytes: number[] = [0x92];
@@ -291,9 +276,9 @@ function msgpack(name: string, args: string[]): Uint8Array {
 /** A Polymarket operation's `data`: keccak256 of its MessagePack, over the exact strings sent. */
 export const opHash = (name: string, args: string[]): string => `0x${Array.from(keccak_256(msgpack(name, args)), byte => byte.toString(16).padStart(2, "0")).join("")}`;
 /**
- * Checks a send to `recipient`, another account on the same venue (SERVER.md WDR-08), against
- * the requested amount at `now` seconds. A Polymarket wallet shows only the operation's hash: it is
- * rebuilt here from `op`, whose terms are checked.
+ * Checks a send to `recipient`, another account on the same venue, against the requested amount
+ * at `now` seconds. A Polymarket wallet shows only the operation's hash: it is rebuilt here from
+ * `op`, whose terms are checked.
  */
 export function checkSend(typed: TransferTyped, venue: string, signer: string, recipient: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<TransferTyped> {
   checkTypes(typed);
@@ -336,6 +321,12 @@ export function checkSend(typed: TransferTyped, venue: string, signer: string, r
     insist(transfer.amount === venueUnits(amount, venue), differs("amount"));
     insist(Math.abs(transfer.nonce - now) <= 60, "Stale transfer nonce");
   }
+}
+/** A withdrawal's or, with `send`, a send's checks against its terms at `now` seconds. */
+export function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, send: boolean, now?: number): asserts typed is Verified<TransferTyped> {
+  if (send) checkSend(typed, venue, signer, destination, amount, now);
+  else if (isOpTyped(typed)) throw new Error("Unsupported signing request");
+  else checkWithdrawal(typed, venue, signer, destination, amount, now);
 }
 /** When a withdrawal or send was signed, in seconds, from each venue's own unit. */
 export function signedAt(typed: TransferTyped): number {

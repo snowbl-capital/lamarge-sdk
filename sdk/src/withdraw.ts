@@ -1,23 +1,16 @@
 import { LaMargeError, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
-import { CHAINS, checkSend, checkWithdrawal, escrowOf, insist, isOpTyped, isPinnedEscrow, same, signedAt, type TransferTyped } from "./protocol/protocol.ts";
+import { CHAINS, checkTransfer, insist, isPinnedEscrow, same, signedAt, type TransferTyped } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
 import { signItems, signTyped, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
 import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "./store.ts";
 
 export type Withdrawal = components["schemas"]["Withdrawal"];
 
-/** A withdrawal's or, with `send`, a send's checks against its terms at `at` seconds. */
-function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, at: number, send: boolean): void {
-  if (send) checkSend(typed, venue, signer, destination, amount, at);
-  else if (isOpTyped(typed)) throw new Error("Unsupported signing request");
-  else checkWithdrawal(typed, venue, signer, destination, amount, at);
-}
-
 /** Checks a withdrawal, or a send to `destination` with `send`, against its terms at `at` seconds and the caller's own checks, then signs it. */
 export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false): Promise<Hex> {
-  checkTransfer(typed, venue, signer.address, destination, amount, at, send);
+  checkTransfer(typed, venue, signer.address, destination, amount, send, at);
   await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
   return signTyped(signer, typed);
 }
@@ -41,7 +34,7 @@ export async function submitWithdrawal(options: {
     signal?.throwIfAborted();
     await store.save(key, { ...options.context, ...saved });
   }
-  checkTransfer(saved.typed, venue, signer.address, destination, amount, signedAt(saved.typed), send);
+  checkTransfer(saved.typed, venue, signer.address, destination, amount, send, signedAt(saved.typed));
   const kept = { ...options.context, ...saved };
   return { result: await options.submit(saved.typed, saved.signature), saved: kept };
 }
@@ -142,12 +135,12 @@ export type RefundFill = Pick<components["schemas"]["Fill"], "id" | "role" | "ma
  * The payment's escrow, read directly: its lock at a finalized block and the consent digest, which
  * an old ABI cannot answer. Consent applies only to a delivery inside a venue, so a server's label
  * cannot authorize giving up a payment an escrow delivered. `escrows`, by venue, names the escrow
- * read, which must be pinned: the consent's domain. Without it, production's is read.
+ * read, which must be pinned: the consent's domain.
  */
-export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows?: Readonly<Record<string, string | undefined>>): Promise<void> {
+export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows: Readonly<Record<string, string | undefined>>): Promise<void> {
   const reader = (venue: string) => required(readers[required(CHAINS[venue], "Unknown venue").id], `No reader for ${venue}'s chain`);
   const escrow = (venue: string) => {
-    const named = escrows ? escrows[venue] : escrowOf(venue);
+    const named = escrows[venue];
     insist(isPinnedEscrow(venue, named), "API deployment differs from the reviewed deployment");
     return address(named);
   };

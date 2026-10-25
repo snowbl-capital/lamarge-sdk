@@ -1,6 +1,6 @@
 {
   "name": "@lamarge/sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
   "homepage": "https://docs.lamarge.trade/sdk",
@@ -41,10 +41,10 @@
   "scripts": {
     "api:generate": "bun run scripts/generate-api.ts",
     "api:check": "bun run scripts/generate-api.ts --check",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "check": "bun run api:check && bun run typecheck && bun test && bun run build && bun run check:package",
+    "typecheck": "node_modules/typescript-native/bin/tsc --noEmit",
+    "test": "bun test --parallel",
+    "build": "rm -rf dist && node_modules/typescript-native/bin/tsc -p tsconfig.build.json",
+    "check": "bun run api:check && bun run typecheck && bun run test && bun run build && bun run check:package",
     "check:package": "bun run scripts/check-package.ts"
   },
   "dependencies": {
@@ -64,6 +64,7 @@
     "openapi-typescript": "^7.13.0",
     "publint": "0.3.25",
     "typescript": "^5.9.0",
+    "typescript-native": "npm:typescript@^7.0.2",
     "viem": "2.56.9"
   }
 }

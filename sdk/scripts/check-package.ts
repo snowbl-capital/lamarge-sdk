@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
-/** The browser bundle of the main and protocol entries, minified and gzipped. Keccak for Polymarket's operation hash (`@noble/hashes`, which viem apps already bundle) takes about 2,000 of it, taker fees about 700. */
+/** The browser bundle of the main and protocol entries, minified and gzipped. */
 const BUDGET_BYTES = 34_600;
 
 const root = resolve(import.meta.dir, "..");

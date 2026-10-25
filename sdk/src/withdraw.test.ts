@@ -137,8 +137,6 @@ test("an escrow destination is never refunded by consent, and the escrow read is
   const escrowed = { ...structuredClone(fill), to_venue: "polymarket", deliver_by: null }, deadline = now() + 600;
   await expect(checkEscrowLocks(escrowed, deadline, readers(), { hyperliquid: ESCROW })).rejects.toThrow("Unsupported refund chain");
   await checkEscrowLocks(fill, deadline, readers(), { hyperliquid: ESCROW });
-  // Production's, without the deployment's named.
-  await checkEscrowLocks(fill, deadline, readers());
   for (const escrows of [{ hyperliquid: other }, { polymarket: ESCROW }]) {
     await expect(checkEscrowLocks(fill, deadline, readers(), escrows)).rejects.toThrow("API deployment differs");
   }

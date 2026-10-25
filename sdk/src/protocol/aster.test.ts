@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { required, checkAsterTakeIntent, checkTakeIntent, type TakeFill, ASTER_CHAIN_ID, ASTER_TRANSFER_CHAIN_ID, asterRequest, CHAINS, ESCROW, EIP712Domain, checkAsterApproval, checkEscrowTyped, checkWithdrawal, escrowOf, schemas, withdrawalCost, type SignItem, type Typed } from "./index.ts";
+import { required, checkAsterTakeIntent, checkTakeIntent, type TakeFill, ASTER_CHAIN_ID, ASTER_TRANSFER_CHAIN_ID, asterRequest, CHAINS, ESCROW, EIP712Domain, checkAsterApproval, checkEscrowTyped, checkWithdrawal, schemas, withdrawalCost, type SignItem, type Typed } from "./index.ts";
 
 const owner = "0x1111111111111111111111111111111111111111";
 const agent = "0x2222222222222222222222222222222222222222";
@@ -44,9 +44,6 @@ test("an Aster withdrawal is pinned to the account, BSC, USDT, a bounded fee and
 test("Aster signs only quote sets, in its own domain", () => {
   const chain = pinned();
   const typed = (primaryType: string, verifyingContract: string): Typed => ({ types: { EIP712Domain, ...required(schemas[primaryType]) }, primaryType, domain: { name: "LaMarge", version: "1", chainId: chain.id, verifyingContract }, message: Object.fromEntries(required(schemas[primaryType]?.[primaryType]).map(field => [field.name, "0"])) });
-  // Deprecated, kept for SDK users: Aster's former BSC escrow.
-  expect(escrowOf("aster")).toBe(ESCROW);
-  expect(escrowOf("hyperliquid")).toBe(ESCROW);
   expect(() => checkEscrowTyped(typed("QuoteSet", chain.escrow), "aster")).not.toThrow();
   expect(() => checkEscrowTyped(typed("QuoteSet", ESCROW), "aster")).toThrow("Unexpected signing domain");
   for (const primary of ["FundOffer", "PayTake", "CloseOffer", "RefundPayment"]) for (const escrow of [chain.escrow, ESCROW]) expect(() => checkEscrowTyped(typed(primary, escrow), "aster")).toThrow("Unexpected signing request");

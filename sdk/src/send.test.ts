@@ -75,6 +75,8 @@ test("a Hyperliquid send names its recipient, mainnet and the two dexes", () => 
     [{ nonce: (at - 120) * 1000 }, "Stale"],
   ] as const) expect(() => checkSend(sendAsset(patch), "hyperliquid", owner, recipient, 5_250_000n, at)).toThrow(reason);
   expect(() => checkSend(sendAsset(), "hyperliquid", owner, "0x2000000000000000000000000000000000000000", 5_250_000n, at)).toThrow();
+  const index = "0x2000000000000000000000000000000000010000";
+  expect(() => checkSend(sendAsset({ destination: index }), "hyperliquid", owner, index, 5_250_000n, at)).toThrow("destination");
 });
 
 test("an Aster send carries a send's own id, never a fill's or a margin move's", () => {

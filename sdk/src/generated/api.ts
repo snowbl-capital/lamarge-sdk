@@ -1097,7 +1097,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare a withdrawal or a send
-         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less what left the account since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal or send on the venue is `STATE_CONFLICT`. On Aster a withdrawal's signed amount adds the venue fee; a send has none. `to: account` sends to `recipient`, another existing account on the same venue: never your own address, venue wallet or deposit address; on Hyperliquid a user or sub-account in mode `default` or `unifiedAccount`, without code on HyperEVM. A Polymarket send is an `OpTypedData`: the wallet signs only a hash, so rebuild it from `op` before signing. An Aster send goes out within 50 s of its nonce. Relay within ten minutes.
+         * @description Polymarket, Hyperliquid and Aster only ([margin transfers](/how-it-works#margin-transfers)). `amount` must fit a fresh read of the withdrawable balance less what left the account since, else `VALIDATION_ERROR`; a `queued`, `submitting` or `unknown` withdrawal or send on the venue is `STATE_CONFLICT`. On Aster a withdrawal's signed amount adds the venue fee; a send has none. `to: account` sends to `recipient`, another existing account on the same venue: never your own address, venue wallet or deposit address; on Hyperliquid a user or sub-account in mode `default`, `disabled`, `dexAbstraction`, `unifiedAccount` or `portfolioMargin`, without code on HyperEVM. A Polymarket send is an `OpTypedData`: the wallet signs only a hash, so rebuild it from `op` before signing. An Aster send goes out within 50 s of its nonce. Relay within ten minutes.
          */
         post: operations["postWithdrawalPrepare"];
         delete?: never;
@@ -2627,8 +2627,11 @@ export interface components {
             amount: components["schemas"]["Amount"];
             deposit: components["schemas"]["Amount"];
             withdrawal_amount: components["schemas"]["Amount"];
-            /** @enum {string|null} */
-            withdrawal_to: "signer" | null;
+            /**
+             * @description Where the withdrawal goes; `escrow` when the prepared withdrawal goes to the payer's deposit address.
+             * @enum {string|null}
+             */
+            withdrawal_to: "signer" | "escrow" | null;
             /**
              * @description `required` lists a `permit` request first: prepare it with `POST /v1/accounts/{venue}/setup/permit`, sign and submit it; take once `done`. `pending`: submitted, not yet effective.
              * @enum {string}

@@ -28,7 +28,7 @@ export function signedItems(value: unknown): SignedItem[] | undefined {
 }
 
 /** Typed data read back from a store, in the shape the checks take; the checks still decide whether it may be submitted. */
-export function typedData(value: unknown): Typed {
+function typedData(value: unknown): Typed {
   const typed = record(value);
   const domain = record(typed.domain);
   if (typeof typed.primaryType !== "string" || typeof domain.name !== "string" || typeof domain.chainId !== "number" || typeof domain.verifyingContract !== "string") throw new Error("Unreadable typed data");

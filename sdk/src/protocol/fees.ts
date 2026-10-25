@@ -3,7 +3,7 @@ import { differs, insist, uint, VENUE_SETTLED } from "./protocol.ts";
 /** The escrow's tags: a swap id starting with one carries the taker fee in its next ten bytes. */
 export const FEE_ON_PAYMENT = "0xde65f326692b";
 export const FEE_ON_DELIVERY = "0xcc909c08081a";
-/** The most a fee takes of what it is charged on, in basis points, as the escrow bounds it. */
+/** The most a fee takes of the total it is part of, in basis points, as the escrow bounds it. */
 export const MAX_FEE_BPS = 100;
 
 /** A take's taker fee: basis points, charged on top of the payment, or out of what the maker delivers when the taker pays inside a venue. */

@@ -3,11 +3,11 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Typed } from "./protocol/protocol.ts";
-import { required } from "./protocol/validation.ts";
-import type { BeforeSigning, Signer } from "./signer.ts";
-import { exclusive, memoryStore, type SignatureStore } from "./store.ts";
-import { submitWithdrawal } from "./withdraw.ts";
+import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Dex, type Typed } from "./protocol/protocol.ts";
+import { hex, record, required } from "./protocol/validation.ts";
+import type { BeforeSigning, Hex, Signer } from "./signer.ts";
+import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "./store.ts";
+import { signWithdrawal, submitWithdrawal } from "./withdraw.ts";
 import { checkQuote, MAX_PARTS } from "./book.ts";
 import { atOnceCutoff, signableAtOnce, take, takeKey, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
 
@@ -33,6 +33,14 @@ export interface TransferRequest {
   /** The linked account receiving on `to`; the payer is the signer. */
   recipient: string;
   funding: Funding;
+  /** `xyz`: from a standard Hyperliquid account, the withdrawal leaves its trade.xyz balance instead of its perps. */
+  from_dex?: "xyz" | undefined;
+  /**
+   * `xyz`: received on a standard Hyperliquid account's perps, the delivery moves on to its trade.xyz:
+   * the recipient, when it is the signer, signs that move right after the take, and LaMarge relays it
+   * once the delivery shows there. The intent's `move` then reads it; null, the funds stay on the perps.
+   */
+  to_dex?: "xyz" | undefined;
   /** The transfer to resume, as `onIntent` last named it. */
   transfer_id?: string | undefined;
 }
@@ -92,9 +100,19 @@ export const takeInput = (intent: TransferIntent): TakeInput => ({ from: intent.
 function replacement(intent: TransferIntent, clientId: string) {
   const { from, to, amount_in, min_out, max_parts, payer, recipient, then, previous_transfer_id: previous } = intent;
   // The request's `then` carries the route's terms only: `chain_id` is the server's answer.
-  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...consent(intent.max_fee_bps),
+  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...consent(intent.max_fee_bps), ...fromDex(intent.from_dex), ...toDex(intent.to_dex),
     ...(then ? { then: { to: then.to, recipient: then.recipient, amount_in: then.amount_in, min_out: then.min_out, ...consent(then.max_fee_bps) } } : {}), ...(previous ? { previous_transfer_id: previous } : {}) };
 }
+
+/** The Hyperliquid balance a transfer's withdrawal leaves: trade.xyz, or the perps without `from_dex`. */
+function dexOf(intent: TransferIntent): Dex {
+  insist(!intent.from_dex || intent.from_dex === "xyz", "Unknown Hyperliquid balance");
+  return intent.from_dex ? "xyz" : undefined;
+}
+
+/** A request's trade.xyz source, the field left out when the perps pay. */
+const fromDex = (dex: string | undefined) => dex === "xyz" ? { from_dex: "xyz" as const } : {};
+const toDex = (dex: string | undefined) => dex === "xyz" ? { to_dex: "xyz" as const } : {};
 
 /** The transfer the API answers is the one asked: by its id, or by the client id it was created under. */
 function asked(intent: TransferIntent, by: { id: string } | { clientId: string }): TransferIntent {
@@ -111,7 +129,7 @@ async function withdrawFor(client: Client, signer: Signer, intent: TransferInten
   return exclusive(store, key, async () => {
     try {
       const { result } = await submitWithdrawal({
-        key, venue: intent.from, signer, destination: signer.address, amount, store, signal, beforeSigning, now,
+        key, venue: intent.from, signer, destination: signer.address, amount, store, signal, beforeSigning, now, dex: dexOf(intent),
         prepare: async () => intent.withdrawal_preparation?.typed_data
           ?? (await client.call("prepareTransferWithdrawal", { path: { id: intent.id }, body: { amount: amount.toString() }, signal })).typed_data,
         submit: (_typed, signature) => client.call("submitTransferWithdrawal", { path: { id: intent.id }, body: { signature }, signal, retry: true }),
@@ -134,6 +152,56 @@ async function withdrawFor(client: Client, signer: Signer, intent: TransferInten
  * withdrawal is never repeated because a balance looks short.
  */
 export async function transfer(client: Client, signer: Signer, request: TransferRequest, options: TransferOptions = {}): Promise<Fill[]> {
+  let latest: TransferIntent | undefined;
+  let checked: Pick<Fill, "id" | "to_venue" | "amount_out">[] = [];
+  const fills = await pay(client, signer, request, { ...options,
+    onIntent: async intent => { latest = intent; await options.onIntent?.(intent); },
+    beforeSigning: async signing => { if (signing.kind === "take") checked = signing.prepared.take.fills; await options.beforeSigning?.(signing); } });
+  // Moved only as much as the payment just signed delivers: a resumed take's answer is not checked.
+  const signed = checked.filter(fill => fills.some(paid => paid.id === fill.id));
+  // The take paid either way: what is not moved stays on the perps, moved later from the receipt.
+  if (request.to_dex === "xyz" && latest && signed.length) await moveToXyz(client, signer, latest, signed, options).catch(() => options.signal?.throwIfAborted());
+  return fills;
+}
+
+/**
+ * Received for trade.xyz: the signer, the recipient, signs the move of what `fills` deliver to
+ * Hyperliquid, from its perps to its own trade.xyz; LaMarge holds it until the delivery shows on
+ * the perps. One already submitted is left as it is, one refused unsent is replaced.
+ */
+export async function moveToXyz(client: Client, signer: Signer, intent: Pick<TransferIntent, "id" | "recipient">, fills: Pick<Fill, "to_venue" | "amount_out">[], options: TransferOptions = {}) {
+  const { store = memoryStore(), signal, now = Date.now } = options;
+  const amount = fills.filter(fill => fill.to_venue === "hyperliquid").reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n);
+  if (!same(intent.recipient, signer.address) || amount === 0n) return;
+  const key = `transfer-move:${intent.id}`;
+  const submit = async (signature: Hex) => {
+    try {
+      const result = await client.call("submitTransferMove", { path: { id: intent.id }, body: { signature }, signal, retry: true });
+      if (result.state !== "unknown") await store.delete(key);
+      return result;
+    } catch (error) {
+      // Renewed or expired since: this signature can never be recorded, the next attempt signs anew.
+      if (error instanceof LaMargeError && ["BAD_SIGNATURE", "WITHDRAWAL_EXPIRED"].includes(error.code)) await store.delete(key);
+      throw error;
+    }
+  };
+  await exclusive(store, key, async () => {
+    const current = (await client.call("getTransfer", { path: { id: intent.id }, signal })).move;
+    if (current && current.state !== "refused") return;
+    const kept: unknown = await store.load(key);
+    // Refused unsent, its signature can never be used; one kept otherwise goes as it was signed,
+    // whatever the delivery became since: LaMarge records it or says it never can.
+    if (current) await store.delete(key);
+    else if (kept !== undefined) return void await submit(hex(record(kept).signature));
+    const typed = transferTypedData((await client.call("prepareTransferMove", { path: { id: intent.id }, signal })).typed_data);
+    const signature = await signWithdrawal(signer, typed, "hyperliquid", signer.address, amount, now() / 1000, options.beforeSigning, true);
+    signal?.throwIfAborted();
+    await store.save(key, { typed, signature });
+    await submit(signature);
+  });
+}
+
+async function pay(client: Client, signer: Signer, request: TransferRequest, options: TransferOptions = {}): Promise<Fill[]> {
   const { store = memoryStore(), signal, onStage, onIntent, pollMs = 2_000, arrivalWaitMs = 10 * 60_000, now = Date.now, sleep = (ms: number) => wait(ms, signal) } = options;
   const payer = signer.address;
   const maxParts = request.max_parts ?? MAX_PARTS;
@@ -144,7 +212,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   let intent = request.transfer_id
     ? asked(await client.call("getTransfer", { path: { id: request.transfer_id }, query: { funding_plan: true }, signal }), { id: request.transfer_id })
     : asked(await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.to, amount_in: request.amount_in,
-      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient, ...consent(request.max_fee_bps) }, signal, retry: true }), { clientId: request.client_transfer_id });
+      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient, ...consent(request.max_fee_bps), ...fromDex(request.from_dex), ...toDex(request.to_dex) }, signal, retry: true }), { clientId: request.client_transfer_id });
   // A replacement repeats nothing: the same terms, under a client id derived from the transfer it replaces.
   const replace = async (clientId: string) => asked(await client.call("postTransfer", { body: replacement(intent, clientId), signal, retry: true }), { clientId });
   // A replacement decided before a lost cancellation answer is completed, never decided again.
@@ -157,7 +225,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   const checkIntent = () => {
     insist(!intent.cancelled_at, "Transfer cancelled");
     insist(intent.max_parts === maxParts && intent.from === request.from && intent.to === request.to && intent.from_chain_id === CHAINS[request.from]?.id && intent.to_chain_id === CHAINS[request.to]?.id && intent.amount_in === request.amount_in
-      && intent.min_out === request.min_out && intent.max_fee_bps === request.max_fee_bps && same(intent.payer, payer) && same(intent.recipient, request.recipient), "Transfer terms changed; review the original transfer");
+      && intent.min_out === request.min_out && intent.max_fee_bps === request.max_fee_bps && intent.from_dex === request.from_dex && intent.to_dex === request.to_dex && same(intent.payer, payer) && same(intent.recipient, request.recipient), "Transfer terms changed; review the original transfer");
   };
   checkIntent();
   /** A transfer whose withdrawal preparation went unsigned over 45 seconds is replaced. */
@@ -223,7 +291,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     if (await store.load(takeKey(prepared.take.id)) !== undefined) return true;
     if (!signableAtOnce(prepared, now() / 1000)) return false;
     try {
-      checkWithdrawal(preparation.typed_data, intent.from, signer.address, signer.address, BigInt(preparation.amount), now() / 1000);
+      checkWithdrawal(preparation.typed_data, intent.from, signer.address, signer.address, BigInt(preparation.amount), now() / 1000, dexOf(intent));
       return true;
     } catch {
       return false;
@@ -231,7 +299,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   };
   /** Signs a take reserved against `withdrawal` and submits both: a withdrawal refused, or of unknown outcome, never pays it. */
   const signAtOnce = async (prepared: Answer<"postTake">, withdrawal: { amount: string; typed_data: Typed }, extra: Pick<TakeOptions, "balances" | "lock">) => {
-    const fills = await take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, withdrawal, ...extra });
+    const fills = await take(client, signer, takeInput(intent), { store, signal, prepared, recipient: request.recipient, beforeSigning, now, withdrawal: { ...withdrawal, dex: dexOf(intent) }, ...extra });
     await readIntent(false);
     checkWithdrawalState();
     return fills;
@@ -285,7 +353,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
    */
   const takeAtOnce = async (withdrawal: { amount: string; typed_data: Typed }, balances?: Answer<"getBalances">) => {
     // Checked before reserving: a withdrawal that can no longer be signed reserves nothing.
-    checkWithdrawal(withdrawal.typed_data, intent.from, signer.address, signer.address, BigInt(withdrawal.amount), now() / 1000);
+    checkWithdrawal(withdrawal.typed_data, intent.from, signer.address, signer.address, BigInt(withdrawal.amount), now() / 1000, dexOf(intent));
     const run = async () => {
       let prepared: Answer<"postTake">;
       try {

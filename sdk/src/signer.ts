@@ -53,7 +53,8 @@ export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: Tr
  */
 export type Signing =
   | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
-  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true }
+  /** `move`: a received transfer's move from the perps to the signer's own trade.xyz. */
+  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true; move?: true }
   | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
   /** `signed`: what a resumed route already signed, never asked again. */
   | { kind: "route"; preparation: Answer<"prepareGroupedRoute">; second: Answer<"getTransfer">; signed: { first: boolean; withdrawal: boolean; second: boolean } };

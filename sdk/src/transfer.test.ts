@@ -12,9 +12,9 @@ const now = () => Math.floor(Date.now() / 1000);
 const at = (seconds: number) => new Date((now() + seconds) * 1000).toISOString();
 
 /** Hyperliquid's own withdrawal of `amount` base units to the signer's escrow-chain address. */
-const sendAsset = (amount: string) => ({ types: { EIP712Domain, ...schemas["HyperliquidTransaction:SendAsset"] }, primaryType: "HyperliquidTransaction:SendAsset",
+const sendAsset = (amount: string, sourceDex = "") => ({ types: { EIP712Domain, ...schemas["HyperliquidTransaction:SendAsset"] }, primaryType: "HyperliquidTransaction:SendAsset",
   domain: { name: "HyperliquidSignTransaction", version: "1", chainId: 999, verifyingContract: `0x${"00".repeat(20)}` },
-  message: { hyperliquidChain: "Mainnet", destination: `0x20${"00".repeat(19)}`, sourceDex: "", destinationDex: "spot", token: "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", amount: String(Number(amount) / 1e6), fromSubAccount: "", nonce: Date.now() } });
+  message: { hyperliquidChain: "Mainnet", destination: `0x20${"00".repeat(19)}`, sourceDex, destinationDex: "spot", token: "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", amount: String(Number(amount) / 1e6), fromSubAccount: "", nonce: Date.now() } });
 const permitTyped = () => ({ types: { EIP712Domain, ...schemas.Permit }, primaryType: "Permit",
   domain: { name: required(CHAINS.hyperliquid?.permit), version: required(CHAINS.hyperliquid?.version), chainId: 999, verifyingContract: required(CHAINS.hyperliquid).token },
   message: { owner: payer, spender: ESCROW, value: UNLIMITED_ALLOWANCE.toString(), nonce: "0", deadline: String(now() + 300) } });
@@ -25,7 +25,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   unreadable?: number; from?: string; setup?: string; permitReads?: string[]; funds?: Record<string, string>[]; withdrawal?: string; withdrawn?: string;
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
-  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string } = {}) {
+  previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string;
+  fromDex?: string; sourceDex?: string } = {}) {
   const calls: string[] = [];
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
@@ -47,6 +48,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     withdrawal_preparation: options.stalePreparation ? { amount: "600000", created_at: at(-60), typed_data: {} }
       : options.freshPreparation ? { amount: "600000", created_at: at(0), typed_data: sendAsset("600000") } : null as unknown,
     take_final: null, previous_transfer_id: options.previous ? "transfer-0" : null, continuable: null, cancelled_at: null as string | null, created_at: at(0), ...options.then ? { then: options.then } : {},
+    ...options.fromDex ? { from_dex: options.fromDex } : {},
     funding_plan: { venue: "hyperliquid", owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
       withdrawal_to: options.withdrawalAmount ? "signer" : null, observed_at: at(0), payment_setup: setup, ...options.atOnce ? { signed_at_once: true } : {},
       requests: [...setup === "required" ? [{ kind: "permit", signer: payer, chain_id: 999 }] : [], ...options.withdrawalAmount ? [{ kind: "margin_move", signer: payer, chain_id: 999 }] : [], { kind: "pay_take", signer: payer, chain_id: 999 }] },
@@ -103,7 +105,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     },
     "POST /v1/transfers/transfer-1/withdrawal/prepare": body => {
       unsent = true;
-      const typed_data = sendAsset(String(record(body).amount));
+      const typed_data = sendAsset(String(record(body).amount), options.sourceDex ?? (options.fromDex ? "xyz" : ""));
       if (options.atOnce) intent.withdrawal_preparation = { amount: String(record(body).amount), created_at: at(0), typed_data };
       return { typed_data };
     },
@@ -453,6 +455,20 @@ test("one venue-funded transfer withdraws only what the address lacks, waits for
   expect(stages).toEqual(["checking", "funding", "waiting", "taking", "taking"]);
   expect(signer.kinds).toEqual(["HyperliquidTransaction:SendAsset", "PayTake"]);
   expect(count(calls, "POST /v1/takes")).toBe(1);
+});
+
+test("a transfer from trade.xyz asks for it and signs only a withdrawal from there", async () => {
+  const { client, bodies } = api({ withdrawalAmount: "600000", funds: short, fromDex: "xyz" });
+  const signer = counting();
+  const fills = await transfer(client, signer, { ...venue, from_dex: "xyz" }, clock());
+  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
+  expect(record(bodies["POST /v1/transfers"]?.[0]).from_dex).toBe("xyz");
+  expect(signer.kinds).toEqual(["HyperliquidTransaction:SendAsset", "PayTake"]);
+  // The perps prepared for trade.xyz sign nothing, and neither does an intent that dropped it.
+  const swapped = api({ withdrawalAmount: "600000", funds: short, fromDex: "xyz", sourceDex: "" });
+  await expect(transfer(swapped.client, counting(), { ...venue, from_dex: "xyz" }, clock())).rejects.toThrow("sourceDex");
+  const dropped = api({ withdrawalAmount: "600000", funds: short });
+  await expect(transfer(dropped.client, counting(), { ...venue, from_dex: "xyz" }, clock())).rejects.toThrow("Transfer terms changed");
 });
 
 test("without payment setup, the permit is signed before the withdrawal and the take waits until it is final", async () => {

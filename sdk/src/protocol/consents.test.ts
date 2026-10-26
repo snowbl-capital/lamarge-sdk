@@ -41,6 +41,22 @@ test("a funding plan lists the permit first, only when a wallet deposit needs it
   ]) expect(() => checkFundingPlan(intent(plan))).toThrow("Funding requests differ");
 });
 
+test("a transfer received for trade.xyz by the payer's own account lists its move last, signed on HyperEVM", () => {
+  const other = `0x${"44".repeat(20)}`;
+  const kinds = (...names: string[]) => names.map(kind => ({ kind, signer: master, chain_id: 137 }));
+  const move = (patch: Record<string, unknown> = {}) => ({ kind: "move", signer: master, chain_id: 999, ...patch });
+  const intent = (requests: { kind: string; signer: string; chain_id: number }[], to_dex = "xyz", recipient = master) => ({ from: "polymarket", payer: master, recipient, to_dex, amount_in: "10000000",
+    funding_plan: { observed_at: new Date().toISOString(), venue: "polymarket", owner: master, amount: "10000000", deposit: "0", withdrawal_amount: "0", withdrawal_to: null,
+      payment_setup: "done", requests } });
+  expect(checkFundingPlan(intent([...kinds("pay_take"), move()])).requests).toHaveLength(2);
+  for (const requests of [kinds("pay_take"), [move(), ...kinds("pay_take")], [...kinds("pay_take"), move({ signer: other })], [...kinds("pay_take"), move({ chain_id: 137 })]])
+    expect(() => checkFundingPlan(intent(requests))).toThrow("Funding requests differ");
+  // Without to_dex, or for another recipient, who moves its funds itself, no move is listed.
+  expect(() => checkFundingPlan(intent([...kinds("pay_take"), move()], ""))).toThrow("Funding requests differ");
+  expect(() => checkFundingPlan(intent([...kinds("pay_take"), move({ signer: other })], "xyz", other))).toThrow("Funding requests differ");
+  expect(checkFundingPlan(intent(kinds("pay_take"), "xyz", other)).requests).toHaveLength(1);
+});
+
 test("a missing funding plan throws the server's reason when it gives one", () => {
   const intent = { from: "polymarket", payer: master, amount_in: "10000000", funding_plan: null };
   expect(() => checkFundingPlan(intent)).toThrow("Funding details unavailable");

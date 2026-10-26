@@ -1,7 +1,7 @@
 import { LaMargeError, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkPaymentRefund, checkRefundLocks, type EscrowLock } from "./protocol/consents.ts";
-import { CHAINS, checkTransfer, insist, isPinnedEscrow, same, signedAt, type TransferTyped } from "./protocol/protocol.ts";
+import { CHAINS, checkTransfer, insist, isPinnedEscrow, same, signedAt, type Dex, type TransferTyped } from "./protocol/protocol.ts";
 import { address, array, hex, record, required } from "./protocol/validation.ts";
 import { signItems, signTyped, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
 import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "./store.ts";
@@ -9,9 +9,9 @@ import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "
 export type Withdrawal = components["schemas"]["Withdrawal"];
 
 /** Checks a withdrawal, or a send to `destination` with `send`, against its terms at `at` seconds and the caller's own checks, then signs it. */
-export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false): Promise<Hex> {
-  checkTransfer(typed, venue, signer.address, destination, amount, send, at);
-  await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
+export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false, dex?: Dex): Promise<Hex> {
+  checkTransfer(typed, venue, signer.address, destination, amount, send, at, dex);
+  await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed, ...send && !dex && same(destination, signer.address) && venue === "hyperliquid" ? { move: true as const } : {} });
   return signTyped(signer, typed);
 }
 
@@ -23,18 +23,18 @@ export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue
 export async function submitWithdrawal(options: {
   key: string; context?: Record<string, unknown>; venue: string; signer: Signer; destination: string; amount: bigint; store: SignatureStore; signal?: AbortSignal | undefined;
   prepare: () => Promise<TransferTyped>; submit: (typed: TransferTyped, signature: `0x${string}`) => Promise<Withdrawal>; beforeSigning?: BeforeSigning | undefined;
-  now?: (() => number) | undefined; send?: boolean | undefined;
+  now?: (() => number) | undefined; send?: boolean | undefined; dex?: Dex;
 }): Promise<{ result: Withdrawal; saved: Record<string, unknown> }> {
-  const { key, venue, signer, destination, amount, store, signal, send = false } = options;
+  const { key, venue, signer, destination, amount, store, signal, send = false, dex } = options;
   const stored: unknown = await store.load(key);
   let saved = stored === undefined || record(stored).typed === undefined ? undefined : { typed: transferTypedData(record(stored).typed), signature: hex(record(stored).signature) };
   if (!saved) {
     const typed = await options.prepare();
-    saved = { typed, signature: await signWithdrawal(signer, typed, venue, destination, amount, (options.now ?? Date.now)() / 1000, options.beforeSigning, send) };
+    saved = { typed, signature: await signWithdrawal(signer, typed, venue, destination, amount, (options.now ?? Date.now)() / 1000, options.beforeSigning, send, dex) };
     signal?.throwIfAborted();
     await store.save(key, { ...options.context, ...saved });
   }
-  checkTransfer(saved.typed, venue, signer.address, destination, amount, send, signedAt(saved.typed));
+  checkTransfer(saved.typed, venue, signer.address, destination, amount, send, signedAt(saved.typed), dex);
   const kept = { ...options.context, ...saved };
   return { result: await options.submit(saved.typed, saved.signature), saved: kept };
 }
@@ -46,7 +46,7 @@ function withdrawalOf(value: unknown): Withdrawal {
   const optional = (name: string) => row[name] === null ? null : text(name);
   // Withdrawals stored before sends existed carry no kind.
   const kind = row.kind === undefined ? "withdrawal" : text("kind");
-  return { id: text("id"), venue: text("venue"), kind, amount: text("amount"), destination: text("destination"), state: text("state"),
+  return { id: text("id"), venue: text("venue"), kind, amount: text("amount"), destination: text("destination"), from_dex: row.from_dex === "xyz" ? "xyz" : null, state: text("state"),
     venue_ref: optional("venue_ref"), error: optional("error"), created_at: text("created_at"), relayed_at: optional("relayed_at") };
 }
 
@@ -57,29 +57,42 @@ export interface WithdrawalRequest {
   id: string;
   venue: string;
   amount: bigint;
-  /** `signer`, the linked address; `wallet`, its venue wallet; `account`, a send to `recipient`. */
-  to: "wallet" | "signer" | "account";
+  /**
+   * `signer`, the linked address; `wallet`, its venue wallet; `account`, a send to `recipient`.
+   * A standard Hyperliquid account: `xyz` moves from its perps to its own trade.xyz balance,
+   * `perps` back from there.
+   */
+  to: "wallet" | "signer" | "account" | "xyz" | "perps";
   /** With `to: "account"`: another account on the same venue. On Polymarket, its Perps owner (signer) address. */
   recipient?: string;
+  /** `xyz`: a standard Hyperliquid account's trade.xyz balance pays a withdrawal or send instead of its perps. */
+  dex?: "xyz" | undefined;
 }
 
 /**
  * Withdraws exactly `amount` from the signer's Hyperliquid or Polymarket account, or with
- * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster. Its signature and
+ * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster; `to: "xyz"` or
+ * `"perps"` moves it between a standard Hyperliquid account's perps and trade.xyz. Its signature and
  * outcome stay in `store` under `id`: running the same request again returns the outcome or
  * submits the same signature, and a refused one asks for a new id. Aster relays a withdrawal in a
  * second envelope this flow does not sign yet; a send needs none.
  */
 export async function withdraw(client: Client, signer: Signer, request: WithdrawalRequest,
   options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}): Promise<Withdrawal> {
-  const { id, venue, amount, to } = request;
+  const { id, venue, amount, to, dex } = request;
   const { store = memoryStore(), signal } = options;
-  const send = to === "account";
-  insist(venue === "hyperliquid" || venue === "polymarket" || send && venue === "aster", `Withdrawals from ${venue} are not supported here`);
-  insist(send === (request.recipient !== undefined), "A recipient goes with to: account, and only with it");
+  const move = to === "xyz" || to === "perps";
+  const send = to === "account" || move;
+  insist(venue === "hyperliquid" || venue === "polymarket" && !move || to === "account" && venue === "aster", `Withdrawals from ${venue} are not supported here`);
+  insist((to === "account") === (request.recipient !== undefined), "A recipient goes with to: account, and only with it");
+  // A send to the signer itself would sign a move between its balances it did not ask for.
+  insist(to !== "account" || !same(request.recipient, signer.address), "A send goes to another account");
+  insist(!dex || venue === "hyperliquid" && !move, "Only a Hyperliquid withdrawal or send pays from trade.xyz");
+  // A move to the perps leaves trade.xyz; one to trade.xyz leaves the perps.
+  const from: Dex = to === "perps" ? "xyz" : dex;
   const key = `withdrawal:${id}`;
   return exclusive(store, key, async () => {
-    const context = { venue, amount: amount.toString(), to, signer: signer.address.toLowerCase(), ...(send ? { recipient: required(request.recipient).toLowerCase() } : {}) };
+    const context = { venue, amount: amount.toString(), to, signer: signer.address.toLowerCase(), ...(to === "account" ? { recipient: required(request.recipient).toLowerCase() } : {}), ...(dex ? { dex } : {}) };
     const stored: unknown = await store.load(key);
     if (stored !== undefined) {
       const known = record(stored);
@@ -91,11 +104,11 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
     }
     const balance = (await client.call("getBalances", { signal })).find(row => row.venue === venue);
     insist(balance && same(balance.address, signer.address), "Linked account changed; refresh before signing");
-    const destination = required(send ? request.recipient : to === "wallet" ? balance.venue_wallet : signer.address, "No linked destination wallet");
-    const body = { venue, amount: amount.toString(), to, ...(send ? { recipient: destination } : {}) };
+    const destination = required(to === "account" ? request.recipient : to === "wallet" ? balance.venue_wallet : signer.address, "No linked destination wallet");
+    const body = { venue, amount: amount.toString(), to, ...(to === "account" ? { recipient: destination } : {}), ...(dex ? { dex } : {}) };
     try {
       const { result, saved } = await submitWithdrawal({
-        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now, send,
+        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now, send, dex: from,
         prepare: async () => transferTypedData((await client.call("postWithdrawalPrepare", { body, signal })).typed_data),
         submit: (typed, signature) => client.call("postWithdrawal", { body: { venue, typed_data: typed, signature }, signal, retry: true }),
       });

@@ -3088,6 +3088,153 @@
         }
       }
     },
+    "/v1/transfers/{id}/move/prepare": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "prepareTransferMove",
+        "summary": "Prepare this transfer's move to trade.xyz",
+        "description": "For a transfer with `to_dex: xyz` once its take is reserved: a Hyperliquid `SendAsset` of what the take delivered or may still deliver to the perps, from the recipient's perps (`sourceDex` `\"\"`) to its own trade.xyz (`destinationDex` `xyz`), signed by the recipient. Retries return the same typed data for 45 seconds, then a renewed one, which a signature of the earlier no longer matches (`BAD_SIGNATURE`). After its move was `refused`, a new one replaces it.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The typed data to sign.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "typed_data"
+                  ],
+                  "properties": {
+                    "typed_data": {
+                      "$ref": "#/components/schemas/TypedData"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/v1/transfers/{id}/move": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "submitTransferMove",
+        "summary": "Submit this transfer's move to trade.xyz",
+        "description": "Records the signed move, `kind` `move`, held: LaMarge relays it once the take delivered its amount to the perps and a fresh read of the account after the delivery shows the perps can move it, within ten minutes of its nonce; else it is `refused` unsent and the funds stay on the perps. Retries return it.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "signature"
+                ],
+                "properties": {
+                  "signature": {
+                    "$ref": "#/components/schemas/Signature"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The move.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Withdrawal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`VALIDATION_ERROR`, `BAD_SIGNATURE`, or `WITHDRAWAL_EXPIRED` ten minutes after preparation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
     "/v1/transfers/{id}/grouped": {
       "post": {
         "tags": [
@@ -3890,13 +4037,22 @@
                       "wallet",
                       "signer",
                       "escrow",
-                      "account"
+                      "account",
+                      "xyz",
+                      "perps"
                     ],
-                    "description": "Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`."
+                    "description": "Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`. A standard Hyperliquid account: `xyz`, a move from its perps to its own trade.xyz balance, or `perps`, back from trade.xyz; free, without `dex`."
                   },
                   "recipient": {
                     "$ref": "#/components/schemas/Address",
                     "description": "With `to: account` only: the other account. On Polymarket, its Perps owner (signer) address, not its wallet."
+                  },
+                  "dex": {
+                    "type": "string",
+                    "enum": [
+                      "xyz"
+                    ],
+                    "description": "Hyperliquid, a standard account: its trade.xyz balance pays the withdrawal or send instead of its perps. A unified account's one balance includes it: `VALIDATION_ERROR`."
                   }
                 },
                 "additionalProperties": false
@@ -5835,6 +5991,7 @@
           "mode",
           "has_account",
           "wallet",
+          "xyz",
           "chain_balance",
           "escrow_balance",
           "deposit_balance",
@@ -5913,6 +6070,41 @@
               "null"
             ],
             "description": "Venue token outside the margin, where the venue has one ([venues](/how-it-works#venues-and-balances))."
+          },
+          "xyz": {
+            "description": "A standard Hyperliquid account's trade.xyz balance (HIP-3 dex `xyz`), apart from `equity` and `withdrawable`; `withdrawable` less transfers from there relayed since `read_at`; in the holdings' `total`, not their `available`. Null elsewhere and on a unified account, whose one balance includes it.",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "equity",
+                  "withdrawable",
+                  "read_at"
+                ],
+                "properties": {
+                  "equity": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+$",
+                    "description": "Base units; negative when losses exceed the deposits there."
+                  },
+                  "withdrawable": {
+                    "$ref": "#/components/schemas/Amount"
+                  },
+                  "read_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "trade.xyz's own last read, null (with zero amounts) until the first; a failed one keeps the previous values. A payment from there needs it within two minutes."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "chain_balance": {
             "type": [
@@ -7069,6 +7261,20 @@
           "max_fee_bps": {
             "$ref": "#/components/schemas/FeeBps",
             "description": "The highest taker fee its take accepts: a pair whose fee is higher is `VALIDATION_ERROR` with reason `fee_above_max`. Without it, its take pays no fee. Its take must send the same; a route's second take accepts `then.max_fee_bps`."
+          },
+          "from_dex": {
+            "type": "string",
+            "enum": [
+              "xyz"
+            ],
+            "description": "From Hyperliquid, a standard account: its withdrawal leaves its trade.xyz balance instead of its perps. Never with `previous_transfer_id`, which pays what was delivered."
+          },
+          "to_dex": {
+            "type": "string",
+            "enum": [
+              "xyz"
+            ],
+            "description": "To Hyperliquid, a standard account, without `then`: the delivery lands on the perps, then the recipient's move to its own trade.xyz, signed after the take ([prepare](/api-reference/transfers/prepare-move)), is relayed as soon as a read shows the delivery there."
           }
         },
         "additionalProperties": false
@@ -7205,7 +7411,8 @@
           "created_at",
           "funding_plan",
           "funding_plan_error",
-          "grouped"
+          "grouped",
+          "move"
         ],
         "properties": {
           "id": {
@@ -7238,6 +7445,31 @@
           "max_fee_bps": {
             "$ref": "#/components/schemas/FeeBps",
             "description": "As sent; absent when the transfer consented to no fee."
+          },
+          "from_dex": {
+            "type": "string",
+            "enum": [
+              "xyz"
+            ],
+            "description": "As sent; absent when the withdrawal leaves the perps."
+          },
+          "to_dex": {
+            "type": "string",
+            "enum": [
+              "xyz"
+            ],
+            "description": "As sent; absent when the delivery stays on the perps."
+          },
+          "move": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Withdrawal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `to_dex`, the signed move once submitted; null before."
           },
           "payer": {
             "$ref": "#/components/schemas/Address"
@@ -7829,6 +8061,7 @@
           "kind",
           "amount",
           "destination",
+          "from_dex",
           "state",
           "venue_ref",
           "error",
@@ -7843,13 +8076,25 @@
           "venue": {
             "$ref": "#/components/schemas/VenueId"
           },
+          "from_dex": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "xyz",
+              null
+            ],
+            "description": "`xyz` when it left a standard Hyperliquid account's trade.xyz balance (a move from there goes to the perps); null otherwise."
+          },
           "kind": {
             "type": "string",
             "enum": [
               "withdrawal",
-              "send"
+              "send",
+              "move"
             ],
-            "description": "`send`: to another account on the same venue (`to: account`)."
+            "description": "`send`: to another account on the same venue (`to: account`). `move`: between your own Hyperliquid perps and trade.xyz (`to: xyz` or `perps`)."
           },
           "amount": {
             "$ref": "#/components/schemas/Amount",
@@ -7857,7 +8102,7 @@
           },
           "destination": {
             "$ref": "#/components/schemas/Address",
-            "description": "A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address."
+            "description": "A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address. A move: the linked address."
           },
           "state": {
             "$ref": "#/components/schemas/WithdrawalState"
@@ -9125,8 +9370,10 @@
                   "enum": [
                     "permit",
                     "margin_move",
-                    "pay_take"
-                  ]
+                    "pay_take",
+                    "move"
+                  ],
+                  "description": "`move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move))."
                 },
                 "signer": {
                   "$ref": "#/components/schemas/Address"
@@ -10738,6 +10985,7 @@
           "kind",
           "amount",
           "destination",
+          "from_dex",
           "state",
           "venue_ref",
           "error",
@@ -10757,7 +11005,8 @@
             "type": "string",
             "enum": [
               "withdrawal",
-              "send"
+              "send",
+              "move"
             ]
           },
           "amount": {
@@ -10765,6 +11014,17 @@
           },
           "destination": {
             "$ref": "#/components/schemas/Address"
+          },
+          "from_dex": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "xyz",
+              null
+            ],
+            "description": "As in `Withdrawal`."
           },
           "state": {
             "$ref": "#/components/schemas/WithdrawalState"

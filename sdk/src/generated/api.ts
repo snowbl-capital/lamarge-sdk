@@ -898,6 +898,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/transfers/{id}/move/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare this transfer's move to trade.xyz
+         * @description For a transfer with `to_dex: xyz` once its take is reserved: a Hyperliquid `SendAsset` of what the take delivered or may still deliver to the perps, from the recipient's perps (`sourceDex` `""`) to its own trade.xyz (`destinationDex` `xyz`), signed by the recipient. Retries return the same typed data for 45 seconds, then a renewed one, which a signature of the earlier no longer matches (`BAD_SIGNATURE`). After its move was `refused`, a new one replaces it.
+         */
+        post: operations["prepareTransferMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/transfers/{id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit this transfer's move to trade.xyz
+         * @description Records the signed move, `kind` `move`, held: LaMarge relays it once the take delivered its amount to the perps and a fresh read of the account after the delivery shows the perps can move it, within ten minutes of its nonce; else it is `refused` unsent and the funds stay on the perps. Retries return it.
+         */
+        post: operations["submitTransferMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/transfers/{id}/grouped": {
         parameters: {
             query?: never;
@@ -1700,6 +1740,17 @@ export interface components {
             has_account: boolean;
             /** @description Venue token outside the margin, where the venue has one ([venues](/how-it-works#venues-and-balances)). */
             wallet: string | null;
+            /** @description A standard Hyperliquid account's trade.xyz balance (HIP-3 dex `xyz`), apart from `equity` and `withdrawable`; `withdrawable` less transfers from there relayed since `read_at`; in the holdings' `total`, not their `available`. Null elsewhere and on a unified account, whose one balance includes it. */
+            xyz: {
+                /** @description Base units; negative when losses exceed the deposits there. */
+                equity: string;
+                withdrawable: components["schemas"]["Amount"];
+                /**
+                 * Format: date-time
+                 * @description trade.xyz's own last read, null (with zero amounts) until the first; a failed one keeps the previous values. A payment from there needs it within two minutes.
+                 */
+                read_at: string | null;
+            } | null;
             /** @description Token balance of the linked address on the escrow chain, less what a payment locked since `chain_read_at` took beyond `escrow_balance`. */
             chain_balance: string | null;
             /** @description The available balance (order ID zero), which takes pay from first, less payments locked since `chain_read_at`. Read with `chain_balance`. */
@@ -2069,6 +2120,16 @@ export interface components {
             previous_transfer_id?: components["schemas"]["Uuid"];
             /** @description The highest taker fee its take accepts: a pair whose fee is higher is `VALIDATION_ERROR` with reason `fee_above_max`. Without it, its take pays no fee. Its take must send the same; a route's second take accepts `then.max_fee_bps`. */
             max_fee_bps?: components["schemas"]["FeeBps"];
+            /**
+             * @description From Hyperliquid, a standard account: its withdrawal leaves its trade.xyz balance instead of its perps. Never with `previous_transfer_id`, which pays what was delivered.
+             * @enum {string}
+             */
+            from_dex?: "xyz";
+            /**
+             * @description To Hyperliquid, a standard account, without `then`: the delivery lands on the perps, then the recipient's move to its own trade.xyz, signed after the take ([prepare](/api-reference/transfers/prepare-move)), is relayed as soon as a read shows the delivery there.
+             * @enum {string}
+             */
+            to_dex?: "xyz";
         };
         TransferThen: {
             to: components["schemas"]["VenueId"];
@@ -2110,6 +2171,18 @@ export interface components {
             max_parts: number;
             /** @description As sent; absent when the transfer consented to no fee. */
             max_fee_bps?: components["schemas"]["FeeBps"];
+            /**
+             * @description As sent; absent when the withdrawal leaves the perps.
+             * @enum {string}
+             */
+            from_dex?: "xyz" | (string & {});
+            /**
+             * @description As sent; absent when the delivery stays on the perps.
+             * @enum {string}
+             */
+            to_dex?: "xyz" | (string & {});
+            /** @description With `to_dex`, the signed move once submitted; null before. */
+            move: components["schemas"]["Withdrawal"] | null;
             payer: components["schemas"]["Address"];
             recipient: components["schemas"]["Address"];
             from_chain_id: number;
@@ -2299,13 +2372,18 @@ export interface components {
             id: string;
             venue: components["schemas"]["VenueId"];
             /**
-             * @description `send`: to another account on the same venue (`to: account`).
+             * @description `xyz` when it left a standard Hyperliquid account's trade.xyz balance (a move from there goes to the perps); null otherwise.
+             * @enum {string|null}
+             */
+            from_dex: "xyz" | null;
+            /**
+             * @description `send`: to another account on the same venue (`to: account`). `move`: between your own Hyperliquid perps and trade.xyz (`to: xyz` or `perps`).
              * @enum {string}
              */
-            kind: "withdrawal" | "send" | (string & {});
+            kind: "withdrawal" | "send" | "move" | (string & {});
             /** @description On an Aster withdrawal, the venue fee included. */
             amount: components["schemas"]["Amount"];
-            /** @description A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address. */
+            /** @description A send: its recipient. A withdrawal: on Polymarket the linked wallet, signer or deposit address; elsewhere the linked address. A move: the linked address. */
             destination: components["schemas"]["Address"];
             state: components["schemas"]["WithdrawalState"];
             /** @description Polymarket's withdrawal or transfer id, or Aster's withdrawal or transfer id, once relayed; null on Hyperliquid. */
@@ -2640,8 +2718,11 @@ export interface components {
             /** @description The take is signed at once with the withdrawal: prepare the withdrawal, reserve the take, then submit the `pay_take` and `margin_move` signatures together to `POST /v1/takes/{id}/signatures`. LaMarge sends the withdrawal, then the payment as soon as its funds reach the wallet. False: submit the withdrawal and take once its funds arrived. */
             signed_at_once: boolean;
             requests: {
-                /** @enum {string} */
-                kind: "permit" | "margin_move" | "pay_take" | (string & {});
+                /**
+                 * @description `move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move)).
+                 * @enum {string}
+                 */
+                kind: "permit" | "margin_move" | "pay_take" | "move" | (string & {});
                 signer: components["schemas"]["Address"];
                 chain_id: number;
             }[];
@@ -3036,9 +3117,14 @@ export interface components {
             id: string;
             venue: components["schemas"]["VenueId"];
             /** @enum {string} */
-            kind: "withdrawal" | "send" | (string & {});
+            kind: "withdrawal" | "send" | "move" | (string & {});
             amount: components["schemas"]["Amount"];
             destination: components["schemas"]["Address"];
+            /**
+             * @description As in `Withdrawal`.
+             * @enum {string|null}
+             */
+            from_dex: "xyz" | null;
             state: components["schemas"]["WithdrawalState"];
             venue_ref: string | null;
             error: string | null;
@@ -5025,6 +5111,82 @@ export interface operations {
             500: components["responses"]["Internal"];
         };
     };
+    prepareTransferMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The typed data to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        typed_data: components["schemas"]["TypedData"];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    submitTransferMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    signature: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The move. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Withdrawal"];
+                };
+            };
+            /** @description `VALIDATION_ERROR`, `BAD_SIGNATURE`, or `WITHDRAWAL_EXPIRED` ten minutes after preparation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
     prepareGroupedRoute: {
         parameters: {
             query?: never;
@@ -5486,12 +5648,17 @@ export interface operations {
                     venue: components["schemas"]["VenueId"];
                     amount: components["schemas"]["Amount"];
                     /**
-                     * @description Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`.
+                     * @description Polymarket: `wallet` (the linked venue wallet), `signer`, or `escrow` (the signer's deposit address, swept into the available balance). Hyperliquid and Aster: `signer`. All three: `account`, a send to `recipient`. A standard Hyperliquid account: `xyz`, a move from its perps to its own trade.xyz balance, or `perps`, back from trade.xyz; free, without `dex`.
                      * @enum {string}
                      */
-                    to: "wallet" | "signer" | "escrow" | "account";
+                    to: "wallet" | "signer" | "escrow" | "account" | "xyz" | "perps";
                     /** @description With `to: account` only: the other account. On Polymarket, its Perps owner (signer) address, not its wallet. */
                     recipient?: components["schemas"]["Address"];
+                    /**
+                     * @description Hyperliquid, a standard account: its trade.xyz balance pays the withdrawal or send instead of its perps. A unified account's one balance includes it: `VALIDATION_ERROR`.
+                     * @enum {string}
+                     */
+                    dex?: "xyz";
                 };
             };
         };
@@ -6153,6 +6320,14 @@ export const routes = {
   },
   "submitTransferWithdrawal": {
     "path": "/v1/transfers/{id}/withdrawal",
+    "method": "POST"
+  },
+  "prepareTransferMove": {
+    "path": "/v1/transfers/{id}/move/prepare",
+    "method": "POST"
+  },
+  "submitTransferMove": {
+    "path": "/v1/transfers/{id}/move",
     "method": "POST"
   },
   "prepareGroupedRoute": {

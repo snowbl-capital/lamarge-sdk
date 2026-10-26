@@ -10,7 +10,7 @@ export { memoryStore, type SignatureStore } from "./store.ts";
 export { checkQuote, paysAll, MAX_PARTS, minimumTake, QuoteUnavailable, sweep, type Sweep } from "./book.ts";
 export { takeFee, type Fee } from "./protocol/fees.ts";
 export { take, takeKey, type Balance, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
-export { consent, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferRequest, type TransferStage } from "./transfer.ts";
+export { consent, moveToXyz, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferRequest, type TransferStage } from "./transfer.ts";
 export { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type Order, type QuoteSigner } from "./maker.ts";
 export { checkEscrowLocks, refundPayment, withdraw, type ChainReaders, type RefundFill, type Withdrawal, type WithdrawalRequest } from "./withdraw.ts";

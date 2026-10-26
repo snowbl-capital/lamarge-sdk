@@ -163,3 +163,32 @@ test("two calls with one id share one signature, and a pending outcome is read a
   expect((await ask()).state).toBe("relayed");
   expect(submissions).toHaveLength(2);
 });
+
+const hyperliquidSend = (message: Record<string, unknown>) => ({
+  types: { EIP712Domain, ...schemas["HyperliquidTransaction:SendAsset"] }, primaryType: "HyperliquidTransaction:SendAsset",
+  domain: { name: "HyperliquidSignTransaction", version: "1", chainId: 999, verifyingContract: "0x0000000000000000000000000000000000000000" },
+  message: { hyperliquidChain: "Mainnet", token: "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", amount: "2", fromSubAccount: "", nonce: Date.now(), ...message },
+});
+
+test("a standard Hyperliquid account withdraws from trade.xyz and moves between its perps and trade.xyz as asked", async () => {
+  const asked: unknown[] = [];
+  const toHyperEvm = "0x2000000000000000000000000000000000000000";
+  let answer = hyperliquidSend({ destination: toHyperEvm, sourceDex: "xyz", destinationDex: "spot" });
+  const { client } = fake({
+    "GET /v1/balances": () => [{ venue: "hyperliquid", address: owner, venue_wallet: null }],
+    "POST /v1/withdrawals/prepare": body => { asked.push(body); return { typed_data: answer }; },
+    "POST /v1/withdrawals": () => ({ id: "w", venue: "hyperliquid", kind: "withdrawal", amount: "2000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-26T00:00:00Z", relayed_at: null }),
+  });
+  const signer = counting();
+  await withdraw(client, signer, { id: "xyz-out", venue: "hyperliquid", amount: 2_000_000n, to: "signer", dex: "xyz" });
+  answer = hyperliquidSend({ destination: owner, sourceDex: "", destinationDex: "xyz" });
+  await withdraw(client, signer, { id: "xyz-in", venue: "hyperliquid", amount: 2_000_000n, to: "xyz" });
+  expect(asked).toEqual([{ venue: "hyperliquid", amount: "2000000", to: "signer", dex: "xyz" }, { venue: "hyperliquid", amount: "2000000", to: "xyz" }]);
+  // The perps answered for trade.xyz, or a move the other way, sign nothing.
+  answer = hyperliquidSend({ destination: toHyperEvm, sourceDex: "", destinationDex: "spot" });
+  await expect(withdraw(client, signer, { id: "xyz-swapped", venue: "hyperliquid", amount: 2_000_000n, to: "signer", dex: "xyz" })).rejects.toThrow("sourceDex");
+  answer = hyperliquidSend({ destination: owner, sourceDex: "xyz", destinationDex: "" });
+  await expect(withdraw(client, signer, { id: "xyz-back", venue: "hyperliquid", amount: 2_000_000n, to: "xyz" })).rejects.toThrow("Dex");
+  expect(signer.signed).toBe(2);
+  await expect(withdraw(client, signer, { id: "xyz-elsewhere", venue: "polymarket", amount: 2_000_000n, to: "signer", dex: "xyz" })).rejects.toThrow("trade.xyz");
+});

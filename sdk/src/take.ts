@@ -2,7 +2,7 @@ import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, signableUntil, takePaymentKind } from "./protocol/intents.ts";
 import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
-import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Typed } from "./protocol/protocol.ts";
+import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Dex, type Typed } from "./protocol/protocol.ts";
 import { isRecord, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
@@ -42,7 +42,7 @@ export interface TakeOptions {
   /** Runs the whole take inside it, from reserving to submitting: a lock other processes or browser tabs share, so none takes a reservation still being signed for abandoned. */
   lock?: (<T>(run: () => Promise<T>) => Promise<T>) | undefined;
   /** A transfer's prepared withdrawal the take was reserved against: signed before the payment, to the signer, and submitted with it. */
-  withdrawal?: { amount: string; typed_data: Typed } | undefined;
+  withdrawal?: { amount: string; typed_data: Typed; dex?: Dex } | undefined;
 }
 
 /** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
@@ -116,7 +116,7 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
       const at = () => (options.now ?? Date.now)() / 1000;
       const inTime = () => insist(!withdrawal || signableAtOnce(prepared, at()), "Too little time is left to sign the take");
       inTime();
-      const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at(), options.beforeSigning);
+      const moved = withdrawal && await signWithdrawal(signer, withdrawal.typed_data, input.from, signer.address, BigInt(withdrawal.amount), at(), options.beforeSigning, false, withdrawal.dex);
       inTime();
       const paid = await signPayment(client, prepared, input, signer, payer, recipient, { at: at(), signal, before: options.beforeSigning, payWindow: withdrawal ? ROUTE_PAY_WINDOW_SECONDS : undefined });
       signatures = moved ? [...paid, { kind: "margin_move", signature: moved }] : paid;

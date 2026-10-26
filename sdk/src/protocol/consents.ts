@@ -28,7 +28,8 @@ type FundingPlan = {
 };
 
 /** What a transfer from wallet funds will ask its payer to sign: at most a permit, a margin withdrawal and the payment, on the pinned escrow chain, for this amount. */
-export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; funding_plan: P | null; funding_plan_error?: { message: string } | null }, now = Date.now()): P {
+export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; recipient?: string | undefined; to_dex?: string | undefined;
+  funding_plan: P | null; funding_plan_error?: { message: string } | null }, now = Date.now()): P {
   // The server says why it has no plan, such as a balance short of the amount.
   const plan = required(intent.funding_plan, intent.funding_plan_error?.message ?? "Funding details unavailable; try again shortly");
   const chain = required(CHAINS[intent.from], "Unknown funding venue");
@@ -38,9 +39,14 @@ export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; 
   const age = now - Date.parse(plan.observed_at);
   insist(age >= -5_000 && age < 120_000, "Funding details expired; review the transfer");
   insist(plan.withdrawal_to === (BigInt(plan.withdrawal_amount) > 0n ? "signer" : null), "Funding destination differs from the transfer");
-  const kinds = plan.requests.map(request => request.kind);
+  // Received for trade.xyz by the payer's own account, its move follows the payment, signed on HyperEVM.
+  const moving = intent.to_dex === "xyz" && same(intent.payer, intent.recipient);
+  const move = plan.requests.at(-1);
+  insist(!moving || move?.kind === "move" && same(move.signer, intent.recipient) && move.chain_id === CHAINS.hyperliquid?.id, "Funding requests differ from the transfer");
+  const requests = moving ? plan.requests.slice(0, -1) : plan.requests;
+  const kinds = requests.map(request => request.kind);
   const permit = plan.payment_setup === "required";
-  insist(plan.requests.every(request => same(request.signer, intent.payer) && request.chain_id === chain.id)
+  insist(requests.every(request => same(request.signer, intent.payer) && request.chain_id === chain.id)
     && kinds.filter(kind => kind === "pay_take").length === 1 && new Set(kinds).size === kinds.length
     && kinds.every(kind => kind === "permit" || kind === "margin_move" || kind === "pay_take")
     && kinds.includes("margin_move") === (BigInt(plan.withdrawal_amount) > 0n)

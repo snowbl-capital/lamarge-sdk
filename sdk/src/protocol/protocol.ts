@@ -213,8 +213,16 @@ export function venueUnits(value: bigint, venue: string): bigint {
 }
 /** One token in native units, the automatic deposit sweep threshold. */
 export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(venue));
+/**
+ * `dex: "xyz"`: a standard Hyperliquid account's transfer leaves its trade.xyz balance instead of
+ * its perps; a move, to the signer itself, goes to the other one. A unified account's one balance
+ * includes trade.xyz.
+ */
+export type Dex = "xyz" | undefined;
+/** The `sourceDex` a Hyperliquid transfer must sign: trade.xyz when asked, else the account mode's perps or spot. */
+const sourceDexes = (dex: Dex) => dex === "xyz" ? ["xyz"] : ["", "spot"];
 /** Venue withdrawals can only move this amount to the reviewed destination. */
-export function checkWithdrawal(typed: Typed, venue: string, signer: string, destination: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<Typed> {
+export function checkWithdrawal(typed: Typed, venue: string, signer: string, destination: string, amount: bigint, now = Date.now() / 1000, dex?: Dex): asserts typed is Verified<Typed> {
   checkTypes(typed);
   const m = typed.message, d = typed.domain;
   insist(amount > 0n, differs("amount"));
@@ -224,13 +232,14 @@ export function checkWithdrawal(typed: Typed, venue: string, signer: string, des
     insist(same(destination, signer), differs("destination"));
     insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
     insist(same(m.destination, "0x2000000000000000000000000000000000000000"), differs("destination"));
-    insist(["", "spot"].includes(String(m.sourceDex)), differs("sourceDex"));
+    insist(sourceDexes(dex).includes(String(m.sourceDex)), differs("sourceDex"));
     insist(m.destinationDex === "spot", differs("destinationDex"));
     insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
     insist(m.fromSubAccount === "", differs("fromSubAccount"));
     insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
     insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale withdrawal nonce");
   } else if (venue === "aster") {
+    insist(!dex, differs("venue"));
     // Aster takes the fee out of the signed amount: `amount` is what arrives on BSC.
     insist(typed.primaryType === "Action", differs("primaryType"));
     insist(d.name === "Aster" && d.version === "1" && d.chainId === ASTER_CHAIN_ID && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
@@ -245,7 +254,7 @@ export function checkWithdrawal(typed: Typed, venue: string, signer: string, des
     insist(decimalUnits(m.amount, decimals) === amount + fee, differs("amount"));
     insist(Math.abs(Number(uint(m.nonce)) / 1_000_000 - now) <= 60, "Stale withdrawal nonce");
   } else {
-    insist(venue === "polymarket", differs("venue"));
+    insist(venue === "polymarket" && !dex, differs("venue"));
     insist(typed.primaryType === "Withdraw", differs("primaryType"));
     insist(d.name === "Polymarket" && d.version === "1" && d.chainId === 137 && same(d.verifyingContract, "0xdca4af75705dbb50f62437045aff9921947917d2"), differs("domain"));
     insist(same(m.account, signer), differs("account"));
@@ -277,13 +286,16 @@ function msgpack(name: string, args: string[]): Uint8Array {
 export const opHash = (name: string, args: string[]): string => `0x${Array.from(keccak_256(msgpack(name, args)), byte => byte.toString(16).padStart(2, "0")).join("")}`;
 /**
  * Checks a send to `recipient`, another account on the same venue, against the requested amount
- * at `now` seconds. A Polymarket wallet shows only the operation's hash: it is rebuilt here from
+ * at `now` seconds; on Hyperliquid, `recipient` the signer itself for a move between its perps and
+ * trade.xyz, from trade.xyz with `dex`. A Polymarket wallet shows only the operation's hash: it is rebuilt here from
  * `op`, whose terms are checked.
  */
-export function checkSend(typed: TransferTyped, venue: string, signer: string, recipient: string, amount: bigint, now = Date.now() / 1000): asserts typed is Verified<TransferTyped> {
+export function checkSend(typed: TransferTyped, venue: string, signer: string, recipient: string, amount: bigint, now = Date.now() / 1000, dex?: Dex): asserts typed is Verified<TransferTyped> {
   checkTypes(typed);
   insist(amount > 0n, differs("amount"));
-  insist(!same(recipient, signer), differs("recipient"));
+  const move = same(recipient, signer);
+  insist(!move || venue === "hyperliquid", differs("recipient"));
+  insist(venue === "hyperliquid" || !dex, differs("venue"));
   if (isOpTyped(typed) || venue === "polymarket") {
     insist(venue === "polymarket" && isOpTyped(typed), differs("primaryType"));
     const m = typed.message, d = typed.domain;
@@ -305,8 +317,9 @@ export function checkSend(typed: TransferTyped, venue: string, signer: string, r
     insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
     insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
     insist(typeof m.destination === "string" && m.destination === recipient.toLowerCase() && !isHyperliquidSystem(m.destination), differs("destination"));
-    insist(["", "spot"].includes(String(m.sourceDex)), differs("sourceDex"));
-    insist(["", "spot"].includes(String(m.destinationDex)), differs("destinationDex"));
+    // A move leaves a standard account's perps (`""`) or trade.xyz for the other one.
+    insist((move ? [dex === "xyz" ? "xyz" : ""] : sourceDexes(dex)).includes(String(m.sourceDex)), differs("sourceDex"));
+    insist((move ? [dex === "xyz" ? "" : "xyz"] : ["", "spot"]).includes(String(m.destinationDex)), differs("destinationDex"));
     insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
     insist(m.fromSubAccount === "", differs("fromSubAccount"));
     insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
@@ -322,11 +335,11 @@ export function checkSend(typed: TransferTyped, venue: string, signer: string, r
     insist(Math.abs(transfer.nonce - now) <= 60, "Stale transfer nonce");
   }
 }
-/** A withdrawal's or, with `send`, a send's checks against its terms at `now` seconds. */
-export function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, send: boolean, now?: number): asserts typed is Verified<TransferTyped> {
-  if (send) checkSend(typed, venue, signer, destination, amount, now);
+/** A withdrawal's or, with `send`, a send's or a move's checks against its terms at `now` seconds. */
+export function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, send: boolean, now?: number, dex?: Dex): asserts typed is Verified<TransferTyped> {
+  if (send) checkSend(typed, venue, signer, destination, amount, now, dex);
   else if (isOpTyped(typed)) throw new Error("Unsupported signing request");
-  else checkWithdrawal(typed, venue, signer, destination, amount, now);
+  else checkWithdrawal(typed, venue, signer, destination, amount, now, dex);
 }
 /** When a withdrawal or send was signed, in seconds, from each venue's own unit. */
 export function signedAt(typed: TransferTyped): number {

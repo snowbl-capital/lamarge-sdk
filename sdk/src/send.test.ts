@@ -134,4 +134,26 @@ test("a send signs once to its recipient, and a lost answer resubmits the same s
   expect(record(record(bodies[1]).typed_data).op).toEqual(internalTransfer().op);
   await expect(withdraw(client, signer, { id: "s-2", venue: "polymarket", amount: 1n, to: "account" })).rejects.toThrow("recipient");
   await expect(withdraw(client, signer, { id: "s-3", venue: "lighter", amount: 1n, to: "account", recipient })).rejects.toThrow("not supported");
+  // To the signer itself, it would sign a move it did not ask for: nothing is prepared or signed.
+  await expect(withdraw(client, signer, { id: "s-4", venue: "hyperliquid", amount: 1n, to: "account", recipient: signer.address })).rejects.toThrow("another account");
+  expect(signer.signed).toBe(1);
+});
+
+test("trade.xyz pays a Hyperliquid send only when asked, and a move goes to the signer between its perps and trade.xyz", () => {
+  const at = now();
+  expect(() => checkSend(sendAsset({ sourceDex: "xyz" }), "hyperliquid", owner, recipient, 5_250_000n, at, "xyz")).not.toThrow();
+  expect(() => checkSend(sendAsset({ sourceDex: "" }), "hyperliquid", owner, recipient, 5_250_000n, at, "xyz")).toThrow("sourceDex");
+  const move = (sourceDex: string, destinationDex: string) => sendAsset({ destination: owner, sourceDex, destinationDex });
+  // A move goes from the perps to trade.xyz, or with `dex` back.
+  expect(() => checkSend(move("", "xyz"), "hyperliquid", owner, owner, 5_250_000n, at)).not.toThrow();
+  expect(() => checkSend(move("xyz", ""), "hyperliquid", owner, owner, 5_250_000n, at, "xyz")).not.toThrow();
+  for (const [typed, dex, reason] of [
+    [move("", ""), undefined, "destinationDex"],
+    [move("spot", "xyz"), undefined, "sourceDex"],
+    [move("xyz", ""), undefined, "sourceDex"],
+    [move("xyz", "xyz"), "xyz", "destinationDex"],
+  ] as const) expect(() => checkSend(typed, "hyperliquid", owner, owner, 5_250_000n, at, dex)).toThrow(reason);
+  // Another account never receives on trade.xyz, and only Hyperliquid has it.
+  expect(() => checkSend(sendAsset({ destinationDex: "xyz" }), "hyperliquid", owner, recipient, 5_250_000n, at)).toThrow("destinationDex");
+  expect(() => checkSend(asterSend(), "aster", owner, recipient, 5_000_000_000_000_000_000n, at, "xyz")).toThrow("venue");
 });

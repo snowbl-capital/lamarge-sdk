@@ -26,6 +26,8 @@ export interface RouteRequest {
   max_fee_bps?: number | undefined;
   /** How the first transfer pays; the second pays from the account on `via`. */
   funding: Funding;
+  /** `xyz`: from a standard Hyperliquid account, the first transfer's withdrawal leaves its trade.xyz balance. */
+  from_dex?: "xyz" | undefined;
   /** The route's first transfer, as `onIntent` last named it. */
   transfer_id?: string | undefined;
   /** Its second, as `onIntent` last named it: LaMarge no longer counts what that one holds as left to continue with. */
@@ -85,11 +87,11 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     ? await client.call("getTransfer", { path: { id: request.transfer_id }, signal })
     : await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
       max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, amount_in: request.then.amount_in, min_out: request.then.min_out,
-        ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps) }, signal, retry: true });
+        ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps), ...request.from_dex ? { from_dex: request.from_dex } : {} }, signal, retry: true });
   const then = first.then;
   // The first transfer is the one asked before anything of it is reserved or signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
   insist(then && first.from === request.from && first.to === request.via && first.from_chain_id === CHAINS[request.from]?.id && first.to_chain_id === CHAINS[request.via]?.id
-    && first.amount_in === request.amount_in && first.min_out === request.min_out && first.max_fee_bps === request.max_fee_bps && same(first.payer, signer.address) && same(first.recipient, hub.address)
+    && first.amount_in === request.amount_in && first.min_out === request.min_out && first.max_fee_bps === request.max_fee_bps && first.from_dex === request.from_dex && same(first.payer, signer.address) && same(first.recipient, hub.address)
     && then.to === request.to && same(then.recipient, request.recipient) && then.amount_in === request.then.amount_in && then.min_out === request.then.min_out
     && then.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
   // Signed at once where it can be: committed, it runs to its end with nothing left to sign. It is named before anything of it is reserved or signed.
@@ -110,7 +112,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     fills = (await client.call("getV1TakesId", { path: { id: grouped.first_take_id }, signal })).take.fills;
   } else {
     fills = await transfer(client, signer, { client_transfer_id: first.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
+      recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps, from_dex: request.from_dex }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
     stage("relaying");
   }
   const take = fills[0]?.take_id ?? first.take_id;

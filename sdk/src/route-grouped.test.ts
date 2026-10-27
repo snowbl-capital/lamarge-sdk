@@ -3,6 +3,7 @@ import { createClient } from "./client.ts";
 import { ASTER_TRANSFER_CHAIN_ID, asterRequest } from "./protocol/protocol.ts";
 import { record, required } from "./protocol/validation.ts";
 import { route, type RouteRequest } from "./route.ts";
+import { RouteAbandoned } from "./index.ts";
 import { TransferPending } from "./transfer.ts";
 
 const owner = `0x${"11".repeat(20)}` as const;
@@ -119,11 +120,11 @@ test("without grouped, a route is signed leg by leg", async () => {
   expect(calls.some(call => call.includes("/grouped"))).toBe(false);
 });
 
-test("an Aster first take past its nonce bound, once its route went leg by leg, is replaced rather than signed", async () => {
+test("an unavailable grouped Aster route never replaces its take or starts a sequential transfer", async () => {
   const { client, calls, bodies } = api({ from: "aster" });
-  await expect(route(client, signer, { ...request, from: "aster" }, { ...fast, grouped: true })).rejects.toThrow();
-  expect(calls).toContain("DELETE /v1/takes/take-first");
-  expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => body.client_transfer_id)).toEqual(["retry:transfer-first"]);
+  await expect(route(client, signer, { ...request, from: "aster" }, { ...fast, grouped: true })).rejects.toBeInstanceOf(RouteAbandoned);
+  expect(calls).toEqual(["GET /v1/transfers/transfer-first", "POST /v1/transfers/transfer-first/grouped"]);
+  expect(bodies.some(body => body.name === "POST /v1/transfers")).toBe(false);
 });
 
 /** A closed route whose second take never paid, its first take's 10 kept in escrow, Hyperliquid unread. */
@@ -150,4 +151,19 @@ test("a first take delivered partly into the venue continues from the venue and 
   const { client, bodies } = api({ state: "committed", paid: false, left: "10000000", mixed: true, escrow: "5000000" });
   await expect(route(client, signer, request, { ...fast, arrivalWaitMs: 1_000, grouped: true })).rejects.toThrow("STATE_CONFLICT");
   expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => [body.client_transfer_id, body.amount_in])).toEqual([["renew:transfer-second", "10000000"]]);
+});
+
+test("resuming an aborted grouped route stops before any reservation or signature", async () => {
+  const { client, calls } = api({ state: "aborted" });
+  await expect(route(client, signer, request, { ...fast, grouped: true })).rejects.toMatchObject({ name: "RouteAbandoned", reason: "aborted", transferId: "transfer-first" });
+  expect(calls).toEqual(["GET /v1/transfers/transfer-first"]);
+});
+
+test("the caller can explicitly retry an unavailable route leg by leg", async () => {
+  const { client, calls, bodies } = api({ from: "aster" });
+  const aster = { ...request, from: "aster" };
+  await expect(route(client, signer, aster, { ...fast, grouped: true })).rejects.toBeInstanceOf(RouteAbandoned);
+  await expect(route(client, signer, aster, { ...fast, grouped: false })).rejects.toThrow("STATE_CONFLICT");
+  expect(calls).toContain("DELETE /v1/takes/take-first");
+  expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => body.client_transfer_id)).toEqual(["retry:transfer-first"]);
 });

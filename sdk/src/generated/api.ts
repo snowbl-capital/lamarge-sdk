@@ -949,7 +949,7 @@ export interface paths {
         put?: never;
         /**
          * Prepare a grouped route
-         * @description For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. Idempotent while prepared. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); sign it leg by leg. With `reason` `grouped_route`: another request is preparing this route.
+         * @description For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. For Aster, refreshes the still-live unsigned first take with about 90 seconds until `commit_by` and a nonce 20 seconds later; sign the returned requests. Requires a route payment window of at least 150 seconds. Idempotent while prepared: another preparation changes neither the requests nor the deadline. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); the caller decides whether to try leg by leg. With `reason` `grouped_route`: another request is preparing this route.
          */
         post: operations["prepareGroupedRoute"];
         /**
@@ -993,7 +993,7 @@ export interface paths {
         put?: never;
         /**
          * Take at market
-         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). `STATE_CONFLICT` while another financial preparation is open on `from`; `FILL_IN_PROGRESS` while another take is unpaid. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
+         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
          */
         post: operations["postTake"];
         delete?: never;
@@ -1776,10 +1776,12 @@ export interface components {
         HeldIn: "escrow" | "venue" | (string & {});
         /** @description The account's funds on the venue, in its wallets and in the escrow, from the same snapshot as `portfolio`, each counted once, in the venue token's base units. */
         Holdings: {
-            /** @description Movable or committable now: the venue's withdrawable margin less what a pool still owes, the wallets, and the escrow's available balance. */
+            /** @description Movable or committable now: the venue's withdrawable margin less what a pool still owes, the wallets, and the escrow's available balance, less `committed`. */
             available: string;
-            /** @description `total` − `available`: escrow orders, fills in progress, deposits awaiting the sweep, what a pool owes and the margin positions use. */
+            /** @description `total` − `available`: escrow orders, fills in progress, `committed`, deposits awaiting the sweep, what a pool owes and the margin positions use. */
             locked: string;
+            /** @description What the account's takes not paid yet will spend of its escrow chain's wallet and available balance: held for them, in `locked`, counted once in `total`; 0 on Lighter and Aster, which pay one take at a time. */
+            committed: components["schemas"]["Amount"];
             /** @description Unlocked escrow of the account's orders this deployment operates, Lighter and Aster pools excluded. */
             orders: components["schemas"]["Amount"];
             /** @description A Lighter or Aster pool's inventory: part of `equity`, never added to it. */
@@ -2215,7 +2217,7 @@ export interface components {
             /** @description The grouped route this transfer belongs to, as its first or second. */
             grouped: components["schemas"]["GroupedRoute"] | null;
         };
-        /** @description A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the first goes on leg by leg. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`. */
+        /** @description A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the caller decides whether to sign the first alone. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`. */
         GroupedRoute: {
             /** @enum {string} */
             state: "prepared" | "committed" | "aborted" | "closed" | (string & {});
@@ -2475,6 +2477,8 @@ export interface components {
             pay_window_seconds: number;
             /** @description A grouped route's second take, and a take signed at once with its withdrawal. */
             route_pay_window_seconds: number;
+            /** @description Takes one taker may hold awaiting payment at once. */
+            max_unpaid_takes: number;
             /** @description Most one fill takes from one level, in millionths of a token (books' `max_fill`, in base units). */
             fill_max: components["schemas"]["Amount"];
         };
@@ -5317,7 +5321,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
-            /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT` (reason `no_deposit`: the Aster account it delivers to never received a deposit; reason `withdrawal_submitted`: the transfer's prepared withdrawal was submitted meanwhile, take again once it arrived). `FILL_IN_PROGRESS` with `reason` `grouped_route`: an open grouped route holds it until it ends. */
+            /** @description `PREFUNDING_REQUIRED`, `STALE_QUOTE`, `INSUFFICIENT_LIQUIDITY`, `SLIPPAGE`, `FILL_IN_PROGRESS` or `STATE_CONFLICT` (reason `no_deposit`: the Aster account it delivers to never received a deposit; reason `withdrawal_submitted`: the transfer's prepared withdrawal was submitted meanwhile, take again once it arrived). `FILL_IN_PROGRESS` with `reason` `too_many`: `limits.max_unpaid_takes` takes already await payment; `venue_payment`: the Lighter or Aster account pays another take, one at a time, retry after `Retry-After`; `withdrawal_unsigned`: another transfer signed at once from this venue awaits its signatures, retry after `Retry-After`. `STATE_CONFLICT` with `reason` `funds_changed`: another payment took the funds this take was sized on, retry after `Retry-After`. */
             409: {
                 headers: {
                     [name: string]: unknown;

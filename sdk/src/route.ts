@@ -6,7 +6,7 @@ import { MAX_PARTS } from "./book.ts";
 import type { Signer } from "./signer.ts";
 import type { Fill } from "./take.ts";
 import { consent, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
-import { signRoute } from "./grouped.ts";
+import { RouteAbandoned, signRoute } from "./grouped.ts";
 
 /** A route's two transfers: the first from `from` to `via`, the second from `via` to `to`, as `GET /v1/routes` plans them. */
 export interface RouteRequest {
@@ -41,7 +41,7 @@ export type RouteOptions = Omit<TransferOptions, "onStage"> & {
   onStage?: ((stage: RouteStage) => void) | undefined;
   /** The account linked on `via`, when another than the signer: it receives the first take and pays the second. */
   viaSigner?: Signer | undefined;
-  /** True signs the route at once where LaMarge can: `beforeSigning` then sees the whole route before its requests. Leg by leg otherwise. */
+  /** True requires the route to be signed at once: `beforeSigning` sees the whole route. An unavailable or abandoned attempt throws `RouteAbandoned`; retrying leg by leg is the caller's choice. */
   grouped?: boolean | undefined;
 };
 
@@ -74,7 +74,7 @@ async function lastContinuation(client: Client, first: TransferIntent, signal?: 
  * venue steps, for the route's least in proportion, once a read of `via` made after the delivery
  * shows it there. The takes are independent: what the second can't take waits on `via`. With
  * `grouped`, a route whose first take pays inside a venue through an escrow venue is signed at once
- * where LaMarge can: its second take is then priced and signed before the first delivers, and paid
+ * or throws `RouteAbandoned`: its second take is then priced and signed before the first delivers, and paid
  * once its funds arrive. Running the same request again, with `transfer_id`, resumes it, the
  * second found again by its client id.
  */
@@ -111,6 +111,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     }
     fills = (await client.call("getV1TakesId", { path: { id: grouped.first_take_id }, signal })).take.fills;
   } else {
+    if (options.grouped === true) throw new RouteAbandoned(first.id, first.grouped?.state === "aborted" || first.cancelled_at ? "aborted" : "unavailable", first.grouped?.commit_by ?? null, now());
     fills = await transfer(client, signer, { client_transfer_id: first.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
       recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps, from_dex: request.from_dex }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
     stage("relaying");

@@ -21,41 +21,54 @@ export interface GroupedOptions {
   lock?: TakeOptions["lock"];
 }
 
-/** The route goes leg by leg: LaMarge does not sign it at once now, it was aborted, or the server predates routes signed at once. */
-const sequential = (error: unknown) => error instanceof LaMargeError
+/** Refusals that confirm no grouped commit was accepted. */
+const refused = (error: unknown): error is LaMargeError => error instanceof LaMargeError
   && (error.reason === "grouped_unavailable" || error.code === "TAKE_EXPIRED" || error.status === 404 && error.code === "NOT_FOUND");
+
+/** A requested grouped route could not commit; the caller decides whether to start another attempt. */
+export class RouteAbandoned extends Error {
+  override readonly name = "RouteAbandoned";
+  readonly lateByMs: number | null;
+  constructor(readonly transferId: string, readonly reason: "unavailable" | "expired" | "aborted", readonly commitBy: string | null, now = Date.now(), cause?: unknown) {
+    super(`Grouped route ${reason}. Review the route before trying again.`, { cause });
+    this.lateByMs = commitBy === null ? null : Math.max(0, now - Date.parse(commitBy));
+  }
+}
 
 /**
  * Signs every request of a route at once: reserves the first take, has the server reserve the
  * second, checks both against the route and the linked accounts, signs the first take's payment,
  * the withdrawal from `via` and the second take's payment back to back and commits them together,
- * inside `lock` throughout. Null when the route goes leg by leg, nothing of its second leg sent:
- * the first take stays reserved for `transfer` to sign alone. `signer` pays on `first.from`, `hub`
- * on `via`.
+ * inside `lock` throughout. A refused or expired attempt throws `RouteAbandoned`; nothing is
+ * signed again automatically. `signer` pays on `first.from`, `hub` on `via`.
  */
-export async function signRoute(client: Client, signer: Signer, hub: Signer, first: TransferIntent, options: GroupedOptions = {}): Promise<GroupedRoute | null> {
+export async function signRoute(client: Client, signer: Signer, hub: Signer, first: TransferIntent, options: GroupedOptions = {}): Promise<GroupedRoute> {
   const { lock, ...unlocked } = options;
   if (lock) return lock(() => signRoute(client, signer, hub, first, unlocked));
   const { store = memoryStore(), signal, now = Date.now } = options;
   insist(first.then && groupable(first.from, first.to) && same(first.payer, signer.address) && same(first.recipient, hub.address), "This route is not signed at once");
   // The first take reserved again returns the same one: its client id is the transfer's.
-  if (!first.take_id) await client.call("postTake", { body: takeInput(first), signal });
+  if (!first.take_id) await client.call("postTake", { body: takeInput(first), signal, retry: true });
+  const key = `route:${first.id}`;
   let preparation: GroupedPreparation;
   try {
     preparation = await client.call("prepareGroupedRoute", { path: { id: first.id }, signal });
   } catch (error) {
-    if (sequential(error)) return null;
+    if (refused(error)) {
+      await store.delete(key);
+      throw new RouteAbandoned(first.id, error.code === "TAKE_EXPIRED" ? "expired" : "unavailable", first.grouped?.commit_by ?? null, now(), error);
+    }
     throw error;
   }
   const { route } = preparation;
-  const key = `route:${first.id}`;
   if (route.state !== "prepared") {
     await store.delete(key);
-    return route.state === "aborted" ? null : route;
+    if (route.state === "aborted") throw new RouteAbandoned(first.id, "aborted", route.commit_by, now());
+    return route;
   }
   // Ends the route before its commit, its second take released, even once the flow itself was aborted.
   const abandon = async () => {
-    await client.call("abortGroupedRoute", { path: { id: first.id } }).catch(() => null);
+    await client.call("abortGroupedRoute", { path: { id: first.id } });
     await store.delete(key);
   };
   let signed: SignedItem[] | null;
@@ -101,20 +114,25 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
       }
     }
   } catch (error) {
-    // Refused or unsigned before the commit: the route ends there.
-    await abandon();
+    // Keep stored signatures if the abort cannot be confirmed; preserve the signing error.
+    await abandon().catch(() => null);
     throw error;
   }
-  // Too little time left to sign it all: the route goes leg by leg.
-  if (!signed) { await abandon(); return null; }
+  if (!signed || now() >= Date.parse(route.commit_by)) {
+    await abandon();
+    throw new RouteAbandoned(first.id, "expired", route.commit_by, now());
+  }
   try {
     const committed = await client.call("commitGroupedRoute", { path: { id: first.id }, body: { signatures: signed }, signal, retry: true });
     insist(committed.state === "committed" || committed.state === "closed", "Unreadable answer to the route's commit");
     await store.delete(key);
     return committed;
   } catch (error) {
-    // Refused, nothing of it accepted: aborted or late, it goes leg by leg; a bad signature is never sent again. Any other outcome is read again on the next run.
-    if (sequential(error)) { await abandon(); return null; }
+    // A confirmed refusal ends this attempt; an uncertain outcome is recovered on the next run.
+    if (refused(error)) {
+      await abandon();
+      throw new RouteAbandoned(first.id, error.code === "TAKE_EXPIRED" ? "expired" : "aborted", route.commit_by, now(), error);
+    }
     if (error instanceof LaMargeError && error.status === 400) await abandon();
     throw error;
   }

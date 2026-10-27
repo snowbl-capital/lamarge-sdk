@@ -102,7 +102,8 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   insist(payer && recipient, "Link both venues first");
   insist(options.recipient === undefined || same(recipient, options.recipient), "Linked account changed; review the transfer again");
   insist(same(payer.address, signer.address), "The signer is not the account paying on this venue");
-  const prepared = options.prepared ?? await client.call("postTake", { body: input, signal });
+  // Retried as its client id makes it idempotent: a payment it waits for is soon signed or settled.
+  const prepared = options.prepared ?? await client.call("postTake", { body: input, signal, retry: true });
   const { take: reserved, to_sign } = prepared;
   if (!to_sign.length || input.transfer_intent_id && reserved.fills.some(fill => fill.state !== "RESERVED")) return reserved.fills;
   const key = takeKey(reserved.id);

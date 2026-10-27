@@ -15,3 +15,4 @@ export { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSour
 export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type Order, type QuoteSigner } from "./maker.ts";
 export { checkEscrowLocks, refundPayment, withdraw, type ChainReaders, type RefundFill, type Withdrawal, type WithdrawalRequest } from "./withdraw.ts";
 export { route, type RouteOptions, type RouteRequest, type RouteStage } from "./route.ts";
+export { RouteAbandoned } from "./grouped.ts";

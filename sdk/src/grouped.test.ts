@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import { createClient } from "./client.ts";
-import { signRoute } from "./grouped.ts";
+import { RouteAbandoned, signRoute } from "./grouped.ts";
 import { fillMemo, LIGHTER_API } from "./protocol/lighter.ts";
 import { ASTER_TRANSFER_CHAIN_ID, asterRequest, CHAINS, EIP712Domain, ESCROW, ROUTE_PAY_WINDOW_SECONDS, schemas } from "./protocol/protocol.ts";
 import { checkRouteIntent, signableUntil } from "./protocol/intents.ts";
@@ -47,15 +47,15 @@ const second = { ...first, id: "transfer-second", client_transfer_id: "grouped:t
   amount_in: "10000000", min_out: "9000000", previous_transfer_id: "transfer-first", take_id: "take-second", then: null, withdrawal_preparation: withdrawal };
 const route = (state = "prepared", commitIn = 40) => ({ state, second_transfer_id: "transfer-second", first_take_id: "take-first", second_take_id: "take-second", commit_by: iso(commitIn) });
 
-function api(answers: { prepare?: () => unknown; commit?: () => unknown; second?: Record<string, unknown> } = {}) {
+function api(answers: { prepare?: () => unknown; commit?: () => unknown; abort?: () => unknown; second?: Record<string, unknown>; from?: string } = {}) {
   const calls: string[] = [];
   const bodies: ({ name: string } & Record<string, unknown>)[] = [];
   const routes: Record<string, () => unknown> = {
     "POST /v1/transfers/transfer-first/grouped": answers.prepare ?? (() => ({ route: route(), first: lighterTake(), second: payTake() })),
     "GET /v1/transfers/transfer-second": () => ({ ...second, ...answers.second }),
-    "GET /v1/balances": () => [{ venue: "lighter", address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null }, { venue: "polymarket", address: owner }],
+    "GET /v1/balances": () => [{ venue: answers.from ?? "lighter", address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null }, { venue: "polymarket", address: owner }],
     "POST /v1/transfers/transfer-first/grouped/signatures": answers.commit ?? (() => route("committed")),
-    "DELETE /v1/transfers/transfer-first/grouped": () => new Response(null, { status: 204 }),
+    "DELETE /v1/transfers/transfer-first/grouped": answers.abort ?? (() => new Response(null, { status: 204 })),
   };
   const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init), url = new URL(request.url);
@@ -98,11 +98,11 @@ test("a route signed at once signs its three requests back to back, checked as a
   expect(calls).not.toContain(abort);
 });
 
-test("a route LaMarge does not sign at once goes leg by leg with nothing signed", async () => {
+test("an unavailable grouped route throws with nothing signed", async () => {
   for (const answer of [error(409, "STATE_CONFLICT", "grouped_unavailable"), error(404, "NOT_FOUND")]) {
     const { client, calls } = api({ prepare: () => answer.clone() });
     const { signer, signed } = wallet();
-    expect(await signRoute(client, signer, signer, first)).toBeNull();
+    await expect(signRoute(client, signer, signer, first)).rejects.toBeInstanceOf(RouteAbandoned);
     expect(signed).toEqual([]);
     expect(calls).not.toContain(abort);
   }
@@ -125,19 +125,21 @@ test("a signer other than the route's payer signs nothing", async () => {
   expect(signed).toEqual([]);
 });
 
-test("too little time left to sign the route aborts it and goes leg by leg, nothing signed", async () => {
+test("too little time left aborts the route and throws, nothing signed", async () => {
   const { client, calls } = api({ prepare: () => ({ route: route("prepared", 3), first: lighterTake(), second: payTake() }) });
   const { signer, signed } = wallet();
-  expect(await signRoute(client, signer, signer, first)).toBeNull();
+  await expect(signRoute(client, signer, signer, first)).rejects.toBeInstanceOf(RouteAbandoned);
   expect(signed).toEqual([]);
   expect(calls).toContain(abort);
 });
 
-test("a commit refused after commit_by aborts the route and leaves the first take to sign alone", async () => {
+test("a refused commit aborts the route, forgets signatures and exposes its deadline and cause", async () => {
   const { client, calls } = api({ commit: () => error(409, "TAKE_EXPIRED") });
   const { signer } = wallet();
   const store = memoryStore();
-  expect(await signRoute(client, signer, signer, first, { store })).toBeNull();
+  await expect(signRoute(client, signer, signer, first, { store, now: () => now * 1000 })).rejects.toMatchObject({
+    name: "RouteAbandoned", transferId: first.id, reason: "expired", commitBy: iso(40), lateByMs: 0, cause: { code: "TAKE_EXPIRED" },
+  });
   expect(calls).toContain(abort);
   expect(await store.load("route:transfer-first")).toBeUndefined();
 });
@@ -191,4 +193,62 @@ test("an Aster take can be signed only while its nonce stays far enough ahead, s
   const aster = { kind: "aster_transfer", signer: owner, typed_data: asterRequest(msg, ASTER_TRANSFER_CHAIN_ID) };
   expect(signableUntil({ take: { fills: [{ pay_by: iso(45) }] }, to_sign: [] })).toBe(now + 45);
   expect(signableUntil({ take: { fills: [{ pay_by: iso(45) }] }, to_sign: [aster] })).toBe(now + 35);
+});
+
+const asterTake = () => ({ take: { id: "take-first", fills: [fill({ id: firstFill, take_id: "take-first", from_venue: "aster", to_venue: "hyperliquid",
+  amount_in: "10006500000000000000", amount_out: "10000000", pay_by: iso(90) })] }, to_sign: [{ kind: "aster_transfer", signer: owner, fill_id: firstFill,
+  typed_data: asterRequest(`asset=USDT&amount=10.0065&toAddress=${maker}&clientTranId=${firstFill.replaceAll("-", "")}&nonce=${BigInt(now + 110) * 1_000_000n}&user=${owner}`, ASTER_TRANSFER_CHAIN_ID) }] });
+
+for (const seconds of [38, 89, 90, 94]) test(`an Aster route whose browser signatures take ${seconds}s respects the commit deadline`, async () => {
+  const { client, calls, bodies } = api({ from: "aster", second: { withdrawal_preparation: null },
+    prepare: () => ({ route: route("prepared", 90), first: asterTake(), second: payTake(150) }) });
+  const { signer, signed } = wallet();
+  let clock = now * 1000;
+  const slow = { ...signer, signTypedData: async (request: Parameters<typeof signer.signTypedData>[0]) => {
+    const signature = await signer.signTypedData(request);
+    clock += seconds * 500;
+    return signature;
+  } };
+  const store = memoryStore();
+  const signing = signRoute(client, slow, slow, { ...first, from: "aster", from_chain_id: 56, amount_in: "10006500000000000000" }, { store, now: () => clock });
+  if (seconds < 90) {
+    expect((await signing).state).toBe("committed");
+    expect(calls).not.toContain(abort);
+    expect(bodies.filter(body => body.name.endsWith("/signatures"))).toHaveLength(1);
+  } else {
+    await expect(signing).rejects.toMatchObject({ name: "RouteAbandoned", reason: "expired", commitBy: iso(90), lateByMs: (seconds - 90) * 1000 });
+    expect(calls).toContain(abort);
+    expect(bodies.some(body => body.name.endsWith("/signatures"))).toBe(false);
+  }
+  expect(signed).toEqual(["Message", "PayTake"]);
+  expect(await store.load("route:transfer-first")).toBeUndefined();
+});
+
+test("an uncertain commit keeps its signatures and resumes without another wallet request", async () => {
+  let attempts = 0;
+  const { client, calls } = api({ commit: () => ++attempts <= 3 ? error(503, "OPERATOR_UNAVAILABLE") : route("committed") });
+  const { signer, signed } = wallet();
+  const store = memoryStore();
+  await expect(signRoute(client, signer, signer, first, { store })).rejects.toMatchObject({ code: "OPERATOR_UNAVAILABLE" });
+  expect(await store.load("route:transfer-first")).toBeDefined();
+  expect(calls).not.toContain(abort);
+  attempts = 3;
+  await signRoute(client, signer, signer, first, { store });
+  expect(signed).toEqual(["message", "HyperliquidTransaction:SendAsset", "PayTake"]);
+});
+
+test("an unconfirmed abort preserves signatures and does not report the route abandoned", async () => {
+  let expired = false;
+  const { client } = api({
+    prepare: () => ({ route: route("prepared", expired ? -1 : 40), first: lighterTake(), second: payTake() }),
+    commit: () => error(503, "OPERATOR_UNAVAILABLE"), abort: () => error(409, "STATE_CONFLICT", "grouped_route"),
+  });
+  const { signer, signed } = wallet();
+  const store = memoryStore();
+  await expect(signRoute(client, signer, signer, first, { store })).rejects.toMatchObject({ code: "OPERATOR_UNAVAILABLE" });
+  const kept = await store.load("route:transfer-first");
+  expired = true;
+  await expect(signRoute(client, signer, signer, first, { store })).rejects.toMatchObject({ code: "STATE_CONFLICT", reason: "grouped_route" });
+  expect(await store.load("route:transfer-first")).toEqual(kept);
+  expect(signed).toEqual(["message", "HyperliquidTransaction:SendAsset", "PayTake"]);
 });

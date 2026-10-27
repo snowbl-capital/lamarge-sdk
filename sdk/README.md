@@ -25,7 +25,7 @@ const balances = await client.call("getBalances");
 | `linkAccount`, `setUpVenue` | Links an account, by the link message when it is not the master's; runs its setup steps (permit, Aster agent, Lighter key) |
 | `transfer` | Funding, the take, its payment; recovery by client id; `TransferPending` when funds or a permit have not arrived yet |
 | `take` | Reserves quotes, checks and signs the payment (escrow, Aster or Lighter), submits it |
-| `route` | A route of two takes through an intermediate venue, as `GET /v1/routes` plans it: two transfers, the second continuing what the first delivered; with `grouped`, signed at once where LaMarge can (`checkRouteIntent`) |
+| `route` | A route of two takes through an intermediate venue, as `GET /v1/routes` plans it: two transfers, the second continuing what the first delivered; with `grouped: true`, signed at once or rejected with `RouteAbandoned` (`checkRouteIntent`) |
 | `changes` | Snapshot, then every page of events over the WebSocket, HTTP replay between connections, `{ resync }` when the journal moved on |
 | `Maker`, `Quoter` | Capital with the financial key; quote lines, cancellation and delivery reports with a scoped credential |
 

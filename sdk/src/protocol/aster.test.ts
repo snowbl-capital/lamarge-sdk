@@ -118,6 +118,13 @@ test("a take paid from Aster signs one transfer of its amount to the maker, unde
     [item({ clientTranId: "0".repeat(32) }), differs], [item({ nonce: String(BigInt(now + 10) * 1_000_000n) }), nonceDiffers], [item({ nonce: String(BigInt(now + 80) * 1_000_000n) }), nonceDiffers],
     [item({}, "&signer=" + owner), unexpected], [item({}, "", ASTER_CHAIN_ID), "Unexpected Aster request"], [{ ...item(), kind: "lighter_transfer" }, one], [{ ...item(), signer: agent }, one], [{ ...item(), fill_id: "other" }, "The signing request differs from your instructions"],
   ] as const) expect(() => checkAsterTakeIntent([bad], [fill], take, owner, owner, now)).toThrow(reason);
+  const grouped = { ...fill, pay_by: new Date((now + 90) * 1000).toISOString() };
+  const later = (seconds: number) => item({ nonce: String(BigInt(now + seconds) * 1_000_000n) });
+  expect(() => checkAsterTakeIntent([later(110)], [grouped], take, owner, owner, now)).not.toThrow();
+  expect(() => checkAsterTakeIntent([later(111)], [grouped], take, owner, owner, now)).toThrow(nonceDiffers);
+  expect(() => checkAsterTakeIntent([later(110)], [fill], take, owner, owner, now)).toThrow(nonceDiffers);
+  expect(() => checkAsterTakeIntent([later(110)], [grouped], take, owner, owner, now + 89)).not.toThrow();
+  expect(() => checkAsterTakeIntent([later(110)], [grouped], take, owner, owner, now + 90)).toThrow();
   expect(() => checkAsterTakeIntent([item(), item()], [fill], take, owner, owner, now)).toThrow("one transfer");
   expect(() => checkAsterTakeIntent([item()], [fill, { ...fill, id: "other" }], take, owner, owner, now)).toThrow("one transfer");
   expect(() => checkAsterTakeIntent([item()], [fill], take, owner, owner, now + 60)).toThrow();

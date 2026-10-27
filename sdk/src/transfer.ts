@@ -357,7 +357,7 @@ async function pay(client: Client, signer: Signer, request: TransferRequest, opt
     const run = async () => {
       let prepared: Answer<"postTake">;
       try {
-        prepared = await client.call("postTake", { body: takeInput(intent), signal });
+        prepared = await client.call("postTake", { body: takeInput(intent), signal, retry: true });
       } catch (error) {
         // Submitted meanwhile by another run: followed as any other withdrawal, never sent again.
         if (error instanceof LaMargeError && error.reason === "withdrawal_submitted" && await readIntent(false).then(() => intent.withdrawal, () => null)) return null;

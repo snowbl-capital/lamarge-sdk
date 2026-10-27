@@ -143,13 +143,15 @@ export function checkLighterTakeIntent(items: TakeItems, fills: TakeFill[], inpu
 }
 /** A take paid from Aster: the taker's wallet signs a transfer of the fill's amount to the maker's
  * account under the fill id, with a nonce far enough ahead for LaMarge to relay it and within
- * Aster's nonce window. */
+ * Aster's nonce window when relayed. */
 export function checkAsterTakeIntent(items: TakeItems, fills: TakeFill[], input: TakeIntent, payer: string, recipient: string, now = Date.now() / 1000): void {
   const { terms, fill } = checkVenueTake(items, "aster_transfer", fills, input, payer, recipient, now);
   insist("domain" in terms, "Unexpected Aster transfer");
   const transfer = asterTransfer(terms);
   checkAsterTransfer(transfer, fill);
-  insist(transfer.nonce >= now + ASTER_NONCE_AHEAD && transfer.nonce <= now + 70, "The Aster transfer's nonce differs from the take");
+  // A grouped preparation extends pay_by and its nonce together; an aborted route keeps that take.
+  const latestNonce = Math.max(now + 70, Date.parse(fill.pay_by) / 1000 + ASTER_NONCE_AHEAD);
+  insist(transfer.nonce >= now + ASTER_NONCE_AHEAD && transfer.nonce <= latestNonce, "The Aster transfer's nonce differs from the take");
 }
 /** An Aster transfer is signed while its nonce is at least this many seconds ahead. */
 const ASTER_NONCE_AHEAD = 20;

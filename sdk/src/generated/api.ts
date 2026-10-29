@@ -722,7 +722,7 @@ export interface paths {
         put?: never;
         /**
          * Request a close
-         * @description Closes 1 to 50 of the user's orders (repeated ids count once) into their owners' venue margin. Empty orders close at once and `closing` ones are skipped; the rest need one `CloseOrders`, in the Hyperliquid escrow's domain, that the master signs and [submits](/api-reference/closes/submit-signature) within an hour. `STATE_CONFLICT` while an order is `preparing`, `moving` or `funding`.
+         * @description Closes 1 to 50 of the user's orders (repeated ids count once) into their owners' venue margin. Empty orders close at once and `closing` ones are skipped; the rest need one `CloseOrders`, in the Hyperliquid escrow's domain, that the master signs and [submits](/api-reference/closes/submit-signature) within an hour. `STATE_CONFLICT` while an order is `preparing`, `moving` or `funding`. To release part of a pool and keep it quoting, [withdraw](/api-reference/escrow/prepare-withdrawal).
          */
         post: operations["postCloses"];
         delete?: never;
@@ -760,7 +760,7 @@ export interface paths {
         };
         /**
          * List my funds in escrow
-         * @description Orders with unlocked funds that your linked addresses own in each venue's current escrow, under any operator; close `managed` ones with `POST /v1/closes`, any by signature ([releasing capital](/how-it-works#releasing-capital)). Per address, at most 50 unmanaged orders are read: the available balance (order ID zero), then the latest funded.
+         * @description Orders with unlocked funds that your linked addresses own in each venue's current escrow, under any operator; close `managed` ones with `POST /v1/closes`, withdraw any by signature ([releasing capital](/how-it-works#releasing-capital)). Per address, at most 50 unmanaged orders are read: the available balance (order ID zero), then the latest funded.
          */
         get: operations["getEscrow"];
         put?: never;
@@ -782,7 +782,8 @@ export interface paths {
         put?: never;
         /**
          * Prepare a close by signature
-         * @description The `CloseOffer` your linked address signs to release an order's unlocked funds into your margin, or with `to_margin: false` into your wallet: escrow domain, random nonce, valid one hour. `STATE_CONFLICT` while a close of the order is pending, while a reserved fill or capital operation on a recorded order is pending, or for an unrecorded order under 1 token (the available balance excepted). `VALIDATION_ERROR` for an available-balance release to margin below `release_minimum`.
+         * @deprecated
+         * @description The `CloseOffer` your linked address signs to release an order's unlocked funds into your margin, or with `to_margin: false` into your wallet: escrow domain, random nonce, valid one hour. `STATE_CONFLICT` while a close of the order is pending, while a reserved fill or capital operation on a recorded order is pending, or for an unrecorded order under 1 token (the available balance excepted). `VALIDATION_ERROR` for an available-balance release to margin below `release_minimum`. Use [`POST /v1/escrow/withdraw/prepare`](/api-reference/escrow/prepare-withdrawal) instead, with the order's `available`.
          */
         post: operations["postEscrowClosePrepare"];
         delete?: never;
@@ -802,9 +803,50 @@ export interface paths {
         put?: never;
         /**
          * Close by signature
-         * @description Relays the prepared terms, signed by the linked address, as `closeOfferBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. A recorded order is `closing`, off the books, until the transaction is final or a minute past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, while a close of the order is pending, at 10 pending closes per owner and chain, or for a nonce reused with other terms; the same terms return the same close.
+         * @deprecated
+         * @description Relays the prepared terms, signed by the linked address, as `closeOfferBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. A recorded order is `closing`, off the books, until the transaction is final or a minute past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, while a close of the order is pending, at 10 pending closes per owner and chain, or for a nonce reused with other terms; the same terms return the same close. Use [`POST /v1/escrow/withdraw`](/api-reference/escrow/withdraw) instead.
          */
         post: operations["postEscrowClose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/escrow/withdraw/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a withdrawal
+         * @description The `Withdrawal` your linked address signs to release `amount` of an order's unlocked funds into your margin, or with `to_margin: false` into your wallet: escrow domain, random nonce, valid one hour. A recorded order releases only what its reserved fills and pending withdrawals leave (`available_to_quote`) and keeps quoting the rest. `VALIDATION_ERROR` above the order's funds, under 1 token unless all of them, or for an available-balance release to margin below `release_minimum`. `STATE_CONFLICT` while a release of the order or a capital operation on it is pending, above what is free of reserved fills, or for an unrecorded order under 1 token (the available balance excepted).
+         */
+        post: operations["postEscrowWithdrawPrepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/escrow/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw
+         * @description Relays the prepared terms, signed by the linked address, as `withdrawBySig`; LaMarge pays gas. The terms are rechecked as at preparation (a stale `dex` is `VALIDATION_ERROR`). A refused venue deposit stays in your available escrow balance. The order quotes without its `amount` until the withdrawal lands, reverts, or the finalized chain is past its deadline; after a revert or expiry, sign again. `STATE_CONFLICT` during a financial operation on the venue, while a release of the order is pending, at 10 pending releases per owner and chain, or for a nonce reused with other terms; the same terms return the same withdrawal.
+         */
+        post: operations["postEscrowWithdraw"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1884,7 +1926,7 @@ export interface components {
             managed: boolean;
             /** @description Your own order operated by this deployment, already in `/v1/balances` `holdings.orders`. Order zero is `escrow_balance` there; other orders add to it. */
             in_balances: boolean;
-            /** @description A close by signature is pending. */
+            /** @description A withdrawal or close by signature is pending. */
             closing: boolean;
         };
         /** @description One item to sign with `eth_signTypedData_v4`. */
@@ -1893,7 +1935,7 @@ export interface components {
              * @description Signer: the quote signer for `quote_set`, the master for `close_orders`, else the linked owner.
              * @enum {string}
              */
-            kind: "margin_move" | "fund" | "quote_set" | "close_orders" | "pay_take" | "close_offer" | "refund_payment" | (string & {});
+            kind: "margin_move" | "fund" | "quote_set" | "close_orders" | "pay_take" | "close_offer" | "escrow_withdrawal" | "refund_payment" | (string & {});
             signer: components["schemas"]["Address"];
             /**
              * Format: uuid
@@ -2029,7 +2071,7 @@ export interface components {
             /** @description Inside a venue, the last-read per-delivery fee, held back per reserved fill and for the next; `0` for an escrow order. */
             delivery_fee: components["schemas"]["Amount"];
             revision: components["schemas"]["Cursor"];
-            /** @description `held` less unlocked admitted fills, their delivery fees and the next fill's; ignores quotes. Shared across receiving venues. */
+            /** @description `held` less unlocked admitted fills, their delivery fees and the next fill's, and your withdrawals on their way; ignores quotes. Shared across receiving venues. */
             available_to_quote: components["schemas"]["Amount"];
             /** @description Settled fills' payments per paying venue, in its base units. */
             received_by_venue: {
@@ -4825,6 +4867,120 @@ export interface operations {
             503: components["responses"]["OperatorUnavailable"];
         };
     };
+    postEscrowWithdrawPrepare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    order_id: components["schemas"]["Bytes32"];
+                    amount: components["schemas"]["Amount"];
+                    /** @description False withdraws to the owner wallet. */
+                    to_margin: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The terms for `POST /v1/escrow/withdraw` and the item to sign. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        venue: components["schemas"]["VenueId"];
+                        order_id: components["schemas"]["Bytes32"];
+                        amount: components["schemas"]["Amount"];
+                        to_margin: boolean;
+                        /** @description Hyperliquid destination: `0` perps, `4294967295` spot; `0` elsewhere. */
+                        dex: number;
+                        /** @description Decimal integer. */
+                        nonce: string;
+                        /** @description Unix seconds, one hour ahead. */
+                        deadline: number;
+                        to_sign: components["schemas"]["ToSign"][];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: unknown or malformed order, or no unlocked funds. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
+    postEscrowWithdraw: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    venue: components["schemas"]["VenueId"];
+                    order_id: components["schemas"]["Bytes32"];
+                    amount: components["schemas"]["Amount"];
+                    /** @description False withdraws to the owner wallet. */
+                    to_margin: boolean;
+                    dex: number;
+                    /** @description Decimal unsigned 64-bit integer. */
+                    nonce: string;
+                    /** @description Unix seconds, in the future and at most 3660 s ahead. */
+                    deadline: number;
+                    signature: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The order as `GET /v1/escrow` shows it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EscrowOrder"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description `NOT_FOUND`: unknown or malformed order, or no unlocked funds. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["AccountNotLinked"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            502: components["responses"]["VenueUnavailable"];
+            503: components["responses"]["OperatorUnavailable"];
+        };
+    };
     getTransfers: {
         parameters: {
             query?: {
@@ -6329,6 +6485,14 @@ export const routes = {
   },
   "postEscrowClose": {
     "path": "/v1/escrow/close",
+    "method": "POST"
+  },
+  "postEscrowWithdrawPrepare": {
+    "path": "/v1/escrow/withdraw/prepare",
+    "method": "POST"
+  },
+  "postEscrowWithdraw": {
+    "path": "/v1/escrow/withdraw",
     "method": "POST"
   },
   "postTransfer": {

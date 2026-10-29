@@ -105,7 +105,9 @@ export const schemas: Record<string, Record<string, { name: string; type: string
   QuoteSet: { QuoteSet: fields("owner:address,offerId:bytes32,sequence:uint64,expiresAt:uint64,quotes:Quote[]"), Quote: quote },
   PayTake: { PayTake: fields("payer:address,deposit:uint256,payments:LockPayment[]"), LockPayment: lockPayment },
   CloseOrders: { CloseOrders: fields("account:address,orders:bytes32[],nonce:uint256,deadline:uint256") },
+  /** @deprecated Signed by `close_offer` items only; use `Withdrawal`. */
   CloseOffer: { CloseOffer: fields("owner:address,offerId:bytes32,toMargin:bool,dex:uint32,nonce:uint256,deadline:uint256") },
+  Withdrawal: { Withdrawal: fields("owner:address,offerId:bytes32,amount:uint256,toMargin:bool,dex:uint32,nonce:uint256,deadline:uint256") },
   Permit: { Permit: fields("owner:address,spender:address,value:uint256,nonce:uint256,deadline:uint256") },
   Withdraw: { Withdraw: fields("account:address,token:address,amount:uint256,fee:uint256,to:address,salt:uint64,ts:uint64") },
   "HyperliquidTransaction:SendAsset": { "HyperliquidTransaction:SendAsset": fields("hyperliquidChain:string,destination:string,sourceDex:string,destinationDex:string,token:string,amount:string,fromSubAccount:string,nonce:uint64") },

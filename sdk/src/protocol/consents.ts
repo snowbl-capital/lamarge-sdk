@@ -50,16 +50,34 @@ export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; 
   return plan;
 }
 
-/** How long a close signature may be good for, and the clock's margin. */
+/** How long a release signature may be good for, and the clock's margin. */
 const CLOSE_TTL = 3_600 + 60;
 /** Where a release may go on each venue: Hyperliquid's perps or spot, Polymarket's or Aster's account. */
 const DEXES: Record<string, number[]> = { hyperliquid: [0, 4_294_967_295], polymarket: [0], aster: [0] };
 
 type PreparedClose = { venue: string; order_id: string; to_margin: boolean; dex: number; nonce: string; deadline: number; to_sign: SignItem[] };
+type PreparedWithdrawal = PreparedClose & { amount: string };
+type Chain = { id: number; token: string; decimals: number; escrow: string };
+type EscrowOrder = { venue: string; owner: string; order_id: string };
 
-/** One `close_offer` by the owner, in the domain of `chain`'s escrow, the deployment's as the API lists it, to the requested destination, good for an hour at most. */
-export function checkCloseOffer<P extends PreparedClose>(prepared: P, order: { venue: string; owner: string; order_id: string }, chain: { id: number; token: string; decimals: number; escrow: string },
+/** One `escrow_withdrawal` of `amount` by the owner, in the domain of `chain`'s escrow, the deployment's as the API lists it, to the requested destination, good for an hour at most. */
+export function checkEscrowWithdrawal<P extends PreparedWithdrawal>(prepared: P, order: EscrowOrder, chain: Chain, amount: bigint,
   now = Date.now() / 1000, toMargin = true): prepared is P & { to_sign: Verified<P["to_sign"]> } {
+  const message = prepared.to_sign[0]?.typed_data.message;
+  return amount > 0n && prepared.amount === amount.toString() && String(message?.amount) === prepared.amount
+    && checkRelease(prepared, order, chain, now, toMargin, "escrow_withdrawal", "Withdrawal");
+}
+
+/**
+ * One `close_offer` by the owner, in the domain of `chain`'s escrow, the deployment's as the API lists it, to the requested destination, good for an hour at most.
+ * @deprecated Releases all of the order; use {@link checkEscrowWithdrawal}.
+ */
+export function checkCloseOffer<P extends PreparedClose>(prepared: P, order: EscrowOrder, chain: Chain,
+  now = Date.now() / 1000, toMargin = true): prepared is P & { to_sign: Verified<P["to_sign"]> } {
+  return checkRelease(prepared, order, chain, now, toMargin, "close_offer", "CloseOffer");
+}
+
+function checkRelease(prepared: PreparedClose, order: EscrowOrder, chain: Chain, now: number, toMargin: boolean, kind: string, type: string): boolean {
   if (prepared.to_sign.length !== 1) return false;
   const [item] = prepared.to_sign;
   if (!item) return false;
@@ -68,7 +86,7 @@ export function checkCloseOffer<P extends PreparedClose>(prepared: P, order: { v
     checkEscrowTyped(item.typed_data, order.venue);
   } catch { return false; }
   const { primaryType, message } = item.typed_data;
-  return item.kind === "close_offer" && same(item.typed_data.domain.verifyingContract, chain.escrow) && same(item.signer, order.owner) && primaryType === "CloseOffer" && same(message.owner, order.owner)
+  return item.kind === kind && same(item.typed_data.domain.verifyingContract, chain.escrow) && same(item.signer, order.owner) && primaryType === type && same(message.owner, order.owner)
     && same(message.offerId, order.order_id) && message.toMargin === toMargin && prepared.to_margin === toMargin
     && (toMargin ? (DEXES[order.venue] ?? []).includes(prepared.dex) : prepared.dex === 0)
     && String(message.dex) === String(prepared.dex) && String(message.nonce) === prepared.nonce && String(message.deadline) === String(prepared.deadline)

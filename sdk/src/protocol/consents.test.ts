@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { canRefundPayment, checkCloseOffer, checkFundingPlan, checkLinkChallenge, checkPaymentRefund, checkRefundLocks, checkRegistry, checkSetupKind, CHAINS, EIP712Domain, ESCROW, required, schemas, type SignItem } from "./index.ts";
+import { canRefundPayment, checkCloseOffer, checkEscrowWithdrawal, checkFundingPlan, checkLinkChallenge, checkPaymentRefund, checkRefundLocks, checkRegistry, checkSetupKind, CHAINS, EIP712Domain, ESCROW, required, schemas, type SignItem } from "./index.ts";
 
 const address = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A", master = "0x14791697260E4c9A71f18484C9f997B308e59325";
 
@@ -141,6 +141,49 @@ for (const [name, tamper] of tamperings) {
     expect(checkCloseOffer(close, order, chain, now)).toBe(false);
   });
 }
+
+type PreparedWithdrawal = Parameters<typeof checkEscrowWithdrawal>[0];
+
+const withdrawal = (): PreparedWithdrawal => {
+  const close = prepared();
+  const item = required(close.to_sign[0]);
+  item.kind = "escrow_withdrawal";
+  item.typed_data.types = structuredClone({ EIP712Domain, ...schemas.Withdrawal });
+  item.typed_data.primaryType = "Withdrawal";
+  item.typed_data.message.amount = "2000000";
+  return { ...close, amount: "2000000" };
+};
+
+test("the withdrawal asked passes", () => {
+  expect(checkEscrowWithdrawal(withdrawal(), order, chain, 2_000_000n, now)).toBe(true);
+});
+
+const withdrawalTamperings: [string, (prepared: PreparedWithdrawal) => void][] = [
+  ["another amount signed", (prepared) => (required(prepared.to_sign[0]).typed_data.message.amount = "3000000")],
+  ["another amount in the body", (prepared) => (prepared.amount = "3000000")],
+  ["a close instead", (prepared) => (required(prepared.to_sign[0]).kind = "close_offer")],
+  ["a close's type", (prepared) => {
+    const item = required(prepared.to_sign[0]);
+    item.typed_data.types = structuredClone({ EIP712Domain, ...schemas.CloseOffer });
+    item.typed_data.primaryType = "CloseOffer";
+    delete item.typed_data.message.amount;
+  }],
+];
+
+for (const [name, tamper] of withdrawalTamperings) {
+  test(`a withdrawal with ${name} is refused`, () => {
+    const prepared = withdrawal();
+    tamper(prepared);
+    expect(checkEscrowWithdrawal(prepared, order, chain, 2_000_000n, now)).toBe(false);
+  });
+}
+
+test("a withdrawal of nothing is refused", () => {
+  const prepared = withdrawal();
+  prepared.amount = "0";
+  required(prepared.to_sign[0]).typed_data.message.amount = "0";
+  expect(checkEscrowWithdrawal(prepared, order, chain, 0n, now)).toBe(false);
+});
 
 test("wallet release requires an explicit matching choice in the request and signature", () => {
   const close = prepared();

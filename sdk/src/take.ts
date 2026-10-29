@@ -1,9 +1,9 @@
 import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, signableUntil, takePaymentKind } from "./protocol/intents.ts";
-import { COLLATERAL_ROUTE, fromHex, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
+import { COLLATERAL_ROUTE, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
 import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Dex, type Typed } from "./protocol/protocol.ts";
-import { isRecord, required } from "./protocol/validation.ts";
+import { fromHex, record, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
@@ -19,11 +19,9 @@ type AsterItem = components["schemas"]["AsterTransferItem"];
 // Kinds are open strings, so the union narrows through these guards.
 const isLighter = (item: Item): item is LighterItem => item.kind === "lighter_transfer";
 const isAster = (item: Item): item is AsterItem => item.kind === "aster_transfer";
-/** Where a take's signatures wait until they are accepted. */
 export const takeKey = (id: string) => `take:${id}`;
-/** The seconds after which the server no longer accepts a take signed at once with its withdrawal. */
+/** Epoch seconds: the server's submission cutoff for a take signed with its withdrawal. */
 export const atOnceCutoff = (prepared: Prepared) => signableUntil(prepared) - AT_ONCE_SEND_MARGIN_SECONDS;
-/** Whether a request of a take signed at once can still be asked at `at` seconds. */
 export const signableAtOnce = (prepared: Prepared, at: number) => atOnceCutoff(prepared) - AT_ONCE_SIGNING_SECONDS > at;
 
 export interface TakeOptions {
@@ -31,7 +29,7 @@ export interface TakeOptions {
   signal?: AbortSignal | undefined;
   /** A fresh read of the taker's balances, when the caller already has one. */
   balances?: Balance[] | undefined;
-  /** A take reserved earlier, to sign and submit. */
+  /** A take prepared earlier, to sign and submit. */
   prepared?: Prepared | undefined;
   /** The account that must receive on `input.to`; the linked one otherwise. */
   recipient?: string | undefined;
@@ -39,16 +37,15 @@ export interface TakeOptions {
   beforeSigning?: BeforeSigning | undefined;
   /** The clock the payment's windows are checked against, in milliseconds. */
   now?: (() => number) | undefined;
-  /** Runs the whole take inside it, from reserving to submitting: a lock other processes or browser tabs share, so none takes a reservation still being signed for abandoned. */
+  /** Runs the whole take inside it, from preparing to submitting: a lock other processes or browser tabs share, so none abandons a take still being signed. */
   lock?: (<T>(run: () => Promise<T>) => Promise<T>) | undefined;
-  /** A transfer's prepared withdrawal the take was reserved against: signed before the payment, to the signer, and submitted with it. */
+  /** A transfer's prepared withdrawal the take was prepared against: signed before the payment, to the signer, and submitted with it. */
   withdrawal?: { amount: string; typed_data: Typed; dex?: Dex } | undefined;
 }
 
 /** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
 interface PaymentOptions { at: number; signal?: AbortSignal | undefined; before?: BeforeSigning | undefined; payWindow?: number | undefined; route?: boolean | undefined }
 
-/** Each venue pays its own way: the escrow payment, or the one transfer inside Aster or Lighter, which LaMarge sends before the delivery. */
 export async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Balance, recipient: string, options: PaymentOptions) {
   const { take, to_sign } = prepared;
   const { at, signal, before } = options;
@@ -85,11 +82,7 @@ export async function signPayment(client: Client, prepared: Prepared, input: Tak
   return signItems(signer, typed);
 }
 
-/**
- * Reserves `input`'s quotes, checks what the payment would sign against the request and the
- * linked accounts, signs and submits it. The signature is stored before its first submission, so
- * a restart submits it again rather than signing another. `signer` is the account paying on `input.from`.
- */
+/** Validate before signing; persist before submission so restarts replay identical bytes. `signer` must pay on `input.from`. */
 export async function take(client: Client, signer: Signer, input: TakeInput, options: TakeOptions = {}): Promise<Fill[]> {
   const { lock, ...unlocked } = options;
   if (lock) return lock(() => take(client, signer, input, unlocked));
@@ -105,12 +98,13 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   // Retried as its client id makes it idempotent: a payment it waits for is soon signed or settled.
   const prepared = options.prepared ?? await client.call("postTake", { body: input, signal, retry: true });
   const { take: reserved, to_sign } = prepared;
-  if (!to_sign.length || input.transfer_intent_id && reserved.fills.some(fill => fill.state !== "RESERVED")) return reserved.fills;
+  if (!to_sign.length || input.transfer_intent_id && reserved.fills.some(fill => !["PREPARED", "RESERVED"].includes(fill.state))) return reserved.fills;
   const key = takeKey(reserved.id);
   // Kept with the request it signs: the same signature never goes with another request.
-  const kept: unknown = await store.load(key);
-  let signatures = signedItems(isRecord(kept) ? kept.items : kept);
-  if (signatures && isRecord(kept)) insist(canonical(kept.to_sign) === canonical(to_sign) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
+  const loaded: unknown = await store.load(key);
+  const kept = loaded === undefined ? undefined : record(loaded);
+  let signatures = signedItems(kept?.items);
+  if (signatures && kept) insist(canonical(kept.to_sign) === canonical(to_sign) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
   if (!signatures) {
     try {
       // Each request is checked at its own signing time: a wallet may hold the first one open.

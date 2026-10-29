@@ -8,7 +8,6 @@ import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "
 
 export type Withdrawal = components["schemas"]["Withdrawal"];
 
-/** Checks a withdrawal, or a send to `destination` with `send`, against its terms at `at` seconds and the caller's own checks, then signs it. */
 export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false, dex?: Dex): Promise<Hex> {
   checkTransfer(typed, venue, signer.address, destination, amount, send, at, dex);
   await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed, ...send && !dex && same(destination, signer.address) && venue === "hyperliquid" ? { move: true as const } : {} });
@@ -39,7 +38,6 @@ export async function submitWithdrawal(options: {
   return { result: await options.submit(saved.typed, saved.signature), saved: kept };
 }
 
-/** A withdrawal read back from a store, in the API's shape, or refused. */
 function withdrawalOf(value: unknown): Withdrawal {
   const row = record(value);
   const text = (name: string) => { const field = row[name]; insist(typeof field === "string", "Unreadable stored withdrawal"); return field; };
@@ -74,8 +72,7 @@ export interface WithdrawalRequest {
  * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster; `to: "xyz"` or
  * `"perps"` moves it between a standard Hyperliquid account's perps and trade.xyz. Its signature and
  * outcome stay in `store` under `id`: running the same request again returns the outcome or
- * submits the same signature, and a refused one asks for a new id. Aster relays a withdrawal in a
- * second envelope this flow does not sign yet; a send needs none.
+ * submits the same signature, and a refused one asks for a new id. On Aster, only sends.
  */
 export async function withdraw(client: Client, signer: Signer, request: WithdrawalRequest,
   options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}): Promise<Withdrawal> {
@@ -88,7 +85,6 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
   // A send to the signer itself would sign a move between its balances it did not ask for.
   insist(to !== "account" || !same(request.recipient, signer.address), "A send goes to another account");
   insist(!dex || venue === "hyperliquid" && !move, "Only a Hyperliquid withdrawal or send pays from trade.xyz");
-  // A move to the perps leaves trade.xyz; one to trade.xyz leaves the perps.
   const from: Dex = to === "perps" ? "xyz" : dex;
   const key = `withdrawal:${id}`;
   return exclusive(store, key, async () => {
@@ -99,7 +95,6 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
       insist(Object.entries(context).every(([name, value]) => known[name] === value), `Withdrawal ${id} names another withdrawal`);
       if (typeof known.refused === "string") throw new Error(`Withdrawal ${id} was refused (${known.refused}); use a new id`);
       const outcome = known.result === undefined ? undefined : withdrawalOf(known.result);
-      // Queued, submitting or unknown: the same signature, submitted again, reads the current state.
       if (outcome && FINAL.has(outcome.state)) return outcome;
     }
     const balance = (await client.call("getBalances", { signal })).find(row => row.venue === venue);
@@ -121,7 +116,6 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
   });
 }
 
-/** Reads the escrows, as a viem `PublicClient` per chain id does with `readContract`. */
 export type ChainReaders = Record<number, { readContract(request: { address: `0x${string}`; abi: readonly unknown[]; functionName: string; args: readonly unknown[]; blockTag?: "finalized" | "latest" }): Promise<unknown> }>;
 
 const LOCKS = [{ type: "function", name: "locks", stateMutability: "view",
@@ -140,16 +134,10 @@ function lockOf(value: unknown): EscrowLock {
   return [amount, hashlock, recipient, refundAt, state, dex];
 }
 
-/** What a refund reads of the fill: a REST fill fits. */
 export type RefundFill = Pick<components["schemas"]["Fill"], "id" | "role" | "maker_leg" | "payment_leg" | "t2" | "from_venue" | "to_venue" | "maker_recipient"
   | "maker_owner" | "payer" | "swap_id" | "order_id" | "amount_in" | "hashlock" | "deliver_by" | "delivery_hash">;
 
-/**
- * The payment's escrow, read directly: its lock at a finalized block and the consent digest, which
- * an old ABI cannot answer. Consent applies only to a delivery inside a venue, so a server's label
- * cannot authorize giving up a payment an escrow delivered. `escrows`, by venue, names the escrow
- * read, which must be pinned: the consent's domain.
- */
+/** Read the payment at a finalized block from the pinned escrow and require its consent ABI before an in-venue refund. */
 export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows: Readonly<Record<string, string | undefined>>): Promise<void> {
   const reader = (venue: string) => required(readers[required(CHAINS[venue], "Unknown venue").id], `No reader for ${venue}'s chain`);
   const escrow = (venue: string) => {
@@ -159,11 +147,9 @@ export async function checkEscrowLocks(fill: RefundFill, deadline: number, reade
   };
   const [payment] = await Promise.all([
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: LOCKS, functionName: "locks", args: [address(fill.payer), ZERO, hex(fill.swap_id)], blockTag: "finalized" }),
-    // An old ABI cannot answer the consent digest: the call fails.
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: DIGEST, functionName: "refundPaymentDigest", args: [{ payer: address(fill.payer), swapId: hex(fill.swap_id), deadline: BigInt(deadline) }] }),
   ]);
-  // An escrow destination fails the check: its delivery is never refunded by consent.
-  checkRefundLocks(fill, lockOf(payment), null);
+  checkRefundLocks(fill, lockOf(payment));
 }
 
 /**

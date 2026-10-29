@@ -100,7 +100,7 @@ describe("sweep, as POST /takes takes", () => {
 
 test("fresh quote validation respects the reviewed amount, minimum and part limit", () => {
   const quoted = level("order", 1_000_000, 1_000_000, 5_000_000, 1_000_000);
-  const book = { max_fill:"100000000",levels:[quoted] };
+  const book = { max_fill:"100000000",taker_fee_bps:0,levels:[quoted] };
   const input = { amount_in: "5000000", min_out: "4900000", max_parts: 2 };
   expect(() => checkQuote(book,new Set(),input)).not.toThrow();
   expect(() => checkQuote({...book,levels:[{...quoted,receive:"1010000"}]},new Set(),input)).not.toThrow();
@@ -121,7 +121,6 @@ test("a fee on the payment comes on top of the price, one on the delivery out of
   expect(sweep(book, NO_CAP, none, 2_001_900n, MAX_PARTS, 0n, Date.now(), takeFee("polymarket", 3, 3))).toEqual({ out: 2_000_000n, pay: 2_001_900n, parts: 1 });
   // From Lighter, the offer delivers 2,000,000 for 2,001,300, ⌊2,000,000 × 3 / 10,000⌋ = 600 of it the fee.
   expect(sweep(book, NO_CAP, none, 2_001_300n, MAX_PARTS, 0n, Date.now(), takeFee("lighter", 3, 3))).toEqual({ out: 1_999_400n, pay: 2_001_300n, parts: 1 });
-  // Without consent, no fee.
   expect(takeFee("polymarket", 3, undefined)).toEqual({ bps: 0n, onDelivery: false });
   const priced = { max_fill: String(NO_CAP), taker_fee_bps: 3, levels: book };
   expect(() => checkQuote(priced, none, { from: "polymarket", amount_in: "2001900", min_out: "2000000", max_fee_bps: 3 })).not.toThrow();
@@ -135,6 +134,5 @@ test("a remainder the fee's rounding leaves is no shortfall", () => {
   const input = { from: "polymarket", amount_in: "102000000", min_out: "100900000", max_fee_bps: 100 };
   expect(sweep(book.levels, NO_CAP, none, 102_000_000n, MAX_PARTS, 0n, Date.now(), takeFee("polymarket", 100, 100))).toEqual({ out: 100_990_099n, pay: 101_999_999n, parts: 1 });
   expect(() => checkQuote(book, none, input)).not.toThrow();
-  // A book that cannot take the rest still falls short.
   expect(() => checkQuote({ ...book, levels: [level("maker", 1, 1, 50_000_000)] }, none, { ...input, min_out: "0" })).toThrow();
 });

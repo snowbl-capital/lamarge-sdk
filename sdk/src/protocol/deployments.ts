@@ -2,11 +2,7 @@
 export type EscrowDeployment = Readonly<{ version: 5; chainId: number; address: string; environment?: "production" | "development" }>;
 export type DeploymentManifest = readonly EscrowDeployment[];
 
-/**
- * Reviewed deployments of every active environment, one proxy per chain each
- * (contracts/README.md#deployments). Environments share none: a deployment's own are its venues'
- * `chain.escrow` (`getVenues`), each one of these.
- */
+/** Active proxies by environment and chain (contracts/README.md#deployments). `getVenues` must name one. */
 export const ESCROW_DEPLOYMENTS: DeploymentManifest = Object.freeze([
   { version: 5, chainId: 999, address: "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6", environment: "production" },
   { version: 5, chainId: 137, address: "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6", environment: "production" },
@@ -31,7 +27,7 @@ export function escrowDeployment(chainId: number, address: string, manifest: Dep
 /** Never derive or fund a receiver against an unpinned escrow, even if the API names it. */
 export function requireV5Deployment(chainId: number, address: string, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): EscrowDeployment {
   const deployment = escrowDeployment(chainId, address, manifest);
-  if (deployment?.version !== 5) throw new Error("The balance upgrade is not available on this venue yet");
+  if (!deployment) throw new Error("No pinned escrow on this venue");
   return deployment;
 }
 
@@ -41,13 +37,11 @@ export const VENUE_DOMAINS = Object.freeze([
   { venue: "aster", chainId: 56, address: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
 ] as const);
 
-/** A quote set's domain: a reviewed escrow, or a pinned venue domain. */
-export function requireSigningDomain(chainId: number, address: string, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): void {
+function requireSigningDomain(chainId: number, address: string, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): void {
   if (VENUE_DOMAINS.some(domain => domain.chainId === chainId && domain.address === address.toLowerCase())) return;
   requireV5Deployment(chainId, address, manifest);
 }
 
-/** A whole bundle is checked before its first prompt: each quote set's domain, and each funding or payment's escrow. */
 export function requireSigningDomains(items: readonly { kind: string; typed_data: { domain: { chainId: number; verifyingContract: string } } }[], manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): void {
   for (const { kind, typed_data: { domain } } of items) {
     if (kind === "quote_set") requireSigningDomain(domain.chainId, domain.verifyingContract, manifest);

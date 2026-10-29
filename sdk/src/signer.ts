@@ -19,15 +19,12 @@ export interface TypedDataRequest {
 export interface Signer {
   readonly address: Hex;
   signMessage(request: { message: string }): Promise<Hex>;
-  /** Optional for a quote key that signs elsewhere (`Quoter.prepareLinesUnsigned`). */
-  signTypedData?(request: TypedDataRequest): Promise<Hex>;
+  signTypedData(request: TypedDataRequest): Promise<Hex>;
 }
+/** A quote key that may sign elsewhere (`Quoter.prepareLines`). */
+export type QuoteSigner = Pick<Signer, "address"> & Partial<Pick<Signer, "signTypedData">>;
 
-/**
- * `typed` as the API sends it, in the form wallets sign: the domain's type implied, values
- * converted, a contract only where the domain has one, and nothing else (a Polymarket `op` stays
- * out of the wallet's request).
- */
+/** Wallet payload: omit EIP712Domain from types and Polymarket op metadata; include a contract only when the domain has one. */
 export function typedDataRequest(typed: TransferTyped): TypedDataRequest {
   const { EIP712Domain: _, ...types } = typed.types;
   const { domain } = typed;
@@ -39,17 +36,14 @@ export function typedDataRequest(typed: TransferTyped): TypedDataRequest {
   };
 }
 
-export async function signTyped(signer: Pick<Signer, "signTypedData">, typed: TransferTyped): Promise<Hex> {
+export async function signTyped(signer: Partial<Pick<Signer, "signTypedData">>, typed: TransferTyped): Promise<Hex> {
   insist(signer.signTypedData, "This signer cannot sign typed data");
   return signer.signTypedData(typedDataRequest(typed));
 }
 
 /**
- * What a flow is about to sign for the first time, once its own checks passed: a take's payment,
- * a venue withdrawal or a setup step. The caller's checks run on it, and one that throws signs
- * nothing. A stored signature submitted again runs none. A route signed at once is shown whole
- * (`route`: its two takes, and the second transfer with its withdrawal) before any of its requests
- * still to sign, then each request as any other, marked `route`.
+ * Called after validation, before new signatures; throwing aborts signing. Stored signatures bypass it.
+ * Grouped routes are shown whole first, then each unsigned request with `route: true`.
  */
 export type Signing =
   | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
@@ -66,7 +60,7 @@ export const signedItem = (item: { kind: string; fill_id?: string | undefined },
   ({ kind: item.kind, ...(item.fill_id === undefined ? {} : { fill_id: item.fill_id }), signature });
 
 /** A checked bundle, signed item by item once every domain is a pinned deployment. */
-export async function signItems(signer: Pick<Signer, "address" | "signTypedData">, items: readonly SignItem[], manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): Promise<SignedItem[]> {
+export async function signItems(signer: QuoteSigner, items: readonly SignItem[], manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): Promise<SignedItem[]> {
   requireSigningDomains(items, manifest);
   insist(items.every(item => same(item.signer, signer.address)), "This key cannot sign for a different linked account");
   insist(signer.signTypedData, "Prepare unsigned and submit the collected contract signature");

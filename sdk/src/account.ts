@@ -1,8 +1,8 @@
 import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
 import { checkLinkChallenge, checkSetupKind } from "./protocol/consents.ts";
-import { fromHex, lighterAccountOwner, registrationMessage, TAKER_API_KEYS } from "./protocol/lighter.ts";
+import { lighterAccountOwner, registrationMessage, TAKER_API_KEYS } from "./protocol/lighter.ts";
 import { checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
-import { required } from "./protocol/validation.ts";
+import { fromHex, required } from "./protocol/validation.ts";
 import { signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 
 type SetupStep = Answer<"postVenueSetupStep">;
@@ -27,13 +27,11 @@ export async function linkAccount(client: Client, master: Pick<Signer, "address"
 /** The deployment's own Aster agent name and Lighter key index (`ENVIRONMENT_SLOTS`); unset, any environment's. */
 type Pins = { asterAgentName?: string | undefined; lighterKeyIndex?: number | undefined };
 
-/** A prepared step's request, checked against what LaMarge may ask of the account, then signed. */
 async function signStep(client: Client, step: SetupStep, venue: string, owner: Signer, wallet: string | null, now: () => number, pins: Pins, signal?: AbortSignal, before?: BeforeSigning) {
   const request = required(step.to_sign, "Prepare the setup again");
   insist(same(request.signer, owner.address), "Setup asks another account to sign");
   checkSetupKind(step.step, request.kind);
   if (request.kind === "permit") {
-    // Its spender: an escrow pinned on the venue's chain.
     const item = { kind: request.kind, signer: request.signer, typed_data: required(request.typed_data) };
     checkPermit(item, venue, owner.address, 600, now() / 1000);
     await before?.({ kind: "setup", venue, step });
@@ -73,27 +71,23 @@ async function runStep(client: Client, venue: string, step: string, owner: Signe
         }
       }
     } catch (error) {
-      // Aster names a stale approval only in its message; the API has no reason for it yet.
+      // Aster names a stale approval only in its message.
       if (retried || !(error instanceof LaMargeError && error.code === "VENUE_REJECTED" && /nonce|expired/i.test(error.message))) throw error;
     }
   }
 }
 
 /**
- * Does each step of the linked account that the venue does not show yet (a permit, Aster's agent
- * approval, Lighter's key) and waits until the venue shows it. A step submitted before is awaited,
- * never signed twice. `owner` is the account linked on `venue`; `steps` limits the run to those
- * steps, as a maker pool needs only Aster's agent and none of a taker's payment setup.
- * `asterAgentName` and `lighterKeyIndex`, the deployment's own (`ENVIRONMENT_SLOTS`), refuse another
- * environment's agent or key, whose registration would replace that environment's.
- * `onProgress` names each step as it starts, then while the venue has yet to show it.
+ * Completes missing setup steps and waits for submitted ones without signing them twice.
+ * `owner` must be linked on `venue`; `steps` limits setup to the caller's needs.
+ * Pin `asterAgentName` and `lighterKeyIndex` to avoid replacing another environment's registration.
+ * `onProgress` reports each step while starting and awaiting venue confirmation.
  */
 export async function setUpVenue(client: Client, venue: string, owner: Signer, options: {
   steps?: readonly string[] | undefined; signal?: AbortSignal | undefined; asterAgentName?: string | undefined; lighterKeyIndex?: number | undefined; beforeSigning?: BeforeSigning | undefined;
   onProgress?: ((progress: SetupProgress) => void) | undefined; now?: (() => number) | undefined; sleep?: ((ms: number) => Promise<void>) | undefined;
 } = {}) {
   const { steps, signal, asterAgentName, lighterKeyIndex, beforeSigning, onProgress, now = Date.now, sleep = (ms: number) => wait(ms, signal) } = options;
-  // Lighter's key registration names the linked account's index.
   let [setup, wallet] = await Promise.all([client.call("getVenueSetup", { path: { venue }, signal }),
     venue === "lighter" ? client.call("getBalances", { signal }).then(rows => rows.find(row => row.venue === venue)?.venue_wallet ?? null) : null]);
   insist(same(setup.address, owner.address), "Setup returned another account");

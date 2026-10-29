@@ -661,7 +661,8 @@ export interface paths {
         put?: never;
         /**
          * Atomically cancel quotes
-         * @description Cancels every order's quotes, or none, each as an unguarded `DELETE /v1/orders/{id}/quotes`. Results are sorted by order id. Credential scope: `cancel`.
+         * @deprecated
+         * @description Cancels every order's quotes, or none, each as an unguarded `DELETE /v1/orders/{id}/quotes`. Results are sorted by order id. Credential scope: `cancel`. Use `DELETE /v1/quote-identities/{id}/quotes` instead.
          */
         post: operations["postV1QuotesBatch"];
         delete?: never;
@@ -949,12 +950,12 @@ export interface paths {
         put?: never;
         /**
          * Prepare a grouped route
-         * @description For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. For Aster, refreshes the still-live unsigned first take with about 90 seconds until `commit_by` and a nonce 20 seconds later; sign the returned requests. Requires a route payment window of at least 150 seconds. Idempotent while prepared: another preparation changes neither the requests nor the deadline. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); the caller decides whether to try leg by leg. With `reason` `grouped_route`: another request is preparing this route.
+         * @description For a route's first transfer whose take is prepared and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, prepares its take without reserving inventory and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. For Aster, refreshes the still-live unsigned first take with about 90 seconds until `commit_by` and a nonce 20 seconds later; sign the returned requests. Requires a route payment window of at least 150 seconds. Idempotent while prepared: another preparation changes neither the requests nor the deadline. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); the caller decides whether to try leg by leg. With `reason` `grouped_route`: another request is preparing this route.
          */
         post: operations["prepareGroupedRoute"];
         /**
          * Abort a prepared route
-         * @description Ends a route not committed: its second take and second transfer are released at once. The first take stays reserved, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.
+         * @description Ends a route not committed: its second take and second transfer are released at once. The first take stays prepared, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.
          */
         delete: operations["abortGroupedRoute"];
         options?: never;
@@ -993,7 +994,7 @@ export interface paths {
         put?: never;
         /**
          * Take at market
-         * @description Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
+         * @description Prepares up to `max_parts` fills in `PREPARED`, without reserving maker liquidity, paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). After signatures and payment preflight, all parts reserve atomically just before payment. A stale or consumed offer expires unpaid with a reason; prepare and sign again. No bond is required. One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
          */
         post: operations["postTake"];
         delete?: never;
@@ -1018,7 +1019,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel a take
-         * @description Allowed until its signature is accepted, a take signed at once's included, also after an unsigned expiry; repeats answer 204. Its `RESERVED` fills expire (`declined`), releasing their reservations.
+         * @description Allowed until its signature is accepted, a take signed at once's included, also after an unsigned expiry; repeats answer 204. Its unsigned fills expire (`declined`), releasing their source commitments.
          */
         delete: operations["deleteTake"];
         options?: never;
@@ -1037,7 +1038,7 @@ export interface paths {
         put?: never;
         /**
          * Submit take signatures
-         * @description The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once the maker is locked. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. A refused withdrawal ends the take at once (`EXPIRED`, reason `the withdrawal was refused`). Once accepted, retries return the current fills.
+         * @description The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once every maker accepted. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. A refused withdrawal ends the take at once (`EXPIRED`, reason `the withdrawal was refused`). Once accepted, retries return the current fills.
          */
         post: operations["postTakeSignatures"];
         delete?: never;
@@ -1080,6 +1081,26 @@ export interface paths {
          * @description Submits the beneficiary's `RefundPayment` signature; exact retries answer 204, even after settlement. The operator returns only this payment to the payer's available balance (finalized `Refunded` event); without consent it refunds after `t2`. For a fill delivered inside its venue, consent ends delivery reports (`refund_authorized`), even of a transfer executed in time.
          */
         post: operations["submitPaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fills/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an active delivery before taker funding
+         * @description Commits the maker to deliver this fill, before `maker_accept_by`. The taker's payment waits for every acceptance of the take (both takes of a grouped route); a missing one expires the unpaid take. Retries of an accepted fill return 204, also after the deadline.
+         */
+        post: operations["acceptFill"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1796,18 +1817,6 @@ export interface components {
             /** @description One per venue (escrow chains, then Lighter and Aster), by output venue. */
             assets: components["schemas"]["StatsAsset"][];
             trades_30d: number;
-            /**
-             * @deprecated
-             * @description Makers pay no fee.
-             * @constant
-             */
-            maker_fee_bps: 0;
-            /**
-             * @deprecated
-             * @description Taker fees are per pair, in each book's `taker_fee_bps`.
-             * @constant
-             */
-            taker_fee_bps: 0;
         };
         /** @description EIP-712 typed data for `eth_signTypedData_v4`. Keep each integer as prepared, JSON number or decimal string. */
         TypedData: {
@@ -1906,7 +1915,7 @@ export interface components {
             fill_id: string;
             typed_data: components["schemas"]["LighterTransferTerms"];
         };
-        /** @description The internal transfer LaMarge sends from your Lighter account once the maker is locked, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
+        /** @description The internal transfer LaMarge sends from your Lighter account once every maker accepted, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
         LighterTransferTerms: {
             /**
              * @description The index of LaMarge's key on your account, 254 in production and 253 in development.
@@ -1963,7 +1972,7 @@ export interface components {
             }[];
         };
         /**
-         * @description Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit, awaited on top of the tokens already at the linked address, which stay unused.
+         * @description Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move.
          * @enum {string}
          */
         FundingSource: "wallet" | "venue" | (string & {});
@@ -2017,11 +2026,6 @@ export interface components {
             amount: components["schemas"]["Amount"];
             /** @description What the order holds, where `held_in` says: unlocked escrow; for a Lighter or Aster pool, its account's transferable balance at the last read less deliveries since, within the cap left. */
             held: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Former name of `held`; removed once makers have moved.
-             */
-            escrow_available: components["schemas"]["Amount"];
             /** @description Inside a venue, the last-read per-delivery fee, held back per reserved fill and for the next; `0` for an escrow order. */
             delivery_fee: components["schemas"]["Amount"];
             revision: components["schemas"]["Cursor"];
@@ -2217,7 +2221,7 @@ export interface components {
             /** @description The grouped route this transfer belongs to, as its first or second. */
             grouped: components["schemas"]["GroupedRoute"] | null;
         };
-        /** @description A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the caller decides whether to sign the first alone. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`. */
+        /** @description A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes hold no maker inventory; sign and commit before `commit_by`. `committed`: the operator reserves both inventories just before the first payment, then runs the route; nothing is left to sign. `aborted`: never committed, its second take released; the caller decides whether to sign the first alone. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`. */
         GroupedRoute: {
             /** @enum {string} */
             state: "prepared" | "committed" | "aborted" | "closed" | (string & {});
@@ -2332,11 +2336,6 @@ export interface components {
             reason: string | null;
             /** @description Payment must lock by then. */
             pay_by: components["schemas"]["Timestamp"];
-            /**
-             * @deprecated
-             * @description Equal to `t1` since deliveries, which no taker claim precedes.
-             */
-            reveal_by: components["schemas"]["Timestamp"];
             /** @description On an escrow venue, the delivery's deadline: LaMarge's delivery names it and the escrow refuses it after; still undelivered then, the payment returns at once. Before deliveries, the maker lock's refund time. */
             t1: components["schemas"]["Timestamp"];
             /** @description Payment refund time. */
@@ -2357,6 +2356,16 @@ export interface components {
             delivery_hash: string | null;
             /** @description Venue fee charged to the maker's account on top of the delivery, in `to_venue` base units: as read at reservation, then the delivery's actual fee. `0` on an escrow venue. */
             delivery_fee: components["schemas"]["Amount"];
+            /**
+             * Format: date-time
+             * @description Deadline of the maker's acceptance, at most 15 seconds after signing; null when none is asked.
+             */
+            maker_accept_by: string | null;
+            /**
+             * Format: date-time
+             * @description When the maker accepted the fill.
+             */
+            maker_accepted_at: string | null;
             /**
              * Format: date-time
              * @description When the server verified the locked payment; an in-venue maker transfers only once it is set.
@@ -2405,10 +2414,10 @@ export interface components {
         /** @enum {string} */
         OrderState: "preparing" | "moving" | "funding" | "live" | "closing" | "closed" | "failed" | (string & {});
         /**
-         * @description `PAID`: the payment is locked, or executed on Lighter or Aster, and the delivery pending. `CLAIMING`: delivered, the payment still locked. `REFUNDING`: the delivery abandoned, the payment still locked. `PAYING` and `LOCKED`: fills settled with maker locks, before deliveries.
+         * @description `PREPARED`: no maker inventory is claimed. `RESERVED`: execution was admitted and inventory is held for payment. `PAID`: the payment is locked, or executed on Lighter or Aster, and the delivery pending. `CLAIMING`: delivered, the payment still locked. `REFUNDING`: the delivery abandoned, the payment still locked. `PAYING` and `LOCKED`: fills settled with maker locks, before deliveries.
          * @enum {string}
          */
-        FillState: "RESERVED" | "PAID" | "PAYING" | "LOCKED" | "CLAIMING" | "SETTLED" | "EXPIRED" | "REFUNDING" | "REFUNDED" | "MAKER_LOSS" | "TAKER_LOSS" | (string & {});
+        FillState: "PREPARED" | "RESERVED" | "PAID" | "PAYING" | "LOCKED" | "CLAIMING" | "SETTLED" | "EXPIRED" | "REFUNDING" | "REFUNDED" | "MAKER_LOSS" | "TAKER_LOSS" | (string & {});
         /**
          * @description The taker's lock on the `from_venue` chain; paid from Lighter or Aster, `CLAIMED` once the transfer executed.
          * @enum {string}
@@ -2485,16 +2494,6 @@ export interface components {
         SettlementTiming: {
             maker_timeout_seconds: number;
             taker_timeout_seconds: number;
-            /**
-             * @deprecated
-             * @description Unused since deliveries.
-             */
-            lock_cutoff_seconds: number;
-            /**
-             * @deprecated
-             * @description Unused since deliveries.
-             */
-            reveal_cutoff_seconds: number;
             /** @description Deliveries on Lighter and Aster; null when neither is enabled. Fills carry their `deliver_by` and `report_by`. */
             delivery: null | {
                 /** @description `deliver_by` is `pay_by` plus this. */
@@ -2585,29 +2584,14 @@ export interface components {
             chain_observation: components["schemas"]["ChainObservation"] | null;
             /** @description Orders' unlocked escrow, Lighter and Aster pools excluded. */
             maker_escrow: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description `maker_escrow` + `maker_pool_inventory`, its former meaning; removed once makers have moved.
-             */
-            maker_escrow_unlocked: components["schemas"]["Amount"];
             /** @description Lighter or Aster pool: the account's transferable balance at the last read less deliveries since, within the cap left. Part of the venue account's equity, never added to it. */
             maker_pool_inventory: components["schemas"]["Amount"];
             /** @description Output of the maker's reserved or paid fills not yet delivered; can exceed observed inventory. */
             maker_reserved: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Maker locks, before deliveries.
-             */
-            maker_locked: components["schemas"]["Amount"];
             /** @description Output delivered to the taker with the payment still locked. */
             maker_delivered_unpaid: components["schemas"]["Amount"];
             maker_payment_locked: components["schemas"]["Amount"];
             taker_payment_locked: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Maker locks for the taker, before deliveries.
-             */
-            taker_receive_locked: components["schemas"]["Amount"];
         };
         Exposure: {
             assets: components["schemas"]["ExposureAsset"][];
@@ -2803,11 +2787,6 @@ export interface components {
             state: components["schemas"]["OrderState"];
             venue: components["schemas"]["VenueId"];
             held: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Former name of `held`; removed once makers have moved.
-             */
-            escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
             sequence: number | null;
             cancel_epoch: components["schemas"]["Cursor"];
@@ -2836,8 +2815,18 @@ export interface components {
             maker_in: components["schemas"]["Amount"];
             /** @description What leaves the maker's order. */
             maker_out: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description Former name of `from_venue`.
+             */
             from: components["schemas"]["VenueId"];
+            /**
+             * @deprecated
+             * @description Former name of `to_venue`.
+             */
             to: components["schemas"]["VenueId"];
+            from_venue: components["schemas"]["VenueId"];
+            to_venue: components["schemas"]["VenueId"];
             pay_by: components["schemas"]["Timestamp"];
             t1: components["schemas"]["Timestamp"];
             t2: components["schemas"]["Timestamp"];
@@ -2848,6 +2837,10 @@ export interface components {
             delivery_to: string | null;
             delivery_hash: string | null;
             delivery_fee: components["schemas"]["Amount"];
+            /** Format: date-time */
+            maker_accept_by: string | null;
+            /** Format: date-time */
+            maker_accepted_at: string | null;
             /** Format: date-time */
             payment_verified_at: string | null;
             reason: string | null;
@@ -2976,11 +2969,6 @@ export interface components {
             state: components["schemas"]["OrderState"];
             venue: components["schemas"]["VenueId"];
             held: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Former name of `held`; removed once makers have moved.
-             */
-            escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
             sequence: number | null;
             cancel_epoch: components["schemas"]["Cursor"];
@@ -3012,8 +3000,18 @@ export interface components {
             maker_in: components["schemas"]["Amount"];
             /** @description What leaves the maker's order. */
             maker_out: components["schemas"]["Amount"];
+            /**
+             * @deprecated
+             * @description Former name of `from_venue`.
+             */
             from: components["schemas"]["VenueId"];
+            /**
+             * @deprecated
+             * @description Former name of `to_venue`.
+             */
             to: components["schemas"]["VenueId"];
+            from_venue: components["schemas"]["VenueId"];
+            to_venue: components["schemas"]["VenueId"];
             pay_by: components["schemas"]["Timestamp"];
             t1: components["schemas"]["Timestamp"];
             t2: components["schemas"]["Timestamp"];
@@ -3024,6 +3022,10 @@ export interface components {
             delivery_to: string | null;
             delivery_hash: string | null;
             delivery_fee: components["schemas"]["Amount"];
+            /** Format: date-time */
+            maker_accept_by: string | null;
+            /** Format: date-time */
+            maker_accepted_at: string | null;
             /** Format: date-time */
             payment_verified_at: string | null;
             reason: string | null;
@@ -3067,11 +3069,6 @@ export interface components {
             state: components["schemas"]["OrderState"];
             amount: components["schemas"]["Amount"];
             held: components["schemas"]["Amount"];
-            /**
-             * @deprecated
-             * @description Former name of `held`; removed once makers have moved.
-             */
-            escrow_available: components["schemas"]["Amount"];
             held_in: components["schemas"]["HeldIn"];
             quotable: components["schemas"]["Amount"];
             created_at: components["schemas"]["Timestamp"];
@@ -3106,8 +3103,6 @@ export interface components {
             maker_leg: components["schemas"]["MakerLeg"];
             state: components["schemas"]["FillState"];
             pay_by: components["schemas"]["Timestamp"];
-            /** @deprecated */
-            reveal_by: components["schemas"]["Timestamp"];
             t1: components["schemas"]["Timestamp"];
             t2: components["schemas"]["Timestamp"];
             created_at: components["schemas"]["Timestamp"];
@@ -5435,7 +5430,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AccessRequired"];
             404: components["responses"]["NotFound"];
-            /** @description `TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. For a take signed at once, `STATE_CONFLICT` also when another withdrawal on the venue is unresolved or the margin no longer covers the withdrawal. */
+            /** @description `TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is no longer awaiting payment; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. For a take signed at once, `STATE_CONFLICT` also when another withdrawal on the venue is unresolved or the margin no longer covers the withdrawal. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5521,6 +5516,40 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["StateConflict"];
             413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
+    acceptFill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Acceptance recorded, also on a retry. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description No pending request, or the acceptance window closed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
         };
@@ -6368,6 +6397,10 @@ export const routes = {
   },
   "submitPaymentRefund": {
     "path": "/v1/fills/{id}/refund",
+    "method": "POST"
+  },
+  "acceptFill": {
+    "path": "/v1/fills/{id}/accept",
     "method": "POST"
   },
   "submitDelivery": {

@@ -1,35 +1,30 @@
-// Delivery inside Aster: one transfer per fill from the pool's Spot wallet to the taker's,
-// signed by the account's own key, persisted before it is sent and never signed twice.
+// Persist each signed Aster delivery before sending; never sign a fill twice.
 import { getAddress, parseUnits } from "viem";
 import { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 import type { DeliveryFill } from "./maker.ts";
 import { asterAmount, asterClientId, asterRequest, ASTER_TRANSFER_CHAIN_ID, insist, venueUnits } from "./protocol/protocol.ts";
-import { isRecord } from "./protocol/validation.ts";
+import { isAddress, isRecord } from "./protocol/validation.ts";
 import { signTyped, type Signer } from "./signer.ts";
 
 export const ASTER_MAINNET = { chain: "https://chainapi.asterdex.com", futures: "https://fapi.asterdex.com", spot: "https://sapi.asterdex.com" };
-/** The pool's own address, whose key signs its transfers: a dedicated address, never the master. */
-export type AsterConfig = { account: string };
-/** Aster takes a signed request while its nonce is within about a minute of its clock: the same bytes are resent for 50 seconds at most. */
+/** Aster's nonce window is about one minute; retry identical bytes for at most 50 seconds. */
 const WINDOW_MS = 50_000;
-/** No request is sent closer than this to `deliver_by`: each one reaches Aster within its 10-second timeout, and Aster transfers synchronously. */
+/** Leave Aster's 10-second synchronous request timeout before `deliver_by`. */
 const SEND_MARGIN_MS = 15_000;
 
 /**
- * A delivery's signed request, persisted before its first send. `attempted` is set before any
- * send, `transfer_id` once Aster answered. `outcome` once settled: `reported` to LaMarge;
- * `failed`, LaMarge will not take it; `refused` by Aster on the first send; `dropped`, never sent
- * before the deadline; `unknown`, never answered within the nonce window, never signed again.
+ * Persist before sending; set `attempted` before the call and `transfer_id` on acknowledgement.
+ * `unknown` may have executed: never sign again. `refused` means first-send rejection;
+ * `dropped` was never sent; `reported`/`failed` are final LaMarge outcomes.
  */
 export type AsterDelivery = { fill_id: string; query: string; nonce: number; amount: string; to: string; attempted: boolean; transfer_id?: string; outcome?: "reported" | "failed" | "dropped" | "refused" | "unknown"; created_at: string };
 
-/** `Message{msg}` in Aster's signing domain: its transfers' chain for requests, BSC's for an agent approval. */
+/** Agent approvals use BSC; requests use Aster's signing chain. */
 export const signAster = (account: Pick<Signer, "signTypedData">, msg: string, chainId = ASTER_TRANSFER_CHAIN_ID) => signTyped(account, asterRequest(msg, chainId));
 const query = (fields: [string, string][]) => fields.map(([name, value]) => `${name}=${value}`).join("&");
 
 export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
   private lastNonce = 0;
-  /** When each fill's next send may be tried. */
   private sendAt = new Map<string, { at: number; wait: number }>();
   /**
    * `owner` signs transfers; `agent`, an agent of the same account allowed only to trade,
@@ -49,7 +44,6 @@ export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
     if (!response.ok || !body) throw new Error(`Aster ${new URL(url).pathname}: HTTP ${response.status}`);
     return body;
   }
-  /** A request of the agent for the account: the parameters, then nonce, user and signer. */
   private async byAgent(method: "GET" | "POST", url: string, params: [string, string][]) {
     const message = query([...params, ["nonce", String(this.nonce())], ["user", this.owner.address], ["signer", this.agent.address]]);
     return this.request(method, `${url}?${message}&signature=${await signAster(this.agent, message)}`);
@@ -63,11 +57,7 @@ export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
     insist(typeof free === "string" && /^\d+(\.\d+)?$/.test(free), "Unexpected Aster Spot balance");
     return parseUnits(free, 18);
   }
-  /**
-   * Moves what the Spot wallet lacks for the fill from the margin; the move's id makes a retry a
-   * no-op. `held` is Spot's balance when known, otherwise it is read. Returns what Spot keeps
-   * after the fill's transfer, or undefined after a margin move.
-   */
+  /** Idempotently tops up Spot. Returns its post-transfer balance, or undefined after a margin move. */
   async fundSpot(fill: DeliveryFill, held?: bigint): Promise<bigint | undefined> {
     const needed = venueUnits(BigInt(fill.amount_out), "aster");
     held ??= await this.spot();
@@ -75,13 +65,11 @@ export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
     await this.byAgent("POST", `${this.api.futures}/fapi/v3/asset/wallet/transfer`, [["amount", asterAmount(needed - held)], ["asset", "USDT"], ["clientTranId", `m${asterClientId(fill.id)}`], ["kindType", "FUTURE_SPOT"]]);
     return undefined;
   }
-  /** The fill's transfer at `nonce`, signed by the account's key over the request. */
   async sign(fill: DeliveryFill, nonce: number): Promise<AsterDelivery> {
-    insist(fill.to_venue === "aster" && fill.delivery_to !== null && /^0x[0-9a-fA-F]{40}$/.test(fill.delivery_to), "Not an Aster delivery");
+    insist(fill.to_venue === "aster" && isAddress(fill.delivery_to), "Not an Aster delivery");
     const message = query([["asset", "USDT"], ["amount", asterAmount(BigInt(fill.amount_out))], ["toAddress", getAddress(fill.delivery_to)], ["clientTranId", asterClientId(fill.id)], ["nonce", String(nonce)], ["user", this.owner.address]]);
     return { fill_id: fill.id, query: `${message}&signature=${await signAster(this.owner, message)}`, nonce, amount: fill.amount_out, to: fill.delivery_to, attempted: false, created_at: new Date(this.now()).toISOString() };
   }
-  /** Sends persisted bytes; returns the transfer id, executed or pending. */
   async send(delivery: AsterDelivery): Promise<string> {
     const reply = await this.request("POST", `${this.api.chain}/aster-chain/v3/transfer?${delivery.query}`);
     const id = typeof reply.transferId === "number" ? String(reply.transferId) : reply.transferId;
@@ -152,7 +140,6 @@ export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
       log(`${id}: transfer ${delivery.transfer_id} sent`);
     }
     if (!this.reportDue(id)) return true;
-    // Executed or pending on Aster: reported until the server takes it or never will.
     const outcome = await this.report(quoter, id, delivery.transfer_id, log);
     if (outcome) { delivery.outcome = outcome; await save(); }
     return true;

@@ -37,7 +37,7 @@ test("only the unlimited permit for the pinned escrow is signed",()=>{
   permit.typed_data.message.spender=owner;
   expect(()=>checkPermit(permit,"hyperliquid",owner)).toThrow();
 });
-const fill:TakeFill={id:"fill-1",order_id:id,sequence:1,role:"taker",from_venue:"hyperliquid",to_venue:"polymarket",amount_in:"1000000",amount_out:"1005000",payer:owner,maker_recipient:receiver,taker_recipient:owner,swap_id:id,hashlock:`0x${"bb".repeat(32)}`,pay_by:new Date((now+45)*1000).toISOString(),t1:new Date((now+3600)*1000).toISOString(),t2:new Date((now+7200)*1000).toISOString()};
+const fill:TakeFill={ taker_fee: "0",id:"fill-1",order_id:id,sequence:1,role:"taker",from_venue:"hyperliquid",to_venue:"polymarket",amount_in:"1000000",amount_out:"1005000",payer:owner,maker_recipient:receiver,taker_recipient:owner,swap_id:id,hashlock:`0x${"bb".repeat(32)}`,pay_by:new Date((now+45)*1000).toISOString(),t1:new Date((now+3600)*1000).toISOString(),t2:new Date((now+7200)*1000).toISOString()};
 const lock=():Record<string,unknown>=>({payer:owner,swapId:id,recipient:receiver,amount:"1000000",hashlock:fill.hashlock,refundAt:now+7200,deadline:now+45,orderId:fill.order_id,sequence:fill.sequence,amountOut:fill.amount_out,receiveChainId:137,receiveToken:required(CHAINS.polymarket).token,receiveEscrow:ESCROW,receiveRecipient:owner, dex: 0});
 const payTake=(payments=[lock()],deposit="0"):SignItem=>({kind:"pay_take",fill_id:fill.id,signer:owner,typed_data:typed("PayTake",{payer:owner,deposit,payments})});
 const paymentOf=(item:SignItem)=>required(array(item.typed_data.message.payments).map(record)[0]);
@@ -63,7 +63,6 @@ test("take validates total spend, slippage, one payment per fill, deadlines and 
   expect(()=>check([payTake()],[{...fill,delivery_to:"42"}])).toThrow("another account than yours");
 });
 test("a take's fee rides on its payment, as its swap id carries it, within the taker's consent",()=>{
-  // 3,000 on a price of 1,000,000: 30 basis points.
   const swapId=`0xde65f326692b00000000000000000bb8${"cc".repeat(16)}`;
   const charged={...fill,swap_id:swapId,amount_in:"1003000",taker_fee:"3000"};
   const items=()=>[payTake([{...lock(),swapId,amount:"1003000"}])];
@@ -124,7 +123,6 @@ test("a take pays and is delivered in one environment's escrows", () => {
   expect(signed("production", "development")).toThrow(/: payments\.receive$/);
   expect(signed("development", "production")).toThrow(/: payments\.receive$/);
 });
-
 
 test("a browser top-up adds all it asks, binds only the shortfall and preserves every remaining price", () => {
   const oldQuote={venue:"aster",recipient:receiver,supply:"50000000",receive:"55000000000000000000",min_fill:"1000000",available:"30000000"};

@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import { createClient } from "./client.ts";
+import { checkDeployment } from "./session.ts";
 import type { SocketConstructor } from "./events.ts";
 import { Maker, Quoter, type Order } from "./maker.ts";
 import { array, CHAINS, EIP712Domain, ESCROW, record, required, schemas, type PreparedMaker, type SignItem } from "./protocol/index.ts";
 const account=privateKeyToAccount(`0x${"11".repeat(32)}`), quoteAccount=privateKeyToAccount(`0x${"22".repeat(32)}`);
 const operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
-/** A client of the local API whose every request is answered by `answer`. */
 const api=(answer:(url:string,init?:RequestInit)=>Response|Promise<Response>,token?:string)=>createClient({apiUrl:"http://localhost:8080",token,fetch:Object.assign(async(input:RequestInfo|URL,init?:RequestInit)=>answer(String(input),init),{preconnect:globalThis.fetch.preconnect})});
-function order(venue="hyperliquid"):Order {return {preparation_id:null,held_in:"escrow",escrow_available:"5000000",received_by_venue:[],quotable:"0",filled:"0",margin_move:null,transactions:[],created_at:"2026-10-17T00:00:00Z",updated_at:"2026-10-17T00:00:00Z",capital_pool:true,id,venue,owner_address:account.address,quote_identity_id:"credential-1",quote_signer:quoteAccount.address,amount:"5000000",client_order_id:"persistent-1",state:"preparing",error:null,held:"5000000",delivery_fee:"0",available_to_quote:"0",revision:"1",last_sequence:0,quote_set:null};}
+function order(venue="hyperliquid"):Order {return {preparation_id:null,held_in:"escrow",received_by_venue:[],quotable:"0",filled:"0",margin_move:null,transactions:[],created_at:"2026-10-17T00:00:00Z",updated_at:"2026-10-17T00:00:00Z",capital_pool:true,id,venue,owner_address:account.address,quote_identity_id:"credential-1",quote_signer:quoteAccount.address,amount:"5000000",client_order_id:"persistent-1",state:"preparing",error:null,held:"5000000",delivery_fee:"0",available_to_quote:"0",revision:"1",last_sequence:0,quote_set:null};}
 function fund(o:Order):SignItem {return {kind:"fund",signer:account.address,typed_data:{types:{EIP712Domain,...schemas.FundOffer},primaryType:"FundOffer",domain:{name:"LaMarge",version:"1",chainId:required(CHAINS[o.venue]).id,verifyingContract:ESCROW},message:{owner:account.address,offerId:id,amount:o.amount,deposit:o.amount,quoteSigner:quoteAccount.address,operator,minQuoteSequence:"1",nonce:"0",deadline:Math.floor(Date.now()/1000)+3600}}};}
 const testDeployments = Object.values(CHAINS).map(chain=>({ version: 5 as const, chainId:chain.id, address:chain.escrow }));
 const credential={id:"credential-1",quote_signer:quoteAccount.address};
@@ -26,7 +26,7 @@ test("master provisioning validates both directions and persists signatures befo
       if(bodies.length===1)return Response.json({error:{code:"TEMPORARY",message:"Lost acknowledgement"}},{status:503});
       return Response.json({...prepared(o),state:"accepted",order:{...o,state:"funding"}});
     });
-    const result=await new Maker(client,account,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential,{load:()=>undefined,save:(_key,signatures)=>{saved=array(signatures);},delete:()=>{}});
+    const result=await new Maker(client,account,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential,{store:{load:()=>undefined,save:(_key,signatures)=>{saved=array(signatures);},delete:()=>{}}});
     expect(result.state).toBe("funding");expect(bodies.length).toBe(2);expect(bodies[0]).toBe(bodies[1]);
   }
 });
@@ -46,7 +46,7 @@ test("funding against an unpinned escrow never reaches the financial key", async
   let prompts = 0;
   const o = order(), signing = { ...account, signTypedData: async () => { prompts++; return "0x00" as const; } };
   const client = api(url => readResponse(url) ?? Response.json(prepared(o)));
-  await expect(new Maker(client, signing, operator, "http://localhost:5173", []).addCapital(asked(o), credential)).rejects.toThrow("balance upgrade is not available");
+  await expect(new Maker(client, signing, operator, "http://localhost:5173", []).addCapital(asked(o), credential)).rejects.toThrow("No pinned escrow");
   expect(prompts).toBe(0);
 });
 
@@ -63,7 +63,6 @@ test("provisioning never signs a replaced destination or excessive shortfall", a
 
 const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
 const lineQuotes = () => [{ venue: "polymarket", recipient: account.address, supply: "5000000", receive: "5001000", min_fill: "1000000" }];
-/** An API whose one live Hyperliquid pool, quoted by `signer`, is prepared with `quotes` for `lines`; `seen` gets every request. */
 function linesApi(signer: string, validUntil: number, quotes: ReturnType<typeof lineQuotes>, seen: (url: string, init?: RequestInit) => void) {
   const pool = { ...order(), quote_signer: signer, state: "live" as const, last_sequence: 1 }, expiresAt = validUntil + 3601;
   return api((url, init) => {
@@ -88,31 +87,17 @@ test("a quote key held elsewhere reviews its lines here and its signature goes a
     expect(JSON.parse(String(init.body))).toEqual({ preparation_id: "preparation-1", signatures: [{ draft_id: "draft-1", signature }] });
     submitted = true;
   });
-  const quoter = new Quoter(client, "credential-1", { address: elsewhere }, testDeployments);
-  const prepared = await quoter.prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil);
+  const quoter = new Quoter(client, { id: "credential-1", quote_signer: elsewhere }, { address: elsewhere }, testDeployments);
+  const prepared = await quoter.prepareLines(lines, { polymarket: account.address }, validUntil);
   const draft = required(prepared.drafts[0]);
   expect(required(draft.to_sign[0]).signer).toBe(elsewhere);
   await quoter.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures: [{ draft_id: draft.draft_id, signature }] } });
   expect(submitted).toBe(true);
-  await expect(new Quoter(client, "credential-1", { address: elsewhere }, []).prepareLinesUnsigned(lines, { polymarket: account.address }, validUntil)).rejects.toThrow("balance upgrade is not available");
-});
-
-test("a cancel sends only its 1 to 50 orders and is never replayed", async () => {
-  const requests: [string, unknown][] = [];
-  const client = api((url, init) => {
-    requests.push([url, JSON.parse(String(init?.body))]);
-    return Response.json({ error: { code: "TEMPORARY", message: "Lost acknowledgement", retryable: true } }, { status: 503 });
-  }, "mk_scoped");
-  const quoter = new Quoter(client, "credential-1", quoteAccount);
-  await expect(quoter.cancel([id])).rejects.toThrow();
-  expect(requests).toEqual([["http://localhost:8080/v1/quotes/batch", { cancels: [id] }]]);
-  expect(() => quoter.cancel([])).toThrow("1 to 50");
-  expect(() => quoter.cancel(Array.from({ length: 51 }, () => id))).toThrow("1 to 50");
-  expect(requests).toHaveLength(1);
+  await expect(new Quoter(client, { id: "credential-1", quote_signer: elsewhere }, { address: elsewhere }, []).prepareLines(lines, { polymarket: account.address }, validUntil)).rejects.toThrow("No pinned escrow");
 });
 
 test("the fill feed keeps the identity's fills from one snapshot and their events, replayed while the stream is down",async()=>{
-  const fill={id:"f1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
+  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
   const replayed=Promise.withResolvers<void>();
   // A stream that closes at once: pages come by HTTP replay.
   class Down { onopen=()=>{};onmessage=()=>{};onclose=()=>{}; constructor(){queueMicrotask(()=>this.onclose());} send(){} close(){} }
@@ -123,7 +108,7 @@ test("the fill feed keeps the identity's fills from one snapshot and their event
     return new Response("unexpected",{status:500});
   },"mk_token");
   const stop=new AbortController();
-  const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{},Down satisfies SocketConstructor);
+  const feed=new Quoter(client,{id:"credential-1",quote_signer:quoteAccount.address},quoteAccount).fillFeed(stop.signal,()=>{},Down satisfies SocketConstructor);
   await replayed.promise;
   while((await feed.fills())[0]?.payment_verified_at===null) await Bun.sleep(1);
   stop.abort();
@@ -134,7 +119,7 @@ test("the fill feed keeps the identity's fills from one snapshot and their event
 });
 
 test("the fill feed takes its pages from the stream, from the cursor it processed",async()=>{
-  const fill={id:"f1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
+  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
   const subscriptions:unknown[]=[];
   const subscription=Promise.withResolvers<void>();
   class Stream {
@@ -143,6 +128,7 @@ test("the fill feed takes its pages from the stream, from the cursor it processe
     send(text:string) {
       subscriptions.push({url:this.url,...record(JSON.parse(text))});
       this.onmessage({data:JSON.stringify({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]})});
+      this.onmessage({data:JSON.stringify({next_cursor:"7",has_more:false,events:[{cursor:"7",kind:"fill.changed",resource_id:"f1",revision:"1",data:fill}]})});
       subscription.resolve();
     }
     close() {this.onclose();}
@@ -154,9 +140,8 @@ test("the fill feed takes its pages from the stream, from the cursor it processe
     return new Response("unexpected",{status:500});
   },"mk_token");
   const stop=new AbortController();
-  const feed=new Quoter(client,"credential-1",quoteAccount).fillFeed(stop.signal,()=>{},Stream satisfies SocketConstructor);
+  const feed=new Quoter(client,{id:"credential-1",quote_signer:quoteAccount.address},quoteAccount).fillFeed(stop.signal,()=>{},Stream satisfies SocketConstructor);
   await subscription.promise;
-  // Stopping closes the connection; the page received before it is still processed.
   stop.abort();
   await feed.done;
   expect((await feed.fills())[0]).toMatchObject({id:"f1",payment_verified_at:"2026-10-13T00:00:00Z"});
@@ -176,8 +161,8 @@ test("a Lighter pool is opened for the dedicated owner linked there; escrow fund
   const master=new Maker(client,account,operator,"http://localhost:5173",testDeployments);
   const input={venue:"lighter",amount:o.amount,client_request_id:o.client_order_id,funding_source:"venue" as const};
   await expect(master.addCapital(input,credential)).rejects.toThrow("Link the source account");
-  expect((await master.addCapital(input,credential,undefined,lighterOwner)).id).toBe(o.id);
-  await expect(master.addCapital({...input,venue:"hyperliquid"},credential,undefined,lighterOwner)).rejects.toThrow("financial key");
+  expect((await master.addCapital(input,credential,{owner:lighterOwner})).id).toBe(o.id);
+  await expect(master.addCapital({...input,venue:"hyperliquid"},credential,{owner:lighterOwner})).rejects.toThrow("financial key");
 });
 
 test("leases report the prior completed HTTP RTT using a monotonic timer", async () => {
@@ -187,7 +172,7 @@ test("leases report the prior completed HTTP RTT using a monotonic timer", async
   const bodies:Record<string,unknown>[]=[];
   try {
     const client=api((_url,init)=>{bodies.push(record(JSON.parse(String(init?.body))));return Response.json({generation:"1",expires_at:"2026-10-15T14:32:00Z"});},"mk_token");
-    const quoter=new Quoter(client,"credential-1",quoteAccount);
+    const quoter=new Quoter(client,{id:"credential-1",quote_signer:quoteAccount.address},quoteAccount);
     await quoter.lease();
     await quoter.lease();
     expect(bodies[0]).toEqual({ttl_seconds:30});
@@ -214,14 +199,29 @@ test("delegated lines are checked, then every pool's set is signed and published
     headers.push(new Headers(init?.headers));
     if (init?.body) posted.push(record(JSON.parse(String(init.body))));
   });
-  const quoter = new Quoter(client, "credential-1", quoteAccount, testDeployments);
+  const quoter = new Quoter(client,{id:"credential-1",quote_signer:quoteAccount.address},quoteAccount, testDeployments);
   expect((await quoter.publishLines(lines, { polymarket: account.address }, validUntil)).revision).toBe("5");
   expect(posted[0]?.expected_revision).toBe("4");
   expect(array(posted[1]?.signatures)).toHaveLength(1);
   expect(headers.every(h => h.get("authorization") === "Bearer mk_scoped")).toBe(true);
-  // A server asking for a lower price is refused before any signature.
   quotes[0] = { ...required(quotes[0]), receive: "5000999" };
   posted.length = 0;
   await expect(quoter.publishLines(lines, { polymarket: account.address }, validUntil)).rejects.toThrow();
   expect(posted).toHaveLength(1);
+});
+
+test("the environment comes from the escrows the API names, and an Aster link needs one",async()=>{
+  const dev={hyperliquid:"0x948e65c40442d935d4ee990bdbd01bdd825c4873",polymarket:"0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1"};
+  const calls:string[]=[];
+  const named=(escrows:Record<string,string>)=>api(url=>{
+    calls.push(url);
+    if(!url.endsWith("/venues"))return new Response("unexpected",{status:500});
+    return Response.json(Object.entries(CHAINS).map(([venue,chain])=>({id:venue,enabled:true,settlement:["aster","lighter"].includes(venue)?"venue":"escrow",chain:{id:chain.id,token:chain.token,decimals:chain.decimals,escrow:escrows[venue] ?? chain.escrow}})));
+  });
+  expect(await checkDeployment(named({}))).toBe("production");
+  expect(await checkDeployment(named(dev))).toBe("development");
+  await expect(checkDeployment(named({hyperliquid:dev.hyperliquid}))).rejects.toThrow("API deployment differs");
+  calls.length=0;
+  await expect(new Maker(named({}),account,operator,"http://localhost:5173",testDeployments).link("aster")).rejects.toThrow("no pinned escrow environment");
+  expect(calls.every(url=>url.endsWith("/venues"))).toBe(true);
 });

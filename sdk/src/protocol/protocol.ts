@@ -1,5 +1,5 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { address, array, hex, record, required, type Verified } from "./validation.ts";
+import { address, array, hex, isAddress, record, required, toHex, type Verified } from "./validation.ts";
 import { ESCROW_DEPLOYMENTS, ESCROW_PROOF_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./deployments.ts";
 /**
  * Production's proxy, the same address on HyperEVM and Polygon (contracts/README.md#deployments).
@@ -20,7 +20,6 @@ export const CHAINS: Record<string, { id: number; token: string; decimals: numbe
   aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
   lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
 };
-/** Venues where the maker delivers inside the venue, read by the server, instead of the operator from his escrow offer. */
 export const VENUE_SETTLED = new Set(["lighter", "aster"]);
 /** A route whose first take pays inside a venue and goes through an escrow venue: LaMarge can have it signed at once. */
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
@@ -31,20 +30,14 @@ export const AT_ONCE_SEND_MARGIN_SECONDS = 30;
 /** Left before that cutoff for each request of a take signed at once: signed, then submitted with the others. The server offers signing at once only to windows that leave it. */
 export const AT_ONCE_SIGNING_SECONDS = 30;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-/** Aster's BSC chain, where its approvals and withdrawals are signed. */
 export const ASTER_CHAIN_ID = 56;
 /** Chain id of Aster's signing domain for transfers between accounts; no such chain exists. */
 export const ASTER_TRANSFER_CHAIN_ID = 1666;
-/** USDT on BSC. */
 const ASTER_DECIMALS = 18;
-/** Cap on an Aster withdrawal fee: 2 USDT (Aster quoted 0.11 in October 2026). */
+/** Maximum withdrawal fee: 2 USDT. */
 const ASTER_MAX_FEE = 2n * 10n ** BigInt(ASTER_DECIMALS);
 const ASTER_APPROVAL_DAYS = 365;
-/**
- * LaMarge's own slots on a user's venue accounts in each environment: a new registration replaces
- * the previous one, so environments never share one. Aster: its agent's name, as approving the same
- * name from another environment's addresses revokes the other agent; Lighter: its key's index.
- */
+/** Registration replaces the previous occupant; environments must use distinct Aster names and Lighter key indexes. */
 export const ENVIRONMENT_SLOTS = {
   production: { asterAgentName: "LaMarge", lighterKeyIndex: 254 },
   development: { asterAgentName: "LaMargeDev", lighterKeyIndex: 253 },
@@ -63,7 +56,6 @@ export type OpTyped = {
   types: Typed["types"]; primaryType: "Op"; domain: { name: string; version: string; chainId: number }; message: { data: string; salt: number; ts: number };
   op: { type: "internalTransfer"; args: { account: string; token: string; amount: string; to: string } };
 };
-/** What a withdrawal or a send signs. */
 export type TransferTyped = Typed | OpTyped;
 export const isOpTyped = (typed: TransferTyped): typed is OpTyped => typed.primaryType === "Op";
 export type SignItem = { kind: string; signer: string; typed_data: Typed; fill_id?: string | undefined };
@@ -99,7 +91,6 @@ export function convert(types: Typed["types"], kind: string, value: unknown): un
 export const same = (a: unknown, b: unknown) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 const DIFFERS = "The signing request differs from your instructions";
 export function insist(ok: unknown, message = DIFFERS): asserts ok { if (!ok) throw new Error(message); }
-/** The message naming the `field` of a signing request that differs from what was asked. */
 export const differs = (field: string) => `${DIFFERS}: ${field}`;
 export const uint = (value: unknown): bigint => { insist(typeof value === "string" && /^\d+$/.test(value) || typeof value === "number" && Number.isSafeInteger(value) && value >= 0, "Invalid signing integer"); return BigInt(value); };
 const fields = (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
@@ -122,7 +113,6 @@ export const schemas: Record<string, Record<string, { name: string; type: string
   Message: { Message: fields("msg:string") },
   Op: { Op: fields("data:bytes32,salt:uint64,ts:uint64") },
 };
-/** A signed take's payments, each with exactly the `LockPayment` fields. */
 export function takePayments(typed: Typed): Record<string, unknown>[] {
   const payments = array(typed.message.payments).map(record);
   insist(payments.length > 0 && payments.length <= 8 && payments.every(payment => Object.keys(payment).length === lockPayment.length), "Unexpected signing fields");
@@ -152,17 +142,15 @@ export function checkEscrowTyped(typed: Typed, venue: string, manifest: Deployme
   insist(!VENUE_SETTLED.has(venue) || typed.primaryType === "QuoteSet", "Unexpected signing request");
   checkEscrowTypedAt(typed, venue, escrow => isPinnedEscrow(venue, escrow, manifest));
 }
-/** Proof verification accepts the current protocol on reviewed deployments only. */
 export function checkEscrowProofTyped(typed: Typed, venue: string, manifest: DeploymentManifest = ESCROW_PROOF_DEPLOYMENTS): EscrowDeployment {
   insist(["QuoteSet", "FundOffer", "PayTake"].includes(typed.primaryType), "Unexpected signed agreement");
   const escrow = typed.domain.verifyingContract;
   const chain = CHAINS[venue];
   const deployment = chain && escrowDeployment(chain.id, escrow, manifest);
-  insist(deployment && deployment.version === 5, "Unexpected signing domain");
+  insist(deployment, "Unexpected signing domain");
   checkEscrowTypedAt(typed, venue, contract => same(contract, escrow));
   return deployment;
 }
-/** `pinned`: whether the escrow the request names, its domain's or a permit's spender, may be. */
 function checkEscrowTypedAt(typed: Typed, venue: string, pinned: (escrow: unknown) => boolean): void {
   checkTypes(typed);
   const chain = CHAINS[venue];
@@ -173,11 +161,7 @@ function checkEscrowTypedAt(typed: Typed, venue: string, pinned: (escrow: unknow
   insist(typed.domain.chainId === chain.id && (permit ? same(typed.domain.verifyingContract, chain.token) : pinned(typed.domain.verifyingContract)) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
   if (permit) insist(pinned(typed.message.spender), "Unexpected permit spender");
 }
-/**
- * A venue's chain as the API lists it: the pinned chain, token and decimals, an escrow `manifest`
- * pins on that chain (the signing domain's contract on a venue settled inside itself) and, when it
- * says one, the token's permit domain, none on a venue settled inside itself.
- */
+/** Validate the API's chain, token, decimals and permit domain against the pins; `manifest` selects permitted escrows. */
 export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined }, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
   const known = CHAINS[venue], permit = chain.permit;
   insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && isPinnedEscrow(venue, chain.escrow, manifest)
@@ -211,7 +195,6 @@ export function venueUnits(value: bigint, venue: string): bigint {
   const step = venueStep(venue);
   return (value + step - 1n) / step * step;
 }
-/** One token in native units, the automatic deposit sweep threshold. */
 export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(venue));
 /**
  * `dex: "xyz"`: a standard Hyperliquid account's transfer leaves its trade.xyz balance instead of
@@ -221,23 +204,27 @@ export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(
 export type Dex = "xyz" | undefined;
 /** The `sourceDex` a Hyperliquid transfer must sign: trade.xyz when asked, else the account mode's perps or spot. */
 const sourceDexes = (dex: Dex) => dex === "xyz" ? ["xyz"] : ["", "spot"];
-/** Venue withdrawals can only move this amount to the reviewed destination. */
+/** What every Hyperliquid `SendAsset` the SDK signs shares: USDC from the main account, at `now` seconds. */
+function checkSendAsset(typed: Typed, amount: bigint, now: number, stale: string) {
+  const m = typed.message, d = typed.domain;
+  insist(typed.primaryType === "HyperliquidTransaction:SendAsset", differs("primaryType"));
+  insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
+  insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
+  insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
+  insist(m.fromSubAccount === "", differs("fromSubAccount"));
+  insist(decimalUnits(m.amount, decimalsOf("hyperliquid")) === amount, differs("amount"));
+  insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, stale);
+}
 export function checkWithdrawal(typed: Typed, venue: string, signer: string, destination: string, amount: bigint, now = Date.now() / 1000, dex?: Dex): asserts typed is Verified<Typed> {
   checkTypes(typed);
   const m = typed.message, d = typed.domain;
   insist(amount > 0n, differs("amount"));
   if (venue === "hyperliquid") {
-    insist(typed.primaryType === "HyperliquidTransaction:SendAsset", differs("primaryType"));
-    insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, "0x0000000000000000000000000000000000000000"), differs("domain"));
+    checkSendAsset(typed, amount, now, "Stale withdrawal nonce");
     insist(same(destination, signer), differs("destination"));
-    insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
     insist(same(m.destination, "0x2000000000000000000000000000000000000000"), differs("destination"));
     insist(sourceDexes(dex).includes(String(m.sourceDex)), differs("sourceDex"));
     insist(m.destinationDex === "spot", differs("destinationDex"));
-    insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
-    insist(m.fromSubAccount === "", differs("fromSubAccount"));
-    insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
-    insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale withdrawal nonce");
   } else if (venue === "aster") {
     insist(!dex, differs("venue"));
     // Aster takes the fee out of the signed amount: `amount` is what arrives on BSC.
@@ -283,7 +270,7 @@ function msgpack(name: string, args: string[]): Uint8Array {
   return Uint8Array.from(bytes);
 }
 /** A Polymarket operation's `data`: keccak256 of its MessagePack, over the exact strings sent. */
-export const opHash = (name: string, args: string[]): string => `0x${Array.from(keccak_256(msgpack(name, args)), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+export const opHash = (name: string, args: string[]): string => `0x${toHex(keccak_256(msgpack(name, args)))}`;
 /**
  * Checks a send to `recipient`, another account on the same venue, against the requested amount
  * at `now` seconds; on Hyperliquid, `recipient` the signer itself for a move between its perps and
@@ -311,31 +298,24 @@ export function checkSend(typed: TransferTyped, venue: string, signer: string, r
     insist(Math.abs(Number(uint(m.ts)) / 1000 - now) <= 60, "Stale transfer timestamp");
     return;
   }
-  const m = typed.message, d = typed.domain;
+  const m = typed.message;
   if (venue === "hyperliquid") {
-    insist(typed.primaryType === "HyperliquidTransaction:SendAsset", differs("primaryType"));
-    insist(d.name === "HyperliquidSignTransaction" && d.version === "1" && d.chainId === 999 && same(d.verifyingContract, ZERO_ADDRESS), differs("domain"));
-    insist(m.hyperliquidChain === "Mainnet", differs("hyperliquidChain"));
+    checkSendAsset(typed, amount, now, "Stale transfer nonce");
     insist(typeof m.destination === "string" && m.destination === recipient.toLowerCase() && !isHyperliquidSystem(m.destination), differs("destination"));
     // A move leaves a standard account's perps (`""`) or trade.xyz for the other one.
     insist((move ? [dex === "xyz" ? "xyz" : ""] : sourceDexes(dex)).includes(String(m.sourceDex)), differs("sourceDex"));
     insist((move ? [dex === "xyz" ? "" : "xyz"] : ["", "spot"]).includes(String(m.destinationDex)), differs("destinationDex"));
-    insist(m.token === "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", differs("token"));
-    insist(m.fromSubAccount === "", differs("fromSubAccount"));
-    insist(decimalUnits(m.amount, decimalsOf(venue)) === amount, differs("amount"));
-    insist(Math.abs(Number(uint(m.nonce)) / 1000 - now) <= 60, "Stale transfer nonce");
   } else {
     insist(venue === "aster", differs("venue"));
     const transfer = asterTransfer(typed);
     insist(same(transfer.user, signer), differs("user"));
     insist(same(transfer.to, recipient), differs("toAddress"));
-    // A send's own id: neither a fill's nor a margin move's.
     insist(/^s[0-9a-f]{32}$/.test(transfer.id), differs("clientTranId"));
     insist(transfer.amount === venueUnits(amount, venue), differs("amount"));
     insist(Math.abs(transfer.nonce - now) <= 60, "Stale transfer nonce");
   }
 }
-/** A withdrawal's or, with `send`, a send's or a move's checks against its terms at `now` seconds. */
+/** `now` is Unix time in seconds. */
 export function checkTransfer(typed: TransferTyped, venue: string, signer: string, destination: string, amount: bigint, send: boolean, now?: number, dex?: Dex): asserts typed is Verified<TransferTyped> {
   if (send) checkSend(typed, venue, signer, destination, amount, now, dex);
   else if (isOpTyped(typed)) throw new Error("Unsupported signing request");
@@ -374,19 +354,13 @@ function asterMessage(typed: Typed, chainId: number): string {
   checkAsterRequest(typed, chainId);
   return String(typed.message.msg);
 }
-/** An Aster request's query string, its values by position under exactly `names`. */
 function asterFields(msg: string, names: string[], message: string): string[] {
   const pairs = msg.split("&").map(pair => pair.split("="));
   insist(pairs.length === names.length && pairs.every((pair, index) => pair.length === 2 && pair[0] === names[index]), message);
   return pairs.map(pair => required(pair[1]));
 }
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-/**
- * Where an agent may be used from, as Aster's `ipWhitelist` lists it, comma- or space-separated:
- * at most eight addresses, or ranges no wider than an IPv4 /24 or an IPv6 /64, in public IPv4
- * space (first octet 1 to 223) or IPv6 global unicast (2000::/3). No set of them covers every
- * address, and no form hides another (IPv4 inside IPv6, a zone).
- */
+/** Public IPs only: at most eight, with ranges no wider than IPv4 /24 or IPv6 /64. Reject aliases and embedded addresses. */
 function narrowAddresses(list: string): boolean {
   const entries = list.split(/[ ,]/);
   return entries.length <= 8 && entries.every(entry => {
@@ -403,13 +377,7 @@ function narrowAddresses(list: string): boolean {
       && first >= 0x2000 && first <= 0x3fff && (width === null || width >= 64 && width <= 128);
   });
 }
-/**
- * The agent approval an Aster account signs to link: LaMarge's agent for this address, valid one
- * year, on BSC, with only `canPerpTrade`, which can move margin only to the account's own Spot
- * wallet, and usable only from a few addresses when it lists them. The agent name must be one of
- * the environments' names, or `agentName`, the deployment's own, when given: approving another
- * environment's name revokes that environment's agent. Every other field is fixed.
- */
+/** Trade-only Aster approval for one year on BSC. Pin `agentName` to avoid revoking another environment's agent. */
 export function checkAsterApproval(challenge: AsterChallenge, address: string, now = Date.now(), agentName?: string): asserts challenge is AsterChallenge & { typed_data: Verified<Typed> } {
   insist(challenge.typed_data, "Missing agent approval");
   const msg = asterMessage(challenge.typed_data, ASTER_CHAIN_ID);
@@ -419,12 +387,11 @@ export function checkAsterApproval(challenge: AsterChallenge, address: string, n
   insist(msg === challenge.message, "Unexpected agent approval");
   insist(same(user, address), "The approval names another account");
   insist(nonce === challenge.nonce && /^\d{16}$/.test(nonce) && Math.abs(Number(nonce) / 1_000_000 - now / 1000) <= 60, "Stale agent approval");
-  insist(ASTER_AGENT_NAMES.includes(required(name)) && (agentName === undefined || name === agentName) && /^0x[0-9a-fA-F]{40}$/.test(required(agent)) && !same(agent, address), "Unexpected agent");
+  insist(ASTER_AGENT_NAMES.includes(required(name)) && (agentName === undefined || name === agentName) && isAddress(agent) && !same(agent, address), "Unexpected agent");
   insist(BigInt(required(expired)) === BigInt(nonce) / 1000n + BigInt(ASTER_APPROVAL_DAYS) * 86_400_000n, "Unexpected approval expiry");
   insist(chain === String(ASTER_CHAIN_ID) && spot === "false" && perp === "true" && withdraw === "false" && ips !== "", "The agent may only move margin to Spot");
   insist(ips === undefined || narrowAddresses(ips), "The agent may be used from too many addresses, or too wide a range");
 }
-/** A transfer of USDT between Aster accounts the payer's wallet signs: its decimal amount, recipient, id, microsecond nonce and payer. */
 export function asterTransfer(typed: Typed) {
   const msg = asterMessage(typed, ASTER_TRANSFER_CHAIN_ID);
   const [asset, amount, to, id, nonce, user] = asterFields(msg, ["asset", "amount", "toAddress", "clientTranId", "nonce", "user"], "Unexpected Aster transfer");
@@ -447,7 +414,6 @@ export function checkAsterTransfer(transfer: ReturnType<typeof asterTransfer>, f
 export type QuoteIntent = { venue: string; recipient: string; supply: string; receive: string; min_fill: string };
 type QuoteOrder = { id: string; venue: string; owner_address: string; quote_signer: string };
 export type PreparedQuote = { draft_id: string; sequence: number; valid_until: number; quote_size: string; expires_at: number; quotes: QuoteIntent[]; to_sign: SignItem[] };
-/** The published draft metadata and signed quote must both match the requested terms. */
 export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & { last_sequence: number }, requested: QuoteIntent | QuoteIntent[], validUntil: number, size: string): asserts prepared is PreparedQuote & { to_sign: Verified<SignItem[]> } {
   const quotes = Array.isArray(requested) ? requested : [requested];
   insist(quotes.length > 0, differs("quotes"));

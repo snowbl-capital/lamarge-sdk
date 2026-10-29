@@ -98,7 +98,6 @@ test("sign-in refuses a venue settled otherwise than pinned, another permit, or 
     await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("reviewed deployment");
   }
   expect(signed).toBe(0);
-  // A disabled venue names no chain.
   const rows = [...listed(), { id: "grvt", enabled: false, settlement: null, chain: null }];
   const { fetch } = answering(() => Response.json({ message: "", nonce: "n1", expires_at: "" }), () => Response.json(rows));
   await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("sign-in challenge");
@@ -119,7 +118,6 @@ test("sign-in refuses a challenge for another origin, then signs only the expect
   expect(client.token).toBe("session");
 });
 
-/** True when the operation can be called without options; checked by the compiler. */
 type Optional<A extends unknown[]> = [] extends A ? true : false;
 test("options are required exactly when the operation has a path, a required query or a body", () => {
   const order: Optional<CallArguments<"getOrder">> = false;

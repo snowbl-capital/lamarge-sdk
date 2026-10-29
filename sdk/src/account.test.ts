@@ -20,7 +20,6 @@ test("a permit the relay refuses at once stops there, before any margin moves fo
   const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const body: unknown = await new Request(input, init).json().catch(() => ({}));
     if (typeof body === "object" && body !== null && "signature" in body) submitted.push(body);
-    // Prepared, then submitted: the relay failed, and the step is required again.
     return Response.json(step);
   }, { preconnect: globalThis.fetch.preconnect });
   const signer = { address: owner, signMessage: async () => "0x00" as const, signTypedData: async () => "0x00" as const };
@@ -41,7 +40,6 @@ function approval() {
   } };
 }
 
-/** One venue's steps as the server answers them, and every request and signature the setup made. */
 function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: number) => Step | { status: number; code: string; message: string }, lighterOwner: string = owner, apiKey = TAKER_API_KEY) {
   const calls: string[] = [], typed: { chainId: number; msg: unknown }[] = [], messages: string[] = [];
   let attempts = 0;
@@ -74,7 +72,6 @@ function fixture(venue: string, steps: Step[], submit: (step: Step, attempt: num
     signTypedData: async (request: TypedDataRequest) => { typed.push({ chainId: request.domain.chainId, msg: request.message.msg }); return `0x${"ab".repeat(64)}1b` as const; },
   };
   const progress: SetupProgress[] = [];
-  // A wait lets the venue show the step it was awaiting.
   const sleep = async () => { const pending = steps.findIndex(step => step.status === "pending"); if (pending >= 0) steps[pending] = { ...required(steps[pending]), status: "done" }; };
   const run = (pins: { lighterKeyIndex?: number } = {}) => setUpVenue(createClient({ apiUrl: "http://localhost:8080", fetch }), venue, signer, { ...pins, onProgress: value => progress.push(value), sleep });
   return { calls, typed, messages, progress, run };

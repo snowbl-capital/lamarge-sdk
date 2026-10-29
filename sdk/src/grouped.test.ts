@@ -26,7 +26,7 @@ const first = {
   cancelled_at: null, created_at: iso(0), funding_plan: null, funding_plan_error: null, grouped: null, move: null,
 };
 const fill = (overrides: Record<string, unknown>) => ({ order_id: id, sequence: 1, role: "taker", state: "RESERVED", payer: owner, maker_owner: maker, maker_recipient: maker,
-  taker_recipient: owner, swap_id: id, hashlock, t1: iso(3600), t2: iso(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null,
+  taker_recipient: owner, taker_fee: "0", swap_id: id, hashlock, t1: iso(3600), t2: iso(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null,
   delivery_hash: null, ...overrides });
 const lighterTake = (out = "10000000") => ({ take: { id: "take-first", fills: [fill({ id: firstFill, take_id: "take-first", from_venue: "lighter", to_venue: "hyperliquid", amount_in: "10006500",
   amount_out: out, pay_by: iso(40) })] }, to_sign: [{ kind: "lighter_transfer", signer: owner, fill_id: firstFill,
@@ -71,7 +71,6 @@ function api(answers: { prepare?: () => unknown; commit?: () => unknown; abort?:
   }, { preconnect: globalThis.fetch.preconnect });
   return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, bodies };
 }
-/** The account signing everything, counting what it signs. */
 function wallet() {
   const signed: string[] = [];
   return { signed, signer: { address: owner, signMessage: async (request: { message: string }) => { signed.push("message"); return account.signMessage(request); },

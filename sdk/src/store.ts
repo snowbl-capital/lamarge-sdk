@@ -2,12 +2,7 @@ import type { TransferTyped, Typed } from "./protocol/protocol.ts";
 import { array, hex, isRecord, record } from "./protocol/validation.ts";
 import type { SignedItem } from "./signer.ts";
 
-/**
- * Where a flow keeps what it signed until the server has it: a restart then submits the same bytes
- * instead of signing again. Persist it (a file, a database) wherever a process can stop mid-flow.
- * One process writes a store: calls in that process are serialized per operation, another
- * process sharing it would sign apart.
- */
+/** Persist signatures before submission so restarts replay identical bytes. One writer process per store; operations are serialized only within it. */
 export interface SignatureStore {
   load(key: string): unknown | Promise<unknown>;
   save(key: string, value: unknown): void | Promise<void>;
@@ -18,7 +13,6 @@ export interface SignatureStore {
 export const canonical = (value: unknown): string =>
   JSON.stringify(value, (_key, field: unknown) => isRecord(field) ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => a < b ? -1 : 1)) : field);
 
-/** A stored bundle of signed items, read back as such or refused. */
 export function signedItems(value: unknown): SignedItem[] | undefined {
   if (value === undefined) return undefined;
   return array(value).map(entry => {

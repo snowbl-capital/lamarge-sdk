@@ -25,9 +25,12 @@ export function address(value: unknown): `0x${string}` {
   return value;
 }
 
-function isAddress(value: unknown): value is `0x${string}` {
+export function isAddress(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
 }
+
+export const toHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+export const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], byte => parseInt(byte, 16));
 
 export function hex(value: unknown): `0x${string}` {
   if (!isHex(value)) throw new Error("Invalid hexadecimal bytes");

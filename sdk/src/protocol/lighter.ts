@@ -1,25 +1,11 @@
-/**
- * Lighter transaction hashes and owner messages for the browser. The taker's wallet signs the
- * owner message (`L1Sig`) for what LaMarge's API key on its account signs; trade proofs are
- * checked by the transfer's Poseidon2 hash. Port of `server/src/lighter_sig`, itself ported
- * from Lighter's Go libraries and checked against their vectors.
- */
+/** Browser port of server/src/lighter_sig, verified against Lighter's Go vectors. Owner consent uses L1Sig; transaction proofs use Poseidon2. */
 import { DIAG, EXTERNAL, INTERNAL } from "./lighter-constants.ts";
 import { CHAINS, ENVIRONMENT_SLOTS } from "./protocol.ts";
-import { required } from "./validation.ts";
+import { required, toHex } from "./validation.ts";
 
-/** Lighter's L2 chain id, which every transaction hash names. */
 export const LIGHTER_CHAIN_ID = required(CHAINS.lighter).id;
-/** The API key index of LaMarge's key on a taker's account in production. */
 export const TAKER_API_KEY: number = ENVIRONMENT_SLOTS.production.lighterKeyIndex;
-/** LaMarge's key indexes, one per environment (`ENVIRONMENT_SLOTS`). */
 export const TAKER_API_KEYS: readonly number[] = Object.values(ENVIRONMENT_SLOTS).map(slots => slots.lighterKeyIndex);
-/** A maker bot's API key slot, `LIGHTER_API_KEY_INDEX`: 4 unless set, below LaMarge's taker keys. */
-export function makerKeySlot(value = "4"): number {
-  const slot = Number(value);
-  if (!Number.isInteger(slot) || slot < 4 || slot > 252) throw new Error("LIGHTER_API_KEY_INDEX is a key slot from 4 to 252");
-  return slot;
-}
 /** A taker's transfer moves USDC between collateral routes. */
 export const USDC_ASSET = 3;
 /** The most Lighter may charge a taker's account on top of a transfer, in USDC base units: it charges 0 or 1 USDC. */
@@ -29,8 +15,7 @@ export const COLLATERAL_ROUTE = 0;
 export const LIGHTER_API = "https://mainnet.zklighter.elliot.ai";
 
 /** The address owning Lighter account `index`, as Lighter's public API reads it, within ten seconds. */
-export async function lighterAccountOwner(index: number, signal?: AbortSignal, fetcher: ((url: string, init: RequestInit) => Promise<Response>) | undefined = fetch): Promise<string> {
-  fetcher ??= fetch;
+export async function lighterAccountOwner(index: number, signal?: AbortSignal, fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch): Promise<string> {
   const timeout = AbortSignal.timeout(10_000);
   const response = await fetcher(`${LIGHTER_API}/api/v1/account?by=index&value=${index}`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   const body: unknown = response.ok ? await response.json() as unknown : undefined;
@@ -41,7 +26,6 @@ export async function lighterAccountOwner(index: number, signal?: AbortSignal, f
   return owner;
 }
 
-/** An element of a fixed-size array; out of range is a bug. */
 function at<T>(values: ArrayLike<T>, index: number): T {
   const value = values[index];
   if (value === undefined) throw new RangeError(`index ${index} out of range`);
@@ -96,12 +80,10 @@ export function hashToFp5(input: readonly bigint[]): bigint[] {
   return state.slice(0, 5);
 }
 
-/** An internal transfer, as LaMarge's key and the account's owner sign it. */
 export interface LighterTransfer {
   from: number; apiKey: number; to: number; asset: number; fromRoute: number; toRoute: number;
   amount: bigint; fee: bigint; memo: Uint8Array; expiredAt: number; nonce: number;
 }
-/** An API key registration, which LaMarge's key and the account's owner sign. */
 interface LighterKeyRegistration { account: number; apiKey: number; publicKey: Uint8Array; nonce: number }
 
 const MASK32 = 0xffffffffn;
@@ -111,8 +93,6 @@ export function transferHash(t: LighterTransfer, chainId = LIGHTER_CHAIN_ID): Ui
     BigInt(t.asset), BigInt(t.fromRoute), BigInt(t.toRoute), t.amount & MASK32, t.amount >> 32n, t.fee & MASK32, t.fee >> 32n]));
 }
 const hex10 = (value: number | bigint) => `0x${BigInt(value).toString(16).padStart(16, "0")}`;
-export const toHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-export const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], byte => parseInt(byte, 16));
 /** The memo naming a fill: its id's 16 bytes then 16 zero bytes, as hex. */
 export const fillMemo = (fill: string) => fill.replaceAll("-", "").toLowerCase().padEnd(64, "0");
 /** The text the owner signs with `personal_sign` for a transfer to another owner. */

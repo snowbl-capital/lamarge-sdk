@@ -1971,7 +1971,8 @@
         ],
         "summary": "Atomically cancel quotes",
         "operationId": "postV1QuotesBatch",
-        "description": "Cancels every order's quotes, or none, each as an unguarded `DELETE /v1/orders/{id}/quotes`. Results are sorted by order id. Credential scope: `cancel`.",
+        "deprecated": true,
+        "description": "Cancels every order's quotes, or none, each as an unguarded `DELETE /v1/orders/{id}/quotes`. Results are sorted by order id. Credential scope: `cancel`. Use `DELETE /v1/quote-identities/{id}/quotes` instead.",
         "security": [
           {
             "session": []
@@ -3242,7 +3243,7 @@
         ],
         "operationId": "prepareGroupedRoute",
         "summary": "Prepare a grouped route",
-        "description": "For a route's first transfer whose take is reserved and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, reserves its take now and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. For Aster, refreshes the still-live unsigned first take with about 90 seconds until `commit_by` and a nonce 20 seconds later; sign the returned requests. Requires a route payment window of at least 150 seconds. Idempotent while prepared: another preparation changes neither the requests nor the deadline. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); the caller decides whether to try leg by leg. With `reason` `grouped_route`: another request is preparing this route.",
+        "description": "For a route's first transfer whose take is prepared and unsigned, paid from Lighter or Aster and through an escrow venue: creates the second transfer, prepares its take without reserving inventory and answers both takes to sign; the second pays from the available balance the first is delivered into, with no withdrawal. Sign in order: the first take's request, then the second take's `pay_take`. For Aster, refreshes the still-live unsigned first take with about 90 seconds until `commit_by` and a nonce 20 seconds later; sign the returned requests. Requires a route payment window of at least 150 seconds. Idempotent while prepared: another preparation changes neither the requests nor the deadline. `STATE_CONFLICT` with `reason` `grouped_unavailable`: the route cannot be grouped (not eligible, the book or the accounts on the intermediate venue do not carry it now, too little time left, or it was aborted); the caller decides whether to try leg by leg. With `reason` `grouped_route`: another request is preparing this route.",
         "security": [
           {
             "session": []
@@ -3290,7 +3291,7 @@
         ],
         "operationId": "abortGroupedRoute",
         "summary": "Abort a prepared route",
-        "description": "Ends a route not committed: its second take and second transfer are released at once. The first take stays reserved, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.",
+        "description": "Ends a route not committed: its second take and second transfer are released at once. The first take stays prepared, to sign alone. Idempotent. `STATE_CONFLICT` for a committed route, which runs to its end.",
         "security": [
           {
             "session": []
@@ -3398,7 +3399,7 @@
           "Takes and fills"
         ],
         "summary": "Take at market",
-        "description": "Reserves up to `max_parts` fills paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.",
+        "description": "Prepares up to `max_parts` fills in `PREPARED`, without reserving maker liquidity, paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). After signatures and payment preflight, all parts reserve atomically just before payment. A stale or consumed offer expires unpaid with a reason; prepare and sign again. No bond is required. One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.",
         "operationId": "postTake",
         "security": [
           {
@@ -3531,7 +3532,7 @@
           "Takes and fills"
         ],
         "summary": "Cancel a take",
-        "description": "Allowed until its signature is accepted, a take signed at once's included, also after an unsigned expiry; repeats answer 204. Its `RESERVED` fills expire (`declined`), releasing their reservations.",
+        "description": "Allowed until its signature is accepted, a take signed at once's included, also after an unsigned expiry; repeats answer 204. Its unsigned fills expire (`declined`), releasing their source commitments.",
         "operationId": "deleteTake",
         "security": [
           {
@@ -3578,7 +3579,7 @@
           "Takes and fills"
         ],
         "summary": "Submit take signatures",
-        "description": "The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once the maker is locked. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. A refused withdrawal ends the take at once (`EXPIRED`, reason `the withdrawal was refused`). Once accepted, retries return the current fills.",
+        "description": "The payer's `pay_take` signature, with the take id as `fill_id`, before `pay_by`; the deposit and every payment go in one transaction, all or none, mined by `pay_by`. A take paid from Lighter sends the `personal_sign` of the `lighter_transfer` message instead, one paid from Aster the EIP-712 signature of the `aster_transfer` request; LaMarge sends that transfer once every maker accepted. A take signed at once (funding plan `signed_at_once`) also carries its transfer's prepared withdrawal as a `margin_move` item without `fill_id` (`VALIDATION_ERROR` without it), until 30 seconds before `pay_by` (`TAKE_EXPIRED`): both are accepted together and the withdrawal sent at once; the payment is sent once a chain read shows its funds in the wallet, with ten seconds left before `pay_by`, else the take expires unpaid. A refused withdrawal ends the take at once (`EXPIRED`, reason `the withdrawal was refused`). Once accepted, retries return the current fills.",
         "operationId": "postTakeSignatures",
         "security": [
           {
@@ -3642,7 +3643,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is not `RESERVED`; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. For a take signed at once, `STATE_CONFLICT` also when another withdrawal on the venue is unresolved or the margin no longer covers the withdrawal.",
+            "description": "`TAKE_EXPIRED`: `pay_by` passed (for a take signed at once, its last 30 seconds began) or a fill is no longer awaiting payment; take again. `STATE_CONFLICT` with `reason` `grouped_route`: an open grouped route holds it until it ends: commit or abort the route instead. For a take signed at once, `STATE_CONFLICT` also when another withdrawal on the venue is unresolved or the margin no longer covers the withdrawal.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3802,6 +3803,59 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/v1/fills/{id}/accept": {
+      "post": {
+        "tags": [
+          "Takes and fills"
+        ],
+        "operationId": "acceptFill",
+        "summary": "Accept an active delivery before taker funding",
+        "description": "Commits the maker to deliver this fill, before `maker_accept_by`. The taker's payment waits for every acceptance of the take (both takes of a grouped route); a missing one expires the unpaid take. Retries of an accepted fill return 204, also after the deadline.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "makerCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Acceptance recorded, also on a retry."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "No pending request, or the acceptance window closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -6234,8 +6288,6 @@
         "required": [
           "assets",
           "trades_30d",
-          "maker_fee_bps",
-          "taker_fee_bps",
           "maker"
         ],
         "properties": {
@@ -6252,18 +6304,6 @@
           "trades_30d": {
             "type": "integer",
             "minimum": 0
-          },
-          "maker_fee_bps": {
-            "type": "integer",
-            "const": 0,
-            "deprecated": true,
-            "description": "Makers pay no fee."
-          },
-          "taker_fee_bps": {
-            "type": "integer",
-            "const": 0,
-            "deprecated": true,
-            "description": "Taker fees are per pair, in each book's `taker_fee_bps`."
           }
         }
       },
@@ -6553,7 +6593,7 @@
       },
       "LighterTransferTerms": {
         "type": "object",
-        "description": "The internal transfer LaMarge sends from your Lighter account once the maker is locked, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it.",
+        "description": "The internal transfer LaMarge sends from your Lighter account once every maker accepted, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it.",
         "required": [
           "api_key_index",
           "from_account_index",
@@ -6703,7 +6743,7 @@
           "wallet",
           "venue"
         ],
-        "description": "Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit, awaited on top of the tokens already at the linked address, which stay unused."
+        "description": "Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move."
       },
       "MakerInput": {
         "type": "object",
@@ -6850,7 +6890,6 @@
           "state",
           "error",
           "amount",
-          "escrow_available",
           "delivery_fee",
           "quotable",
           "filled",
@@ -6914,11 +6953,6 @@
           "held": {
             "$ref": "#/components/schemas/Amount",
             "description": "What the order holds, where `held_in` says: unlocked escrow; for a Lighter or Aster pool, its account's transferable balance at the last read less deliveries since, within the cap left."
-          },
-          "escrow_available": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Former name of `held`; removed once makers have moved."
           },
           "delivery_fee": {
             "$ref": "#/components/schemas/Amount",
@@ -7633,7 +7667,7 @@
       },
       "GroupedRoute": {
         "type": "object",
-        "description": "A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes are reserved, to sign and commit before `commit_by`. `committed`: the operator runs it; nothing is left to sign. `aborted`: never committed, its second take released; the caller decides whether to sign the first alone. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`.",
+        "description": "A grouped route, signed at once: its first transfer pays from Lighter or Aster, through an escrow venue. `prepared`: its takes hold no maker inventory; sign and commit before `commit_by`. `committed`: the operator reserves both inventories just before the first payment, then runs the route; nothing is left to sign. `aborted`: never committed, its second take released; the caller decides whether to sign the first alone. `closed`: committed, and nothing of it can move any more; what is left continues from `continuable`.",
         "required": [
           "state",
           "second_transfer_id",
@@ -7803,7 +7837,6 @@
           "state",
           "reason",
           "pay_by",
-          "reveal_by",
           "t1",
           "t2",
           "deliver_by",
@@ -7812,6 +7845,8 @@
           "delivery_hash",
           "delivery_fee",
           "payment_verified_at",
+          "maker_accept_by",
+          "maker_accepted_at",
           "created_at",
           "updated_at",
           "settled_at",
@@ -7981,11 +8016,6 @@
             "$ref": "#/components/schemas/Timestamp",
             "description": "Payment must lock by then."
           },
-          "reveal_by": {
-            "$ref": "#/components/schemas/Timestamp",
-            "deprecated": true,
-            "description": "Equal to `t1` since deliveries, which no taker claim precedes."
-          },
           "t1": {
             "$ref": "#/components/schemas/Timestamp",
             "description": "On an escrow venue, the delivery's deadline: LaMarge's delivery names it and the escrow refuses it after; still undelivered then, the payment returns at once. Before deliveries, the maker lock's refund time."
@@ -8027,6 +8057,22 @@
           "delivery_fee": {
             "$ref": "#/components/schemas/Amount",
             "description": "Venue fee charged to the maker's account on top of the delivery, in `to_venue` base units: as read at reservation, then the delivery's actual fee. `0` on an escrow venue."
+          },
+          "maker_accept_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Deadline of the maker's acceptance, at most 15 seconds after signing; null when none is asked."
+          },
+          "maker_accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the maker accepted the fill."
           },
           "payment_verified_at": {
             "type": [
@@ -8176,6 +8222,7 @@
       "FillState": {
         "type": "string",
         "enum": [
+          "PREPARED",
           "RESERVED",
           "PAID",
           "PAYING",
@@ -8188,7 +8235,7 @@
           "MAKER_LOSS",
           "TAKER_LOSS"
         ],
-        "description": "`PAID`: the payment is locked, or executed on Lighter or Aster, and the delivery pending. `CLAIMING`: delivered, the payment still locked. `REFUNDING`: the delivery abandoned, the payment still locked. `PAYING` and `LOCKED`: fills settled with maker locks, before deliveries."
+        "description": "`PREPARED`: no maker inventory is claimed. `RESERVED`: execution was admitted and inventory is held for payment. `PAID`: the payment is locked, or executed on Lighter or Aster, and the delivery pending. `CLAIMING`: delivered, the payment still locked. `REFUNDING`: the delivery abandoned, the payment still locked. `PAYING` and `LOCKED`: fills settled with maker locks, before deliveries."
       },
       "PaymentLeg": {
         "type": "string",
@@ -8484,8 +8531,6 @@
         "required": [
           "maker_timeout_seconds",
           "taker_timeout_seconds",
-          "lock_cutoff_seconds",
-          "reveal_cutoff_seconds",
           "delivery"
         ],
         "properties": {
@@ -8496,18 +8541,6 @@
           "taker_timeout_seconds": {
             "type": "integer",
             "minimum": 1
-          },
-          "lock_cutoff_seconds": {
-            "type": "integer",
-            "minimum": 1,
-            "deprecated": true,
-            "description": "Unused since deliveries."
-          },
-          "reveal_cutoff_seconds": {
-            "type": "integer",
-            "minimum": 1,
-            "deprecated": true,
-            "description": "Unused since deliveries."
           },
           "delivery": {
             "description": "Deliveries on Lighter and Aster; null when neither is enabled. Fills carry their `deliver_by` and `report_by`.",
@@ -8834,14 +8867,11 @@
           "decimals",
           "chain_observation",
           "maker_escrow",
-          "maker_escrow_unlocked",
           "maker_pool_inventory",
           "maker_reserved",
-          "maker_locked",
           "maker_delivered_unpaid",
           "maker_payment_locked",
-          "taker_payment_locked",
-          "taker_receive_locked"
+          "taker_payment_locked"
         ],
         "properties": {
           "venue": {
@@ -8886,11 +8916,6 @@
             "$ref": "#/components/schemas/Amount",
             "description": "Orders' unlocked escrow, Lighter and Aster pools excluded."
           },
-          "maker_escrow_unlocked": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "`maker_escrow` + `maker_pool_inventory`, its former meaning; removed once makers have moved."
-          },
           "maker_pool_inventory": {
             "$ref": "#/components/schemas/Amount",
             "description": "Lighter or Aster pool: the account's transferable balance at the last read less deliveries since, within the cap left. Part of the venue account's equity, never added to it."
@@ -8898,11 +8923,6 @@
           "maker_reserved": {
             "$ref": "#/components/schemas/Amount",
             "description": "Output of the maker's reserved or paid fills not yet delivered; can exceed observed inventory."
-          },
-          "maker_locked": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Maker locks, before deliveries."
           },
           "maker_delivered_unpaid": {
             "$ref": "#/components/schemas/Amount",
@@ -8913,11 +8933,6 @@
           },
           "taker_payment_locked": {
             "$ref": "#/components/schemas/Amount"
-          },
-          "taker_receive_locked": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Maker locks for the taker, before deliveries."
           }
         }
       },
@@ -9662,7 +9677,6 @@
           "state",
           "venue",
           "held",
-          "escrow_available",
           "held_in",
           "sequence",
           "cancel_epoch",
@@ -9680,11 +9694,6 @@
           },
           "held": {
             "$ref": "#/components/schemas/Amount"
-          },
-          "escrow_available": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Former name of `held`; removed once makers have moved."
           },
           "held_in": {
             "$ref": "#/components/schemas/HeldIn"
@@ -9729,6 +9738,8 @@
           "maker_out",
           "from",
           "to",
+          "from_venue",
+          "to_venue",
           "pay_by",
           "t1",
           "t2",
@@ -9738,6 +9749,8 @@
           "delivery_hash",
           "delivery_fee",
           "payment_verified_at",
+          "maker_accept_by",
+          "maker_accepted_at",
           "reason",
           "role"
         ],
@@ -9821,9 +9834,19 @@
             "description": "What leaves the maker's order."
           },
           "from": {
-            "$ref": "#/components/schemas/VenueId"
+            "$ref": "#/components/schemas/VenueId",
+            "deprecated": true,
+            "description": "Former name of `from_venue`."
           },
           "to": {
+            "$ref": "#/components/schemas/VenueId",
+            "deprecated": true,
+            "description": "Former name of `to_venue`."
+          },
+          "from_venue": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "to_venue": {
             "$ref": "#/components/schemas/VenueId"
           },
           "pay_by": {
@@ -9863,6 +9886,20 @@
           },
           "delivery_fee": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "maker_accept_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "maker_accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "payment_verified_at": {
             "type": [
@@ -10390,7 +10427,6 @@
           "state",
           "venue",
           "held",
-          "escrow_available",
           "held_in",
           "sequence",
           "cancel_epoch",
@@ -10411,11 +10447,6 @@
           },
           "held": {
             "$ref": "#/components/schemas/Amount"
-          },
-          "escrow_available": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Former name of `held`; removed once makers have moved."
           },
           "held_in": {
             "$ref": "#/components/schemas/HeldIn"
@@ -10469,6 +10500,8 @@
           "maker_out",
           "from",
           "to",
+          "from_venue",
+          "to_venue",
           "pay_by",
           "t1",
           "t2",
@@ -10478,6 +10511,8 @@
           "delivery_hash",
           "delivery_fee",
           "payment_verified_at",
+          "maker_accept_by",
+          "maker_accepted_at",
           "reason",
           "role",
           "revision"
@@ -10562,9 +10597,19 @@
             "description": "What leaves the maker's order."
           },
           "from": {
-            "$ref": "#/components/schemas/VenueId"
+            "$ref": "#/components/schemas/VenueId",
+            "deprecated": true,
+            "description": "Former name of `from_venue`."
           },
           "to": {
+            "$ref": "#/components/schemas/VenueId",
+            "deprecated": true,
+            "description": "Former name of `to_venue`."
+          },
+          "from_venue": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "to_venue": {
             "$ref": "#/components/schemas/VenueId"
           },
           "pay_by": {
@@ -10604,6 +10649,20 @@
           },
           "delivery_fee": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "maker_accept_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "maker_accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "payment_verified_at": {
             "type": [
@@ -10795,7 +10854,6 @@
           "state",
           "amount",
           "held",
-          "escrow_available",
           "held_in",
           "quotable",
           "created_at",
@@ -10821,11 +10879,6 @@
           },
           "held": {
             "$ref": "#/components/schemas/Amount"
-          },
-          "escrow_available": {
-            "$ref": "#/components/schemas/Amount",
-            "deprecated": true,
-            "description": "Former name of `held`; removed once makers have moved."
           },
           "held_in": {
             "$ref": "#/components/schemas/HeldIn"
@@ -10884,7 +10937,6 @@
           "maker_leg",
           "state",
           "pay_by",
-          "reveal_by",
           "t1",
           "t2",
           "created_at",
@@ -10958,10 +11010,6 @@
           },
           "pay_by": {
             "$ref": "#/components/schemas/Timestamp"
-          },
-          "reveal_by": {
-            "$ref": "#/components/schemas/Timestamp",
-            "deprecated": true
           },
           "t1": {
             "$ref": "#/components/schemas/Timestamp"

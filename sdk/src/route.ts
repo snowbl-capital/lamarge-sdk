@@ -8,14 +8,12 @@ import type { Fill } from "./take.ts";
 import { consent, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
 import { RouteAbandoned, signRoute } from "./grouped.ts";
 
-/** A route's two transfers: the first from `from` to `via`, the second from `via` to `to`, as `GET /v1/routes` plans them. */
 export interface RouteRequest {
   /** Persist it before the first call: the first transfer goes under it, the second under it and `.2`. */
   client_transfer_id: string;
   from: string;
   via: string;
   to: string;
-  /** The first take: what it pays on `from`, and the least it delivers on `via`. */
   amount_in: string;
   min_out: string;
   /** The second take as planned: what it pays on `via`, the least it delivers on `to`, and the highest taker fee it accepts (none without). */
@@ -28,7 +26,6 @@ export interface RouteRequest {
   funding: Funding;
   /** `xyz`: from a standard Hyperliquid account, the first transfer's withdrawal leaves its trade.xyz balance. */
   from_dex?: "xyz" | undefined;
-  /** The route's first transfer, as `onIntent` last named it. */
   transfer_id?: string | undefined;
   /** Its second, as `onIntent` last named it: LaMarge no longer counts what that one holds as left to continue with. */
   then_transfer_id?: string | undefined;
@@ -57,7 +54,6 @@ function delivered(fills: Fill[]) {
     kept: claimed.length > 0 && claimed.every(fill => fill.maker_destination === "escrow") };
 }
 
-/** The latest transfer continuing `first`, read back through the history down to `first` itself. */
 async function lastContinuation(client: Client, first: TransferIntent, signal?: AbortSignal): Promise<TransferIntent | undefined> {
   let after: string | undefined;
   for (;;) {
@@ -89,12 +85,12 @@ export async function route(client: Client, signer: Signer, request: RouteReques
       max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, amount_in: request.then.amount_in, min_out: request.then.min_out,
         ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps), ...request.from_dex ? { from_dex: request.from_dex } : {} }, signal, retry: true });
   const then = first.then;
-  // The first transfer is the one asked before anything of it is reserved or signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
+  // The first transfer is the one asked before anything of it is signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
   insist(then && first.from === request.from && first.to === request.via && first.from_chain_id === CHAINS[request.from]?.id && first.to_chain_id === CHAINS[request.via]?.id
     && first.amount_in === request.amount_in && first.min_out === request.min_out && first.max_fee_bps === request.max_fee_bps && first.from_dex === request.from_dex && same(first.payer, signer.address) && same(first.recipient, hub.address)
     && then.to === request.to && same(then.recipient, request.recipient) && then.amount_in === request.then.amount_in && then.min_out === request.then.min_out
     && then.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
-  // Signed at once where it can be: committed, it runs to its end with nothing left to sign. It is named before anything of it is reserved or signed.
+  // Signed at once where it can be: committed, it runs to its end with nothing left to sign.
   if (options.grouped === true && !first.cancelled_at && groupable(request.from, request.via) && (!first.grouped || first.grouped.state === "prepared")) {
     await onIntent?.(first);
     await signRoute(client, signer, hub, first, { store: options.store, signal, beforeSigning: options.beforeSigning, now, lock: options.lock });
@@ -172,7 +168,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     if (now() >= deadline) throw new TransferPending(first, "arrival_unconfirmed");
     await sleep(pollMs);
   }
-  // A cancelled one, as when its review was left, held nothing; nor does a route's own second, once closed: its successor goes under a client id derived from it, with what is left now.
+  // A successor of the latest continuation goes under `renew:<id>`, with what is left now.
   const second = await client.call("postTransfer", { body: { client_transfer_id: latest ? `renew:${latest.id}` : secondId, from: request.via, to: request.to, amount_in: amount.toString(),
     min_out: minOut.toString(), max_parts: MAX_PARTS, payer: hub.address, recipient: request.recipient, previous_transfer_id: first.id, ...consent(request.then.max_fee_bps) }, signal, retry: true });
   return { first: fills, second: [...paid, ...await continuing(second)] };

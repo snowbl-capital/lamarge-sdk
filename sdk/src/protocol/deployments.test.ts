@@ -6,10 +6,10 @@ test("only the reviewed proxy permits balances and deposit receivers", () => {
   for (const deployment of ESCROW_DEPLOYMENTS) expect(requireV5Deployment(deployment.chainId, deployment.address).version).toBe(5);
   // Earlier proxies: v4 on HyperEVM, Polygon and BSC, and v1 at the address BSC's v4 reuses.
   for (const [chainId, address] of [[999, "0xe0384a3026d52120c20c12ceb33e73096e1d2eca"], [137, "0xe0384a3026d52120c20c12ceb33e73096e1d2eca"], [56, "0xf0946794b2932ca342e68a9fd54ad30e5ff952e3"], [999, "0xf0946794b2932ca342e68a9fd54ad30e5ff952e3"]] as const) {
-    expect(() => requireV5Deployment(chainId, address)).toThrow("not available");
+    expect(() => requireV5Deployment(chainId, address)).toThrow("No pinned escrow");
     expect(escrowDeployment(chainId, address)).toBeUndefined();
   }
-  expect(() => requireV5Deployment(137, "0x5000000000000000000000000000000000000001")).toThrow("not available");
+  expect(() => requireV5Deployment(137, "0x5000000000000000000000000000000000000001")).toThrow("No pinned escrow");
 });
 
 test("each pinned deployment names its environment, which has one escrow on each chain", () => {
@@ -29,7 +29,7 @@ test("pure deployment validation accepts only a reviewed chain and address pair"
 
 test("retired v5 deployments remain provable but cannot receive new funding", () => {
   for (const deployment of RETIRED_V5_DEPLOYMENTS) {
-    expect(() => requireV5Deployment(deployment.chainId, deployment.address)).toThrow("not available");
+    expect(() => requireV5Deployment(deployment.chainId, deployment.address)).toThrow("No pinned escrow");
     expect(escrowDeployment(deployment.chainId, deployment.address, ESCROW_PROOF_DEPLOYMENTS)).toEqual(deployment);
   }
 });
@@ -40,8 +40,8 @@ test("a signing bundle is refused whole when one quote set, funding or payment n
   const pinned = [item("quote_set", required(venue).chainId, required(venue).address), item("fund", required(escrow).chainId, required(escrow).address), item("pay_take", required(escrow).chainId, required(escrow).address)];
   expect(() => requireSigningDomains(pinned)).not.toThrow();
   // A venue's signing domain names quote sets only: nothing is ever funded or paid there.
-  for (const kind of ["fund", "pay_take"]) expect(() => requireSigningDomains([...pinned, item(kind, required(venue).chainId, required(venue).address)])).toThrow("not available");
-  for (const kind of ["quote_set", "fund", "pay_take"]) expect(() => requireSigningDomains([...pinned, item(kind, retired.chainId, retired.address)])).toThrow("not available");
+  for (const kind of ["fund", "pay_take"]) expect(() => requireSigningDomains([...pinned, item(kind, required(venue).chainId, required(venue).address)])).toThrow("No pinned escrow");
+  for (const kind of ["quote_set", "fund", "pay_take"]) expect(() => requireSigningDomains([...pinned, item(kind, retired.chainId, retired.address)])).toThrow("No pinned escrow");
 });
 
 test("each environment's pinned escrow may be named, on its own chain; a venue settled inside itself keeps its one domain", () => {
@@ -59,7 +59,6 @@ test("each environment's pinned escrow may be named, on its own chain; a venue s
   expect(() => checkEscrowTyped(fund(development), "hyperliquid")).toThrow("Unexpected signing domain");
   expect(() => checkEscrowTyped(permit(development), "hyperliquid")).toThrow("Unexpected permit spender");
   expect(() => checkRegistry("hyperliquid", { ...required(CHAINS.hyperliquid), permit: undefined, escrow: development })).toThrow("API deployment differs");
-  // Pinned on HyperEVM only: never Polygon's.
   expect(isPinnedEscrow("polymarket", development, both)).toBe(false);
   expect(() => checkRegistry("polymarket", { ...required(CHAINS.polymarket), permit: undefined, escrow: development }, both)).toThrow("API deployment differs");
   const { id, token, decimals, escrow: domain } = required(CHAINS.aster), aster = { id, token, decimals, escrow: domain };

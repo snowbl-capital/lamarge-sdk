@@ -2,7 +2,6 @@ import { ESCROW_DEPLOYMENTS } from "./deployments.ts";
 import { CHAINS, checkDeadline, checkEscrowTyped, checkRegistry, insist, same, type SignItem } from "./protocol.ts";
 import { required, type Verified } from "./validation.ts";
 
-/** Each venue's name, as the link message names it. */
 const VENUE_NAMES: Record<string, string> = { hyperliquid: "Hyperliquid", polymarket: "Polymarket Perps", lighter: "Lighter", aster: "Aster" };
 
 /** The message `address` signs to be linked on `venue` under `master`: six lines, naming all three, valid ten minutes at most. */
@@ -13,10 +12,8 @@ export function checkLinkChallenge(challenge: { message: string; nonce: string; 
     && lines[4] === `Nonce: ${challenge.nonce}` && lines[5] === `Expires: ${challenge.expires_at}` && expires > now && expires <= now + 10 * 60_000, "Unexpected account-link challenge");
 }
 
-/** The one kind of request each setup step signs. */
 const SETUP_KINDS: Record<string, string> = { permit: "permit", agent: "aster_approval", api_key: "lighter_api_key" };
 
-/** A prepared setup step's request asks the kind of signature its step does, and nothing else. */
 export function checkSetupKind(step: string, kind: string): void {
   insist(SETUP_KINDS[step] === kind, "The setup step asks another kind of signature");
 }
@@ -30,10 +27,9 @@ type FundingPlan = {
 /** What a transfer from wallet funds will ask its payer to sign: at most a permit, a margin withdrawal and the payment, on the pinned escrow chain, for this amount. */
 export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; recipient?: string | undefined; to_dex?: string | undefined;
   funding_plan: P | null; funding_plan_error?: { message: string } | null }, now = Date.now()): P {
-  // The server says why it has no plan, such as a balance short of the amount.
   const plan = required(intent.funding_plan, intent.funding_plan_error?.message ?? "Funding details unavailable; try again shortly");
   const chain = required(CHAINS[intent.from], "Unknown funding venue");
-  insist(ESCROW_DEPLOYMENTS.some(deployment => deployment.chainId === chain.id), "The balance upgrade is not available on this venue yet");
+  insist(ESCROW_DEPLOYMENTS.some(deployment => deployment.chainId === chain.id), "No pinned escrow on this venue");
   insist(plan.venue === intent.from && same(plan.owner, intent.payer) && plan.amount === intent.amount_in
     && BigInt(plan.deposit) <= BigInt(plan.amount) && BigInt(plan.withdrawal_amount) <= BigInt(plan.amount), "Funding details changed; review the transfer");
   const age = now - Date.parse(plan.observed_at);
@@ -104,18 +100,10 @@ export function checkPaymentRefund<F extends RefundFill, P extends { deadline: n
 /** An escrow lock as `locks(owner, offerId, swapId)` returns it: amount, hashlock, recipient, refundAt, state (0 none, 1 locked, 2 claimed, 3 refunded), dex. */
 export type EscrowLock = readonly [bigint, string, string, bigint, number, number];
 
-/**
- * The payment lock refunds `fill.amount_in` to its payer at `t2`, and, on an escrow destination,
- * the maker's slot `locks(maker_owner, order_id, swap_id)` was never used: neither delivered (a
- * delivery is kept there as a claimed lock) nor, before deliveries, locked. Consenting gives up
- * nothing delivered.
- */
-export function checkRefundLocks<F extends RefundFill>(fill: F, payment: EscrowLock, maker: EscrowLock | null): void {
-  // A fill keeps the settlement it was taken under: delivered inside the venue, it has a deadline.
-  const inVenue = Boolean(fill.deliver_by);
-  insist(inVenue === (maker === null), "Unsupported refund chain");
-  insist(!inVenue || !fill.delivery_hash, "This fill was delivered");
+/** The payment lock of an undelivered fill, delivered inside its venue, refunds `fill.amount_in` to its payer at `t2`. */
+export function checkRefundLocks<F extends RefundFill>(fill: F, payment: EscrowLock): void {
+  insist(Boolean(fill.deliver_by), "Unsupported refund chain");
+  insist(!fill.delivery_hash, "This fill was delivered");
   insist(payment[4] === 1 && payment[0] === BigInt(fill.amount_in) && same(payment[1], fill.hashlock)
-    && same(payment[2], fill.maker_recipient) && payment[3] === BigInt(Math.floor(Date.parse(fill.t2) / 1000))
-    && (maker === null || maker[4] === 0), "The onchain locks no longer permit this refund");
+    && same(payment[2], fill.maker_recipient) && payment[3] === BigInt(Math.floor(Date.parse(fill.t2) / 1000)), "The onchain locks no longer permit this refund");
 }

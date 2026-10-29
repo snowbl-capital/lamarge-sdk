@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkPreparedLines, formatPrice, lineReceive, priceUnits, type LinePool, type PreparedLines, type PriceLine } from "./lines.ts";
+import { checkPreparedLines, lineReceive, priceUnits, type LinePool, type PreparedLines, type PriceLine } from "./lines.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas, type QuoteIntent } from "./protocol.ts";
 import { required } from "./validation.ts";
 
@@ -14,7 +14,6 @@ const nico: PriceLine[] = [
   { venue: "polymarket", buy: "1", sell: "1.0014", stock: "100000000" },
 ];
 
-/** What the server prepares for `lines`, `edit` changing a pool's quotes. */
 function prepare(lines: PriceLine[], edit: (venue: string, quotes: QuoteIntent[]) => QuoteIntent[] = (_, quotes) => quotes): PreparedLines {
   const drafts = pools.flatMap((pool, index) => {
     const line = lines.find(each => each.venue === pool.venue);
@@ -37,8 +36,6 @@ test("prices are exact decimals between 0.90 and 1.10 USDC", () => {
   expect(priceUnits("0.9994")).toBe(99_940_000n);
   expect(priceUnits("1.10000000")).toBe(110_000_000n);
   for (const wrong of ["", "1.", ".99", "0.89999999", "1.10000001", "01.1", "1e0", "1,0", " 1"]) expect(priceUnits(wrong)).toBeNull();
-  expect(formatPrice(100_000_000n)).toBe("1");
-  expect(formatPrice(99_940_000n)).toBe("0.9994");
 });
 
 test("the compiled terms match the server's vectors", () => {
@@ -50,7 +47,6 @@ test("the compiled terms match the server's vectors", () => {
 test("every pool's set is rebuilt from the lines before signing", () => {
   expect(() => check(prepare(nico))).not.toThrow();
   expect(() => check(prepare(nico, () => []))).toThrow();
-  // A receiving venue left out quotes less; it never pays the maker less.
   const lighter: PriceLine[] = [...nico, { venue: "lighter", buy: "0.9997", sell: null, stock: "0" }];
   expect(() => checkPreparedLines(prepare(lighter, (_, quotes) => quotes.filter(q => q.venue !== "lighter")), { lines: lighter, validUntil, expectedRevision: "3" },
     { identity, quoteSigner: signer, pools, recipients: { ...recipients, lighter: maker } })).not.toThrow();

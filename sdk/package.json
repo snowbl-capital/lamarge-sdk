@@ -1,6 +1,6 @@
 {
   "name": "@lamarge/sdk",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
   "homepage": "https://docs.lamarge.trade/sdk",

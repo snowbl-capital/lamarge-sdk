@@ -1,5 +1,4 @@
-// Delivery inside Lighter: one internal transfer per fill, signed with the account's API key
-// and its owner's wallet key, persisted durably before it is sent and never signed twice.
+// Persist Lighter deliveries signed by both the API key and owner key before sending; never sign a fill twice.
 import { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 import type { DeliveryFill } from "./maker.ts";
 import { fillMemo, USDC_ASSET } from "./protocol/lighter.ts";
@@ -10,8 +9,7 @@ import type { Signer } from "./signer.ts";
 // Lighter transaction status: 0 failed, 1 pending, 2 executed, 3 final (minutes after 2);
 // above 3, failed.
 const TRANSFER = 12, FAILED = 0, EXECUTED = 2, FINAL = 3;
-/** No transfer is first sent closer than this to its deadline. This bot's signer cannot make the
- * transaction expire at `deliver_by`, and an execution after the deadline is the maker's loss. */
+/** The signer cannot expire a transfer at `deliver_by`; a late execution is the maker's loss. */
 const SEND_MARGIN_MS = 60_000;
 /** A Standard Lighter account allows 60 requests a minute, reads and sends alike; this bot makes at most 50. */
 const REQUESTS_PER_MINUTE = 50;
@@ -19,39 +17,31 @@ const REQUESTS_PER_MINUTE = 50;
 /** `max_fee`: the most Lighter may charge per transfer, in USDC base units; 0 unless set. */
 export type LighterConfig = { api: string; chain_id: number; account_index: number; api_key_index: number; max_fee?: number };
 /**
- * A delivery's signed transaction, persisted before its first send. `attempted` is set before
- * any send, `sent` once Lighter acknowledged or knows it. `outcome` once settled: `reported` to
- * LaMarge; `failed`, LaMarge will not take it; `refused` by Lighter on the first send; `dropped`,
- * it never executes (not attempted before the deadline, failed on Lighter, or expired).
- * Refused and dropped transfers leave their nonce to Lighter's count.
+ * Persist before sending; set `attempted` before the call and `sent` when Lighter knows it.
+ * Outcomes: `reported` to LaMarge; `failed`, rejected there; `refused`, first send rejected;
+ * `dropped`, unsent, failed or expired. Refused/dropped nonces follow Lighter's count.
  */
-export type Delivery = { fill_id: string; tx_hash: string; tx_type: number; tx_info: string; nonce: number; expires_at: number; amount: string; fee: number; to: number; attempted: boolean; sent: boolean; outcome?: "reported" | "failed" | "dropped" | "refused"; created_at: string };
-export type DeliveryStore = DeliveryJournal<Delivery>;
+export type LighterDelivery = { fill_id: string; tx_hash: string; tx_type: number; tx_info: string; nonce: number; expires_at: number; amount: string; fee: number; to: number; attempted: boolean; sent: boolean; outcome?: "reported" | "failed" | "dropped" | "refused"; created_at: string };
 
 /** A transfer as Lighter's signers take it (`signTransfer` of lighter-ts-sdk's wallet, or Lighter's Go signer). */
 export type LighterTransferParams = { toAccountIndex: number; asset_id: number; is_spot_account: boolean; from_is_spot_account: boolean; usdcAmount: number; fee: number; memo: string; skipNonce: number; nonce: number; apiKeyIndex: number; accountIndex: number };
-/**
- * The pool account's API key, held by the application: Lighter signs with its own scheme, in Go
- * or WebAssembly, so the SDK never loads a signer nor sees the key.
- */
+/** The caller owns the Go/WASM signer; the SDK never loads it or sees its API key. */
 export interface LighterSigner {
   /** A token authenticating the account's reads, as `createAuthTokenWithExpiry` returns it. */
   authToken(): Promise<string>;
   signTransfer(params: LighterTransferParams): Promise<{ txType: number; txInfo: string; txHash: string; messageToSign?: string | undefined; error?: string | undefined }>;
 }
 
-export class LighterDeliverer extends VenueDeliverer<Delivery> {
-  /** When each pending transfer's status may be read again: Lighter allows 60 reads a minute. */
+export class LighterDeliverer extends VenueDeliverer<LighterDelivery> {
+  /** When each pending transfer's status may be read again. */
   private readAt = new Map<string, { at: number; wait: number }>();
   /** Transfers seen executed: their status is not read again. */
   private executed = new Set<string>();
-  /** Times of this bot's requests to Lighter within the last minute. */
   private requests: number[] = [];
   /** `signer` holds the pool account's API key; `owner`, its owner's key, signs each transfer to another owner's account. */
-  constructor(readonly config: LighterConfig, private signer: LighterSigner, private owner: Pick<Signer, "signMessage">, store: DeliveryStore, now = () => Date.now()) {
+  constructor(readonly config: LighterConfig, private signer: LighterSigner, private owner: Pick<Signer, "signMessage">, store: DeliveryJournal<LighterDelivery>, now = () => Date.now()) {
     super("lighter", SEND_MARGIN_MS, store, now);
   }
-  /** One request to Lighter, within the minute's budget. */
   private spend() {
     const now = this.now();
     this.requests = this.requests.filter(at => now - at < 60_000);
@@ -74,8 +64,7 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
     return tx.status;
   }
   /** Signs the fill's transfer at `nonce`: API key signature, then the owner's wallet signature of the message Lighter requires for another owner's account. */
-  async sign(fill: DeliveryFill, nonce: number): Promise<Delivery> {
-    // The taker's account index, in decimal.
+  async sign(fill: DeliveryFill, nonce: number): Promise<LighterDelivery> {
     const to = Number(fill.delivery_to);
     insist(fill.to_venue === "lighter" && /^\d+$/.test(fill.delivery_to ?? "") && Number.isSafeInteger(to), "Not a Lighter delivery");
     // The sending account's fee, in base units, charged on top of the amount; Lighter refuses
@@ -84,7 +73,7 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
     const fee = await this.get(`transferFeeInfo?account_index=${this.config.account_index}&to_account_index=${to}&auth=${encodeURIComponent(token)}`, token);
     const usdcFee = Number(fee.transfer_fee_usdc);
     insist(fee.code === 200 && Number.isSafeInteger(usdcFee) && usdcFee >= 0, "Unexpected Lighter transfer fee");
-    insist(usdcFee <= (this.config.max_fee ?? 0), `Lighter charges this account ${usdcFee} per transfer, above LIGHTER_MAX_FEE`);
+    insist(usdcFee <= (this.config.max_fee ?? 0), `Lighter charges this account ${usdcFee} per transfer, above max_fee`);
     const signed = await this.signer.signTransfer({ toAccountIndex: to, asset_id: USDC_ASSET, is_spot_account: false, from_is_spot_account: false, usdcAmount: Number(fill.amount_out), fee: usdcFee, memo: `0x${fillMemo(fill.id)}`, skipNonce: 0, nonce, apiKeyIndex: this.config.api_key_index, accountIndex: this.config.account_index });
     if (signed.error) throw new Error(`Lighter signer: ${signed.error}`);
     insist(signed.txType === TRANSFER && signed.messageToSign, "Unexpected Lighter transaction");
@@ -95,14 +84,13 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
     return { fill_id: fill.id, tx_hash: signed.txHash, tx_type: signed.txType, tx_info: JSON.stringify(info), nonce, expires_at: Number(info.ExpiredAt), amount: fill.amount_out, fee: usdcFee, to, attempted: false, sent: false, created_at: new Date(this.now()).toISOString() };
   }
   /** Sends persisted bytes; Lighter accepts a nonce once, so a resend after a crash cannot pay twice. */
-  async send(delivery: Delivery): Promise<void> {
+  async send(delivery: LighterDelivery): Promise<void> {
     const params = new URLSearchParams({ tx_type: String(delivery.tx_type), tx_info: delivery.tx_info, account_index: String(this.config.account_index), api_key_index: String(this.config.api_key_index), price_protection: "false" });
     this.spend();
     const response = await fetch(`${this.config.api}/api/v1/sendTx`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: params, signal: AbortSignal.timeout(15_000) });
     const answer: unknown = await response.json().catch(() => ({}));
     const body = record(answer);
     if (body.code !== 200) {
-      // Already known by hash: an earlier send landed.
       if ((await this.status(delivery.tx_hash)) !== null) return;
       const reason = `Lighter refused the transfer: ${typeof body.message === "string" ? body.message : `HTTP ${response.status}`}`;
       // An answered refusal is final; an overloaded or failing API may still take the bytes.
@@ -115,7 +103,7 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
    * Signs at most one new fill, and only while no transfer is of unknown outcome: one unresolved
    * nonce at a time, never reused for another fill.
    */
-  protected async deliver(quoter: FillSource, due: DeliveryFill[], deliveries: Record<string, Delivery>, log: Log): Promise<boolean> {
+  protected async deliver(quoter: FillSource, due: DeliveryFill[], deliveries: Record<string, LighterDelivery>, log: Log): Promise<boolean> {
     const next = due[0];
     if (!next) return true;
     const { nonce: remote } = await this.get(`nextNonce?account_index=${this.config.account_index}&api_key_index=${this.config.api_key_index}`);
@@ -129,9 +117,8 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
     catch (error) { log(`${next.id}: ${errorText(error)}`); return false; }
   }
   /** Moves one persisted delivery forward; false while its outcome on Lighter is unknown. */
-  protected async settle(quoter: FillSource, delivery: Delivery, fill: DeliveryFill | undefined, deliveries: Record<string, Delivery>, log: Log): Promise<boolean> {
+  protected async settle(quoter: FillSource, delivery: LighterDelivery, fill: DeliveryFill | undefined, deliveries: Record<string, LighterDelivery>, log: Log): Promise<boolean> {
     if (!this.awaits(fill) || fill.delivery_hash === delivery.tx_hash) {
-      // The fill is final, or settled otherwise: nothing left to report for this transfer.
       delivery.outcome = fill?.delivery_hash === delivery.tx_hash ? "reported" : "failed";
       await this.store.save(deliveries);
       log(`${delivery.fill_id}: fill no longer awaits this delivery`);
@@ -170,7 +157,6 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
         log(`${delivery.fill_id}: transfer ${delivery.tx_hash} sent`);
         status = await this.status(delivery.tx_hash);
       } else if (!delivery.attempted) {
-        // Never sent in time: the bytes stay unsent and their nonce is free again.
         delivery.outcome = "dropped";
         await this.store.save(deliveries);
         log(`${delivery.fill_id}: too close to the delivery deadline, transfer not sent`);
@@ -190,7 +176,6 @@ export class LighterDeliverer extends VenueDeliverer<Delivery> {
       if (this.now() > delivery.expires_at + 60_000) { delivery.outcome = "dropped"; await this.store.save(deliveries); log(`${delivery.fill_id}: transfer expired without executing (status ${status})`); return true; }
       return false;
     }
-    // Executed on Lighter, its nonce spent: reported until the server takes it or never will.
     const outcome = await this.report(quoter, id, delivery.tx_hash, log);
     if (outcome) { delivery.outcome = outcome; await this.store.save(deliveries); }
     return true;

@@ -1,6 +1,3 @@
-// Shared by deliveries inside a venue: one pass at a time, persisted deliveries settled before new
-// fills are signed, stuck pools stop quoting, delivery reports and shutdown draining. The journal's
-// storage is the caller's: a file synced on each save, a database.
 import { LaMargeError } from "./client.ts";
 import type { DeliveryFill } from "./maker.ts";
 import { insist } from "./protocol/protocol.ts";
@@ -10,6 +7,7 @@ export type DeliveryJournal<T> = { load: () => Record<string, T> | Promise<Recor
 /** Where the deliverer reads the identity's fills and reports deliveries: a `Quoter` or its `fillFeed`. */
 export interface FillSource {
   fills(): Promise<DeliveryFill[]>;
+  accept(id: string): Promise<unknown>;
   deliver(id: string, hash: string): Promise<{ fill: { delivery_hash: string | null; state: string } }>;
 }
 export type Log = (line: string) => void;
@@ -20,9 +18,11 @@ export const errorText = (error: unknown) => error instanceof Error ? error.mess
 export class Refused extends Error {}
 
 export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: string | undefined }> {
+  private accepting = true;
+  /** Stop accepting new obligations while draining deliveries already accepted. */
+  stopAccepting(): void { this.accepting = false; }
   private running: Promise<void> | null = null;
   private stuckSince: number | null = null;
-  /** When each fill's report may be retried. */
   private reportAt = new Map<string, { at: number; wait: number }>();
   /** `sendMargin`: no transfer is first sent closer than this to `deliver_by`. */
   constructor(private venue: string, protected sendMargin: number, protected store: DeliveryJournal<D>, protected now: () => number) {}
@@ -59,12 +59,24 @@ export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: stri
     const due = fills
       .filter(fill => !deliveries[fill.id] && fill.state === "PAID" && fill.maker_leg === "NONE" && !fill.delivery_hash && fill.payment_verified_at && fill.deliver_by && Date.parse(fill.deliver_by) - this.now() > this.sendMargin)
       .sort((a, b) => Date.parse(a.deliver_by ?? "") - Date.parse(b.deliver_by ?? ""));
-    return this.deliver(quoter, due, deliveries, log);
+    const progressed = await this.deliver(quoter, due, deliveries, log);
+    if (!progressed || !this.accepting) return progressed;
+    const requests = fills.filter(fill => fill.maker_accept_by && !fill.maker_accepted_at
+      && ["PREPARED", "RESERVED"].includes(fill.state) && fill.maker_leg === "NONE" && fill.payment_leg === "NONE"
+      && Date.parse(fill.maker_accept_by) > this.now());
+    if (requests.length) {
+      // Accept only what the journal can record.
+      await this.store.save(deliveries);
+      await Promise.all(requests.map(async fill => {
+        try {
+          await quoter.accept(fill.id);
+          log(`${fill.id}: accepted for delivery`);
+        } catch (error) { log(`${fill.id}: acceptance pending: ${errorText(error)}`); }
+      }));
+    }
+    return true;
   }
-  /**
-   * Whether the server still accepts a delivery for `fill`: until `report_by`, while the payment
-   * is locked, even after the maker leg was abandoned for lack of a report.
-   */
+  /** Reports remain valid until `report_by` while payment is locked, even after an unreported maker leg was abandoned. */
   protected awaits(fill: DeliveryFill | undefined): fill is DeliveryFill {
     return fill !== undefined && fill.payment_leg === "LOCKED" && ["NONE", "ABANDONED"].includes(fill.maker_leg)
       && (!fill.report_by || Date.parse(fill.report_by) > this.now());
@@ -77,7 +89,6 @@ export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: stri
     map.set(id, { at: this.now() + wait, wait });
     return true;
   }
-  /** False while the fill's report waits for its retry. */
   protected reportDue(id: string): boolean {
     const retry = this.reportAt.get(id);
     return !retry || retry.at <= this.now();
@@ -97,7 +108,6 @@ export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: stri
       const code = error instanceof LaMargeError ? error.code : undefined;
       const reason = error instanceof LaMargeError ? error.reason : undefined;
       if (code === "VALIDATION_ERROR" || code === "STATE_CONFLICT") {
-        // The server will never take this transfer as the delivery: `reason` says why.
         log(`${id}: delivery refused (${String(reason ?? code)}): ${errorText(error)}`);
         return "failed";
       }
@@ -112,7 +122,7 @@ export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: stri
   async outstanding(quoter: FillSource): Promise<number> {
     const open = Object.values(await this.store.load()).filter(delivery => !delivery.outcome).length;
     const fills = (await quoter.fills()).filter(fill => fill.role === "maker" && fill.to_venue === this.venue && fill.maker_leg === "NONE"
-      && ["RESERVED", "PAID"].includes(fill.state) && fill.deliver_by && Date.parse(fill.deliver_by) - this.sendMargin > this.now());
+      && (["RESERVED", "PAID"].includes(fill.state) || fill.state === "PREPARED" && fill.maker_accepted_at) && fill.deliver_by && Date.parse(fill.deliver_by) - this.sendMargin > this.now());
     return open + fills.length;
   }
 }

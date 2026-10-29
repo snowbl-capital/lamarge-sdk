@@ -16,7 +16,6 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
   const calls: string[] = [];
   const legs = { first: { from: "polymarket", to: "hyperliquid" }, second: { from: "hyperliquid", to: "aster" } };
   const intents: Record<string, Record<string, unknown>> = {};
-  // Every transfer opened, newest last, each with the terms it was opened with, as the server keeps them.
   const records: Record<string, unknown>[] = [];
   const delivery = { claimed: false };
   let unknown = options.unknownReads ?? 0;
@@ -35,7 +34,7 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
     const leg = legs[key], claimed = key === "first" && delivery.claimed;
     return { id: `fill-${key}`, take_id: `take-${key}`, order_id: id, sequence: 1, role: "taker", state: claimed ? options.refunded ? "REFUNDED" : "SETTLED" : "PAID", from_venue: leg.from, to_venue: leg.to,
       amount_in: key === "first" ? "1000000" : String(intents.second?.amount_in ?? "1000000"), amount_out: key === "first" ? options.received ?? "1000000" : String(10n ** 18n), payer: key === "first" ? owner : hub, maker_recipient: maker, taker_recipient: key === "first" ? hub : owner,
-      swap_id: id, hashlock: `0x${"bb".repeat(32)}`, pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: claimed ? options.refunded ? "ABANDONED" : "CLAIMED" : "NONE",
+      taker_fee: "0", swap_id: id, hashlock: `0x${"bb".repeat(32)}`, pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: claimed ? options.refunded ? "ABANDONED" : "CLAIMED" : "NONE",
       maker_claimed_at: claimed ? at(-5) : null, transactions: [], delivery_hash: null, payment_locked_at: null, delivery_to: leg.to === "aster" ? owner : null };
   };
   const prepared = (key: "first" | "second") => {
@@ -83,7 +82,6 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
     const opened = records.find(row => name === `GET /v1/transfers/${String(row.id)}`);
     const cancelled = records.find(row => name === `DELETE /v1/transfers/${String(row.id)}`);
     const handler = routes[name] ?? (opened ? () => opened : cancelled ? () => {
-      // As the server: a transfer with a take cannot be cancelled.
       if (cancelled.take_id) return Response.json({ error: { code: "STATE_CONFLICT", message: "a transfer with a take cannot be cancelled", request_id: "r", retryable: false } }, { status: 409 });
       cancelled.cancelled_at = at(0);
       return new Response(null, { status: 204 });
@@ -164,7 +162,6 @@ test("run again, a route's transfers go on with the parts they were opened with"
   const { client, intents } = api();
   const paying = signer();
   await route(client, paying, request, { pollMs: 1 });
-  // Opened by a client that asked one fill, as a take paid inside its venue buys.
   Object.assign(intents.first ?? {}, { max_parts: 1 });
   Object.assign(intents.second ?? {}, { max_parts: 1 });
   const again = await route(client, paying, { ...request, transfer_id: "transfer-first", then_transfer_id: "transfer-second" }, { pollMs: 1 });
@@ -212,7 +209,6 @@ test("a first take that delivered nothing ends the route; one still able to deli
 test("a continuation cancelled before it was paid is followed, from the history, by one successor with what is left now; the first take is never paid again", async () => {
   const { client, calls, records, options } = api();
   const paying = signer();
-  // The continuation's review is left before its take is reserved, then cancelled.
   const leave = { onIntent: (intent: { previous_transfer_id?: string | null }) => { if (intent.previous_transfer_id) throw new Error("Operation cancelled"); } };
   const cancel = async () => { await client.call("cancelTransfer", { path: { id: String(records.at(-1)?.id) } }); };
   await expect(route(client, paying, request, { pollMs: 1, ...leave })).rejects.toThrow("Operation cancelled");
@@ -221,7 +217,6 @@ test("a continuation cancelled before it was paid is followed, from the history,
   options.continuable = "900000";
   await expect(route(client, paying, { ...request, transfer_id: "transfer-first" }, { pollMs: 1, ...leave })).rejects.toThrow("Operation cancelled");
   await cancel();
-  // Named by its stale id, the route still goes on from its latest continuation.
   const resumed = await route(client, paying, { ...request, transfer_id: "transfer-first", then_transfer_id: "transfer-second" }, { pollMs: 1 });
   expect(resumed.second.map(fill => fill.amount_in)).toEqual(["900000"]);
   expect(records.map(row => [row.client_transfer_id, row.amount_in, Boolean(row.cancelled_at)])).toEqual([["move-1", "1000000", false], ["move-1.2", "1000000", true],

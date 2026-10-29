@@ -12,7 +12,6 @@ const owner = privateKeyToAccount("0x0123456789abcdef0123456789abcdef0123456789a
 const agent = privateKeyToAccount(`0x${"55".repeat(32)}`);
 const taker = "0x14791697260e4c9a71f18484c9f997b308e59325";
 const api = { chain: "http://chain.test", futures: "http://futures.test", spot: "http://spot.test" };
-// AsterDeliverer calls Aster through the global fetch.
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -20,6 +19,7 @@ const fill = (overrides: Partial<DeliveryFill> = {}): DeliveryFill => ({
   id: "0192f0a1-b2c3-7d4e-8f90-a1b2c3d4e5f6", role: "maker", state: "PAID", payment_leg: "LOCKED", maker_leg: "NONE", to_venue: "aster", amount_out: "1500000000000000000",
   deliver_by: new Date(Date.now() + 120_000).toISOString(), report_by: new Date(Date.now() + 6_600_000).toISOString(), delivery_to: taker, delivery_hash: null,
   payment_verified_at: new Date().toISOString(),
+  maker_accept_by: null, maker_accepted_at: null,
   ...overrides,
 });
 const second = (overrides: Partial<DeliveryFill> = {}) => fill({ id: "0192f0a1-b2c3-7d4e-8f90-00000000beef", ...overrides });
@@ -50,7 +50,7 @@ function aster(spot = "10") {
 }
 
 const memory = () => { let saved: Record<string, AsterDelivery> = {}; const writes: Record<string, AsterDelivery>[] = []; return { writes, load: () => structuredClone(saved), save: (value: Record<string, AsterDelivery>) => { saved = structuredClone(value); writes.push(saved); } }; };
-const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => LaMargeError | null): FillSource => ({ fills: async () => fills(), deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } });
+const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => LaMargeError | null): FillSource => ({ fills: async () => fills(), accept: async () => undefined, deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } });
 const deliverer = (store = memory(), now = () => Date.now()) => new AsterDeliverer(owner, agent, store, api, now);
 
 test("a delivery is the fill's transfer request, signed by the account at chain 1666", async () => {
@@ -91,7 +91,6 @@ test("Spot is read once a pass, then again only after a margin move", async () =
   const reported: [string, string][] = [];
   await deliverer().run(quoterOf(() => [fill(), second(), third], reported), () => {});
   expect(reported.length).toBe(3);
-  // 2 USDT pays the first; the second moves the 1 USDT Spot then lacks; the third reads Spot again.
   expect(book.moves.map(move => move.get("amount"))).toEqual(["1"]);
   expect(book.reads).toBe(2);
 });
@@ -106,7 +105,6 @@ test("a lost answer is resent as the same bytes within the window, and the first
   const quoter = quoterOf(() => [fill(), second()], reported);
   await bot.run(quoter, () => {});
   expect(store.load()[fill().id]).toMatchObject({ attempted: true });
-  // No other fill is signed while one awaits Aster's answer.
   expect(store.load()[second().id]).toBeUndefined();
   now += 1_000;
   await bot.run(quoter, () => {});
@@ -124,7 +122,6 @@ test("unanswered past its window, a transfer is never signed again and frees the
   const quoter = quoterOf(() => [fill({ deliver_by: new Date(now + 300_000).toISOString() })]);
   for (let tick = 0; tick < 120; tick++) { await bot.run(quoter, () => {}).catch(() => {}); now += 500; }
   expect(store.load()[fill().id]?.outcome).toBe("unknown");
-  // A minute of retries: paced, all the same bytes.
   expect(book.sent.length).toBeLessThanOrEqual(15);
   expect(new Set(book.sent).size).toBe(1);
   expect(bot.blocked).toBe(false);
@@ -175,7 +172,6 @@ test("nothing is signed or sent within fifteen seconds of deliver_by", async () 
   const late = fill({ deliver_by: new Date(now + 10_000).toISOString() });
   await bot.run(quoterOf(() => [late]), () => {});
   expect(store.load()).toEqual({});
-  // A persisted unsent request that close to the deadline is dropped, never sent.
   store.save({ [late.id]: await bot.sign(late, now * 1000) });
   await bot.run(quoterOf(() => [late]), () => {});
   expect(store.load()[fill().id]?.outcome).toBe("dropped");
@@ -198,4 +194,34 @@ test("nothing is sent before the journal's save resolves, and a failed save send
   const failing = { load: () => ({}), save: async () => { throw new Error("disk full"); } };
   await expect(new AsterDeliverer(owner, agent, failing, api).run(quoterOf(() => [second()]), () => {})).resolves.toBeUndefined();
   expect(book.sent).toEqual([]);
+});
+
+test("acceptance retries a lost reply without delivering before verified payment", async () => {
+  const book = aster();
+  const now = Date.now();
+  let pending = fill({ state: "PREPARED", payment_leg: "NONE", payment_verified_at: null, maker_accept_by: new Date(now + 15_000).toISOString() });
+  let calls = 0;
+  const source = { ...quoterOf(() => [pending]), accept: async () => {
+    if (++calls === 1) throw new Error("response lost");
+    pending = { ...pending, maker_accepted_at: new Date(now).toISOString() };
+  } };
+  const bot = deliverer(memory(), () => now);
+  for (let pass = 0; pass < 3; pass++) await bot.run(source, () => {});
+  expect(calls).toBe(2);
+  expect(book.sent).toHaveLength(0);
+  expect(book.moves).toHaveLength(0);
+});
+
+test("expired requests, draining bots and unwritable journals accept nothing", async () => {
+  const now = Date.now();
+  let calls = 0;
+  const pending = fill({ state: "PREPARED", payment_leg: "NONE", payment_verified_at: null, maker_accept_by: new Date(now + 15_000).toISOString() });
+  const source = { ...quoterOf(() => [pending]), accept: async () => { calls++; } };
+  const bot = new AsterDeliverer(owner, agent, { load: () => ({}), save: () => { throw new Error("disk full"); } }, api, () => now);
+  await expect(bot.run(source, () => {})).rejects.toThrow("disk full");
+  bot.stopAccepting();
+  await bot.run(source, () => {});
+  const expired = new AsterDeliverer(owner, agent, { load: () => ({}), save: () => {} }, api, () => now + 20_000);
+  await expired.run(source, () => {});
+  expect(calls).toBe(0);
 });

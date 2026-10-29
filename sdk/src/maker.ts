@@ -6,22 +6,17 @@ import type { components } from "./generated/api.ts";
 import { ESCROW_DEPLOYMENTS, requireSigningDomains, type DeploymentManifest } from "./protocol/deployments.ts";
 import { checkMakerIntent, type FundingSource } from "./protocol/intents.ts";
 import { checkPreparedLines, type PriceLine } from "./protocol/lines.ts";
-import { checkCloseOrders, insist, same, VENUE_SETTLED } from "./protocol/protocol.ts";
-import { signIn, signOut } from "./session.ts";
-import { signItems, type Signer } from "./signer.ts";
+import { checkCloseOrders, ENVIRONMENT_SLOTS, insist, same, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { checkDeployment, signIn, signOut } from "./session.ts";
+import { signItems, type QuoteSigner, type Signer } from "./signer.ts";
 import { signedItems, type SignatureStore } from "./store.ts";
 import { required } from "./protocol/validation.ts";
 
 export type Order = components["schemas"]["Order"];
 export type Credential = components["schemas"]["CredentialCreated"];
-/** A key signing with ECDSA (the escrow refuses a contract's approval for a delivery), here or elsewhere (`prepareLinesUnsigned`). */
-export type QuoteSigner = Pick<Signer, "address" | "signTypedData">;
-/** A fill as the event journal shows it, its venues named as in REST fills. */
 export type FeedFill = Omit<components["schemas"]["FillPreview"], "from" | "to"> & { from_venue: string; to_venue: string };
-/** A fill as delivery needs it, from the REST list or the event feed alike. */
 export type DeliveryFill = Pick<components["schemas"]["Fill"], "id" | "role" | "state" | "payment_leg" | "maker_leg" | "to_venue" | "amount_out"
-  | "deliver_by" | "report_by" | "delivery_to" | "delivery_hash" | "payment_verified_at">;
-
+  | "maker_accept_by" | "maker_accepted_at" | "deliver_by" | "report_by" | "delivery_to" | "delivery_hash" | "payment_verified_at">;
 
 /** The financial key: provisioning and release of capital only. Never give it to the quoting host. */
 export class Maker {
@@ -34,12 +29,14 @@ export class Maker {
   order(id: string) { return this.client.call("getOrder", { path: { id } }); }
   /**
    * Links the financial key's own account on `venue`, or `owner`'s, which signs the link message,
-   * then the setup step a maker pool needs: on Aster, approving LaMarge's agent, the deployment's own
-   * `asterAgentName` when given (`ENVIRONMENT_SLOTS`).
+   * then the setup step a maker pool needs: on Aster, approving the API environment's LaMarge agent.
    */
-  async link(venue: string, owner?: Signer, asterAgentName?: string) {
+  async link(venue: string, owner?: Signer) {
+    // Only this environment's agent: approving another's name would replace that environment's agent.
+    const environment = venue === "aster" ? await checkDeployment(this.client, undefined, this.manifest) : undefined;
+    insist(venue !== "aster" || environment, "The API names no pinned escrow environment");
     const linked = await linkAccount(this.client, this.account, venue, owner ?? this.account);
-    if (venue === "aster") await setUpVenue(this.client, venue, owner ?? this.account, { steps: ["agent"], asterAgentName });
+    if (environment) await setUpVenue(this.client, venue, owner ?? this.account, { steps: ["agent"], asterAgentName: ENVIRONMENT_SLOTS[environment].asterAgentName });
     return linked;
   }
   async createCredential(name: string, quoteSigner: string, days = 30): Promise<Credential> {
@@ -53,7 +50,7 @@ export class Maker {
    * escrow funding always comes from the financial key.
    */
   async addCapital(input: { venue: string; amount: string; client_request_id: string; funding_source: FundingSource }, credential: Pick<Credential, "id" | "quote_signer">,
-    store?: SignatureStore, expectedOwner: string = this.account.address): Promise<Order> {
+    { store, owner: expectedOwner = this.account.address }: { store?: SignatureStore; owner?: string } = {}): Promise<Order> {
     insist(Boolean(input.client_request_id), "Provide a persistent client_request_id");
     insist(same(expectedOwner, this.account.address) || VENUE_SETTLED.has(input.venue), "Escrow capital is funded by the financial key's own account");
     const [balances, orders] = await Promise.all([this.balances(), this.client.call("getOrders")]);
@@ -106,7 +103,6 @@ export class Maker {
   /** Waits until the order reaches one of `states`; for a funding, `waitForFunding`. */
   async waitFor(id: string, states: Order["state"][], timeoutMs = 600_000): Promise<Order> {
     const end = Date.now() + timeoutMs;
-    // Read at least once, however little time is left.
     for (;;) {
       const order = await this.order(id);
       if (states.includes(order.state)) return order;
@@ -120,10 +116,12 @@ export class Maker {
 /** A scoped credential (`mk_`) quotes and cancels only its own orders; this key cannot withdraw capital. */
 export class Quoter {
   private lastRtt: { ms: number; at: number } | undefined;
-  constructor(readonly client: Client, readonly identity: string, private account: QuoteSigner, private manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
+  readonly identity: string;
+  constructor(readonly client: Client, credential: Pick<Credential, "id" | "quote_signer">, private account: QuoteSigner, private manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
     insist(client.token?.startsWith("mk_"), "Use a scoped maker credential");
+    insist(same(credential.quote_signer, account.address), "The quote key is not the credential's quote signer");
+    this.identity = credential.id;
   }
-  /** Each answer's round trip, reported with the next lease. */
   private async timed<T>(run: () => Promise<T>): Promise<T> {
     const started = performance.now();
     const answer = await run();
@@ -146,7 +144,7 @@ export class Quoter {
    * them; signing is the caller's, as for a key held elsewhere. `recipients` pins, per venue the
    * lines buy on, the maker's address paid there.
    */
-  async prepareLinesUnsigned(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {
+  async prepareLines(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {
     const [current, pools] = await Promise.all([this.lines(), this.orders()]);
     const prepared = await this.timed(() => this.client.call("prepareQuoteLines", { body: { expected_revision: current.revision, valid_until: validUntil, lines } }));
     checkPreparedLines(prepared, { lines, validUntil, expectedRevision: current.revision }, { identity: this.identity, quoteSigner: this.account.address, pools, recipients });
@@ -155,7 +153,7 @@ export class Quoter {
   }
   /** Prepares, checks, signs and publishes the lines: every pool of the identity switches at once, or none. */
   async publishLines(lines: PriceLine[], recipients: Readonly<Record<string, string>>, validUntil: number) {
-    const prepared = await this.prepareLinesUnsigned(lines, recipients, validUntil);
+    const prepared = await this.prepareLines(lines, recipients, validUntil);
     const signatures: { draft_id: string; signature: string }[] = [];
     for (const draft of prepared.drafts) {
       const [signed] = await signItems(this.account, draft.to_sign, this.manifest);
@@ -163,13 +161,11 @@ export class Quoter {
     }
     return this.timed(() => this.client.call("publishQuoteLines", { body: { preparation_id: prepared.id, signatures }, retry: true }));
   }
-  /** Pulls the quotes of 1 to 50 orders, all or none; never replayed, as a replayed cancel would void the sequence that follows. */
-  cancel(orderIds: string[]) {
-    insist(orderIds.length > 0 && orderIds.length <= 50, "A cancel holds 1 to 50 orders");
-    return this.timed(() => this.client.call("postV1QuotesBatch", { body: { cancels: orderIds } }));
-  }
-  /** The identity's fills, current and the last final ones. */
   fills() { return this.timed(() => this.client.call("getFills")); }
+  /** Accepts responsibility for a requested delivery before taker funding. Safe to retry by fill id. */
+  accept(fillId: string) {
+    return this.timed(() => this.client.call("acceptFill", { path: { id: fillId }, retry: true, signal: AbortSignal.timeout(3_000) }));
+  }
   /** Reports the venue transaction delivering a fill (a Lighter hash or an Aster transfer id); the server verifies it before paying the maker. Exact retries return the fill. */
   deliver(fillId: string, txHash: string) {
     return this.timed(() => this.client.call("submitDelivery", { path: { id: fillId }, body: { tx_hash: txHash }, retry: true }));
@@ -180,9 +176,12 @@ export class Quoter {
    */
   fillFeed(signal: AbortSignal, log: (line: string) => void = console.error, WebSocket?: SocketConstructor) {
     const current = new Map<string, FeedFill>();
+    const revisions = new Map<string, bigint>();
     let synced = false;
-    // The journal names the venues `from` and `to`; REST fills, `from_venue` and `to_venue`.
-    const put = (fill: components["schemas"]["SnapshotFill"] | components["schemas"]["FillPreview"]) => {
+    const put = (fill: components["schemas"]["SnapshotFill"] | components["schemas"]["FillPreview"], revision: string) => {
+      const next = BigInt(revision);
+      if ((revisions.get(fill.id) ?? 0n) > next) return;
+      revisions.set(fill.id, next);
       const { from, to, ...rest } = fill;
       current.set(fill.id, { ...rest, from_venue: from, to_venue: to });
     };
@@ -192,8 +191,9 @@ export class Quoter {
           for await (const change of changes(this.client, { scope: "private", signal, WebSocket })) {
             if ("resync" in change) {
               current.clear();
-              if ("fills" in change.resync) for (const fill of change.resync.fills) put(fill);
-            } else for (const event of change.events) if (event.kind === "fill.changed" && "role" in event.data) put(event.data);
+              revisions.clear();
+              if ("fills" in change.resync) for (const fill of change.resync.fills) put(fill, fill.revision);
+            } else for (const event of change.events) if (event.kind === "fill.changed" && "role" in event.data) put(event.data, event.revision);
             synced = true;
           }
         } catch (error) {
@@ -205,6 +205,7 @@ export class Quoter {
     })();
     return {
       done,
+      accept: (id: string) => this.accept(id),
       fills: async () => { insist(synced, "Fills are not synced yet"); return [...current.values()]; },
       deliver: (id: string, hash: string) => this.deliver(id, hash),
     };

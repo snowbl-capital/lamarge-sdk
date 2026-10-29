@@ -8,14 +8,12 @@ export type PreparedLines = {
   id: string; quote_identity_id: string; expected_revision: string; valid_until: number;
   lines: PriceLine[]; drafts: PreparedLineDraft[]; cancels: string[];
 };
-/** A capital pool as `GET /v1/orders` shows it. */
 export type LinePool = { id: string; venue: string; owner_address: string; quote_signer: string; quote_identity_id: string; last_sequence: number; state: string; capital_pool: boolean };
 
-/** Prices are integers of 10⁻⁸ USDC. */
 const PRICE_UNIT = 100_000_000n;
 /** Stablecoins trade near 1 USDC: a price outside 0.90–1.10 is a typing error. */
-export const MIN_PRICE = 90_000_000n;
-export const MAX_PRICE = 110_000_000n;
+const MIN_PRICE = 90_000_000n;
+const MAX_PRICE = 110_000_000n;
 
 /** A price of at most eight decimals in 0.90–1.10 USDC, as 10⁻⁸ USDC units; null when invalid. */
 export function priceUnits(text: string): bigint | null {
@@ -25,10 +23,6 @@ export function priceUnits(text: string): bigint | null {
   return units >= MIN_PRICE && units <= MAX_PRICE ? units : null;
 }
 
-export function formatPrice(units: bigint): string {
-  const text = `${units / PRICE_UNIT}.${(units % PRICE_UNIT).toString().padStart(8, "0")}`;
-  return text.replace(/0+$/, "").replace(/\.$/, "");
-}
 
 /** What `stock` base units sold on `supply` at `sell` cost on `paying` bought at `buy`, rounded up for the maker. */
 export function lineReceive(stock: bigint, sell: bigint, buy: bigint, paying: string, supply: string): bigint {
@@ -58,12 +52,7 @@ function parsed(lines: readonly PriceLine[]): Map<string, Line> {
   return result;
 }
 
-/**
- * Rebuilds every draft from the requested lines before any signature: one set per live pool of
- * the identity with stock, each quote at the line ratio with the stock as supply and budget, the
- * recipient pinned per venue. A receiving venue the server leaves out lowers what is quoted, never
- * what the maker gets; any other difference throws.
- */
+/** Rebuild drafts from requested lines before signing. Omitting a receiving venue is allowed; changing price, stock, budget or recipient is not. */
 export function checkPreparedLines(prepared: PreparedLines, input: { lines: readonly PriceLine[]; validUntil: number; expectedRevision: string },
   authority: { identity: string; quoteSigner: string; pools: readonly LinePool[]; recipients: Readonly<Record<string, string>> }): asserts prepared is PreparedLines & { drafts: (PreparedLineDraft & { to_sign: Verified<SignItem[]> })[] } {
   const asked = parsed(input.lines), echoed = parsed(prepared.lines);

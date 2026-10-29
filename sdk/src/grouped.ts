@@ -47,7 +47,6 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
   if (lock) return lock(() => signRoute(client, signer, hub, first, unlocked));
   const { store = memoryStore(), signal, now = Date.now } = options;
   insist(first.then && groupable(first.from, first.to) && same(first.payer, signer.address) && same(first.recipient, hub.address), "This route is not signed at once");
-  // The first take reserved again returns the same one: its client id is the transfer's.
   if (!first.take_id) await client.call("postTake", { body: takeInput(first), signal, retry: true });
   const key = `route:${first.id}`;
   let preparation: GroupedPreparation;
@@ -66,8 +65,8 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
     if (route.state === "aborted") throw new RouteAbandoned(first.id, "aborted", route.commit_by, now());
     return route;
   }
-  // Ends the route before its commit, its second take released, even once the flow itself was aborted.
   const abandon = async () => {
+    // Cleanup must release the second reservation even after the flow's signal aborts.
     await client.call("abortGroupedRoute", { path: { id: first.id } });
     await store.delete(key);
   };

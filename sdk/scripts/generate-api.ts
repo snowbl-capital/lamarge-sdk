@@ -4,7 +4,6 @@ import ts from "typescript";
 type Node = Record<string, unknown>;
 const METHODS = ["get", "post", "put", "delete", "patch"];
 
-/** Every component `roots` reach, transitively, as its `#/components/<group>/<name>` reference. */
 function reachable(spec: Node, roots: unknown[]): Set<string> {
   const components = spec.components as Record<string, Record<string, unknown>>;
   const reached = new Set<string>();
@@ -49,7 +48,6 @@ const openString = ts.factory.createIntersectionTypeNode([
 ]);
 
 async function generate(spec: Node): Promise<string> {
-  // Schemas an answer or a stream frame reaches have open enums; those only requests use stay exact.
   const answers = reachable(spec, operations(spec).flatMap(({ operation }) => [operation.responses, operation["x-websocket"]]));
   const isAnswer = (path: string | undefined) => path !== undefined
     && (path.includes("/responses/") || answers.has(/^#\/components\/schemas\/[^/]+/.exec(path)?.[0] ?? ""));

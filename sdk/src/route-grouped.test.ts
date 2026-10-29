@@ -18,14 +18,7 @@ const base = { max_parts: 1, payer: owner, recipient: owner, withdrawal_preparat
 const then = { to: "polymarket", recipient: owner, amount_in: "10000000", min_out: "9000000", chain_id: 137 };
 const grouped = (state: string) => ({ state, second_transfer_id: "transfer-second", first_take_id: "take-first", second_take_id: "take-second", commit_by: at(40) });
 
-/**
- * Lighter → Hyperliquid → Polymarket. `state`: the route as the first transfer shows it from the
- * start, `closedAfter` reads of it before a committed one closes; `paid`: whether its second take
- * paid; `left`: what the first transfer leaves to continue with once closed; `kept`: its first take
- * delivered into the available balance, which holds `escrow`, `mixed` half of it; `venueRead`:
- * false when Hyperliquid cannot be read; `continued`: a successor of its second transfer already
- * open; `accept`: a successor is created rather than refused.
- */
+/** Lighter → Hyperliquid → Polymarket. `kept` retains the first delivery in escrow; `mixed` retains half. */
 function api(options: { state?: string | null; closedAfter?: number; paid?: boolean; left?: string; from?: string; prepare?: () => Response; kept?: boolean; mixed?: boolean;
   escrow?: string; venueRead?: boolean; continued?: boolean; accept?: boolean } = {}) {
   const calls: string[] = [];
@@ -134,7 +127,6 @@ test("a route kept in escrow continues from its available balance, Hyperliquid u
   const { client, calls, bodies } = api({ ...kept, accept: true });
   await expect(route(client, signer, request, { ...fast, arrivalWaitMs: 1_000, grouped: true })).rejects.toThrow("NOT_FOUND");
   expect(bodies.filter(body => body.name === "POST /v1/transfers").map(body => [body.client_transfer_id, body.amount_in])).toEqual([["renew:transfer-second", "10000000"]]);
-  // Paid from the available balance, it goes on to price its take.
   expect(calls).toContain("GET /v1/books");
   expect(calls.some(call => call.includes("/withdrawal"))).toBe(false);
 });

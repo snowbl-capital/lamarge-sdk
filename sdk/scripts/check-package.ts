@@ -1,12 +1,9 @@
-// The package as an integrator receives it: packed, linted, then imported from a fresh project by
-// Node and Bun, and bundled for a browser within its size budget.
 import { $ } from "bun";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
-/** The browser bundle of the main and protocol entries, minified and gzipped. */
 const BUDGET_BYTES = 36_000;
 
 const root = resolve(import.meta.dir, "..");
@@ -25,8 +22,6 @@ try {
   const installed = join(project, "node_modules", "@lamarge", "sdk");
   mkdirSync(installed, { recursive: true });
   await $`tar -xzf ${packed} -C ${installed} --strip-components=1`;
-  // The optional peer of the Aster entry, as the integrator provides it, and the dependencies an
-  // install brings.
   const { dependencies = {} } = await Bun.file(join(root, "package.json")).json() as { dependencies?: Record<string, string> };
   for (const name of ["viem", ...Object.keys(dependencies)]) {
     mkdirSync(join(project, "node_modules", name, ".."), { recursive: true });

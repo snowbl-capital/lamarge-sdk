@@ -14,7 +14,6 @@ export const NO_FEE: Fee = { bps: 0n, onDelivery: false };
 export const takeFee = (from: string, pairBps: number | undefined, maxFeeBps: number | undefined): Fee =>
   maxFeeBps === undefined ? NO_FEE : { bps: BigInt(pairBps ?? 0), onDelivery: VENUE_SETTLED.has(from) };
 
-/** The fee on `amount`, rounded down. */
 export const feeOn = (amount: bigint, bps: bigint) => amount * bps / 10_000n;
 
 /** The largest price whose fee on top fits `budget`: P + ⌊P × bps / 10,000⌋ ≤ budget, as the server plans it. */
@@ -33,10 +32,9 @@ export function swapFee(swapId: string): { fee: bigint; onDelivery: boolean } {
  * taker consented to: on the maker's price from an escrow payment, on what the offer delivers when
  * the taker pays inside a venue. Without consent, no fee.
  */
-export function checkFee(fill: { swap_id: string; taker_fee?: string | undefined; amount_in: string; amount_out: string }, onDelivery: boolean, maxFeeBps: number | undefined): void {
+export function checkFee(fill: { swap_id: string; taker_fee: string; amount_in: string; amount_out: string }, onDelivery: boolean, maxFeeBps: number | undefined): void {
   const { fee, onDelivery: tagged } = swapFee(fill.swap_id);
-  // A server before fees names none.
-  insist(fee === uint(fill.taker_fee ?? "0"), differs("fills.taker_fee"));
+  insist(fee === uint(fill.taker_fee), differs("fills.taker_fee"));
   if (fee === 0n) return;
   insist(tagged === onDelivery, differs("fills.swap_id"));
   const charged = onDelivery ? uint(fill.amount_out) + fee : uint(fill.amount_in) - fee;

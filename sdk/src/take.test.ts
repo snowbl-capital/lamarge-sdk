@@ -15,8 +15,8 @@ const message = transferMessage({ from: 42, apiKey: 254, to: 731033, asset: 3, f
 const item = { kind: "lighter_transfer", signer: owner.address, fill_id: fill, typed_data: terms };
 const input = { from: "lighter", to: "hyperliquid", amount_in: "2001300", min_out: "0", client_take_id: "take-client" };
 const at = (ms: number) => new Date(Date.now() + ms).toISOString();
-const reserved = { id: fill, take_id: "take-1", order_id: "0x01", sequence: 1, role: "taker", state: "RESERVED", from_venue: "lighter", to_venue: "hyperliquid", amount_in: "2001300", amount_out: "2000000",
-  payer: owner.address, maker_owner: maker, maker_recipient: maker, taker_recipient: owner.address, swap_id: "0x02", hashlock: "0x03", pay_by: at(40_000), t1: at(3_600_000), t2: at(7_200_000),
+const reserved = { id: fill, take_id: "take-1", order_id: "0x01", sequence: 1, role: "taker", state: "PREPARED", from_venue: "lighter", to_venue: "hyperliquid", amount_in: "2001300", amount_out: "2000000",
+  payer: owner.address, maker_owner: maker, maker_recipient: maker, taker_recipient: owner.address, taker_fee: "0", swap_id: "0x02", hashlock: "0x03", pay_by: at(40_000), t1: at(3_600_000), t2: at(7_200_000),
   signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null, delivery_hash: null };
 
 /** A take paid from the Lighter account #42, the API and Lighter itself answering; `owners` is whose account each index is, as Lighter says. */
@@ -38,7 +38,7 @@ function lighter(owners: Record<number, string> = { 42: owner.address, 731033: m
     return Response.json({ error: { code: "NOT_FOUND", message: route, request_id: "r", retryable: false } }, { status: 404 });
   }, { preconnect: globalThis.fetch.preconnect });
   const messages: string[] = [];
-  const signer = { address: owner.address, signMessage: ({ message }: { message: string }) => { messages.push(message); return owner.signMessage({ message }); } };
+  const signer = { address: owner.address, signTypedData: owner.signTypedData, signMessage: ({ message }: { message: string }) => { messages.push(message); return owner.signMessage({ message }); } };
   return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, messages, signer };
 }
 

@@ -28,15 +28,14 @@ export class LaMargeError extends Error {
 
 export interface Request {
   method: string;
-  /** Path template, such as `/v1/takes/{id}`. */
+  /** Path template; `{id}` placeholders are filled from `params`. */
   path: string;
   params?: Record<string, string | number> | undefined;
   query?: Record<string, string | number | boolean | undefined> | undefined;
   body?: unknown;
   token?: string | null | undefined;
   signal?: AbortSignal | undefined;
-  /** Retry a 429, a 5xx or a network failure with the identical request, at most twice. Only for an
-   * operation that repeating cannot change: a read, or an exact replay of a client id or signed operation. */
+  /** At most two identical retries on 429, 5xx or network failure. Only safe for idempotent operations. */
   retry?: boolean | undefined;
   /** Statuses whose JSON body is the answer, as `/health`'s 503 while it is not ready. */
   accept?: readonly number[] | undefined;
@@ -69,7 +68,6 @@ function refusal(status: number, raw: unknown, headers: Headers): LaMargeError {
   });
 }
 
-/** Resolves after `ms`, or rejects as soon as `signal` aborts. */
 export function wait(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = () => { clearTimeout(timer); reject(signal?.reason); };
@@ -96,7 +94,6 @@ async function answerBody(response: Response, max: number | undefined): Promise<
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return null; }
 }
 
-/** One HTTP exchange with the API: the answer's status and decoded JSON, or a `LaMargeError`. */
 export async function exchange(transport: Transport, request: Request): Promise<{ status: number; body: unknown }> {
   const path = request.path.replace(/\{([^}]+)\}/g, (_match: string, key: string) => encodeURIComponent(required(request.params?.[key], `Missing path parameter ${key}`)));
   const query = new URLSearchParams();
@@ -126,11 +123,9 @@ export async function exchange(transport: Transport, request: Request): Promise<
   }
 }
 
-/** An operation's path and query parameters, and its body, as a generated `operations` entry types them. */
 export type OperationInput<Op> = (Op extends { parameters: infer P } ? Pick<P, Extract<keyof P, "path" | "query">> : never)
   & (Op extends { requestBody: { content: { "application/json": infer B } } } ? { body: B } : { body?: never });
 type SuccessBody<R> = R extends { content: { "application/json": infer B } } ? B : null;
-/** An operation's success answer, as a generated `operations` entry types it. */
 export type OperationAnswer<Op> = Op extends { responses: infer R } ? SuccessBody<R[Extract<keyof R, 200 | 201 | 202 | 204>]> : never;
 export type Answer<O extends keyof operations> = OperationAnswer<operations[O]>;
 export type CallOptions<O extends keyof operations> = OperationInput<operations[O]> & {
@@ -138,7 +133,6 @@ export type CallOptions<O extends keyof operations> = OperationInput<operations[
   retry?: boolean | undefined;
 };
 
-/** The options, required when the operation has a path parameter, a required query or a body. */
 export type CallArguments<O extends keyof operations> = object extends CallOptions<O> ? [options?: CallOptions<O>] : [options: CallOptions<O>];
 
 export interface ClientConfig extends Transport {

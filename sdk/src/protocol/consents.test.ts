@@ -74,7 +74,6 @@ const now = 1_790_000_000;
 
 type PreparedClose = Parameters<typeof checkCloseOffer>[0];
 
-/** What `POST /escrow/close/prepare` answers for `order`. */
 const prepared = (): PreparedClose => ({
   venue: "hyperliquid",
   order_id: order.order_id,
@@ -182,7 +181,6 @@ test("only a maker payment abandoned inside its venue can be reviewed for an ear
   const { payment, prepared } = fixture();
   expect(canRefundPayment(payment)).toBe(true);
   expect(() => checkPaymentRefund(payment, prepared)).not.toThrow();
-  // From an escrow offer, the operator returns it at once.
   for (const change of [{ role: "taker" as const }, { maker_leg: "LOCKED" as const }, { to_venue: "polymarket", deliver_by: null },
     { maker_leg: "CLAIMED" as const }, { payment_leg: "REFUNDED" as const }, { t2: "2000-01-01T00:00:00Z" }]) {
     expect(() => checkPaymentRefund({ ...payment, ...change }, prepared)).toThrow("This payment cannot be refunded early");
@@ -221,22 +219,12 @@ test("refund consent binds the payment, recipient, chain, contract, fields and e
   expect(() => checkPaymentRefund({ ...payment, t2: new Date((prepared.deadline - 1) * 1000).toISOString() }, prepared)).toThrow("Refund terms changed");
 });
 
-test("an early refund needs the payment locked, and no maker lock or venue delivery", () => {
+test("an early refund needs the payment locked and no venue delivery", () => {
   type Lock = [bigint, string, string, bigint, number, number];
-  const payment = { ...fixture().payment, to_venue: "polymarket", deliver_by: null };
+  const payment = { ...fixture().payment, to_venue: "lighter", deliver_by: fixture().payment.t1 };
   const lock = (state: number): Lock => [BigInt(payment.amount_in), payment.hashlock, payment.maker_recipient, BigInt(Math.floor(Date.parse(payment.t2) / 1000)), state, 0];
-  const none: Lock = [0n, `0x${"00".repeat(32)}`, `0x${"00".repeat(20)}`, 0n, 0, 0];
-  expect(() => checkRefundLocks(payment, lock(1), none)).not.toThrow();
-  // The maker's slot holds a delivery, kept as a claimed lock, or before deliveries a maker lock.
-  for (const state of [1, 2, 3]) expect(() => checkRefundLocks(payment, lock(1), lock(state))).toThrow("The onchain locks no longer permit this refund");
-  expect(() => checkRefundLocks(payment, lock(1), null)).toThrow("Unsupported refund chain");
-  // Delivered inside the venue: no maker lock exists, and a recorded delivery forbids consent.
-  const lighter = { ...payment, to_venue: "lighter", deliver_by: payment.t1 };
-  expect(() => checkRefundLocks(lighter, lock(1), null)).not.toThrow();
-  expect(() => checkRefundLocks(lighter, lock(1), none)).toThrow("Unsupported refund chain");
-  expect(() => checkRefundLocks({ ...lighter, delivery_hash: "ab" }, lock(1), null)).toThrow("This fill was delivered");
-  expect(() => checkRefundLocks(lighter, lock(2), null)).toThrow("The onchain locks no longer permit this refund");
-  // A fill keeps the settlement it was taken under: Aster's escrow era locked the maker.
-  expect(() => checkRefundLocks({ ...payment, to_venue: "aster" }, lock(1), none)).not.toThrow();
-  expect(() => checkRefundLocks({ ...payment, to_venue: "aster" }, lock(1), null)).toThrow("Unsupported refund chain");
+  expect(() => checkRefundLocks(payment, lock(1))).not.toThrow();
+  expect(() => checkRefundLocks({ ...payment, deliver_by: null }, lock(1))).toThrow("Unsupported refund chain");
+  expect(() => checkRefundLocks({ ...payment, delivery_hash: "ab" }, lock(1))).toThrow("This fill was delivered");
+  expect(() => checkRefundLocks(payment, lock(2))).toThrow("The onchain locks no longer permit this refund");
 });

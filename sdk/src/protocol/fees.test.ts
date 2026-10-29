@@ -12,15 +12,13 @@ test("a swap id carries its fee after the escrow's tag", () => {
 });
 
 test("a fee is the swap id's, where the payment says, within the taker's consent", () => {
-  // 3,000 on a price of 10,000,000 is 3 basis points: the payment carries 10,003,000.
   const fill = { swap_id: charged, taker_fee: "3000", amount_in: "10003000", amount_out: "10000000" };
   expect(() => checkFee(fill, false, 3)).not.toThrow();
   expect(() => checkFee(fill, false, 2)).toThrow("above what you accepted");
   expect(() => checkFee(fill, false, undefined)).toThrow("above what you accepted");
   expect(() => checkFee(fill, true, 3)).toThrow("swap_id");
   expect(() => checkFee({ ...fill, taker_fee: "2999" }, false, 3)).toThrow("taker_fee");
-  // Without a tag, no fee; a server before fees names none.
-  const plain = { ...fill, swap_id: `0x${"aa".repeat(32)}`, taker_fee: undefined };
+  const plain = { ...fill, swap_id: `0x${"aa".repeat(32)}`, taker_fee: "0" };
   expect(() => checkFee(plain, false, undefined)).not.toThrow();
   expect(() => checkFee({ ...plain, taker_fee: "1" }, false, 3)).toThrow("taker_fee");
 });

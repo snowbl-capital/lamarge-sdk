@@ -4,7 +4,6 @@ import { insist } from "./protocol/protocol.ts";
 
 export type EventPage = components["schemas"]["EventPage"];
 type Control = components["schemas"]["StreamControl"];
-/** `private` snapshots add the signed-in user's or credential's orders, fills and leases. */
 export type Snapshot = Answer<"getV1Snapshot"> | Answer<"getV1MeSnapshot">;
 export type Change = EventPage | { resync: Snapshot };
 
@@ -26,7 +25,6 @@ export interface ChangeOptions {
   WebSocket?: SocketConstructor | undefined;
 }
 
-/** A stream frame, typed like every answer and not validated: a page says what to read again. */
 function decode(frame: string): EventPage | Control;
 function decode(frame: string): unknown {
   const value: unknown = JSON.parse(frame);

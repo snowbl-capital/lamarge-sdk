@@ -42,7 +42,7 @@ test("a withdrawal signs only the exact amount to the signer, and a lost answer 
     "POST /v1/withdrawals": body => {
       submissions.push(String(record(body).signature));
       if (lose-- > 0) throw new TypeError("connection reset");
-      return { id: "w1", venue: "polymarket", amount: "1000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null };
+      return { id: "w1", venue: "polymarket", kind: "withdrawal", amount: "1000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null };
     },
   });
   const signer = counting();
@@ -54,7 +54,6 @@ test("a withdrawal signs only the exact amount to the signer, and a lost answer 
   expect(signer.signed).toBe(1);
   expect(await withdraw(client, signer, { id: "w-1", venue: "polymarket", amount: 1_000_000n, to: "signer" }, { store })).toMatchObject({ state: "relayed" });
   expect(signer.signed).toBe(1);
-  // Its outcome stays under its id: running it again withdraws nothing more.
   const sent = submissions.length;
   expect(await withdraw(client, signer, { id: "w-1", venue: "polymarket", amount: 1_000_000n, to: "signer" }, { store })).toMatchObject({ id: "w1", state: "relayed" });
   expect([submissions.length, signer.signed]).toEqual([sent, 1]);
@@ -81,7 +80,7 @@ test("a withdrawal is checked against the caller's clock, never the machine's", 
   const { client } = fake({
     "GET /v1/balances": () => [{ venue: "polymarket", address: owner, venue_wallet: other }],
     "POST /v1/withdrawals/prepare": () => ({ typed_data: { ...polymarketWithdrawal(owner), message: { ...polymarketWithdrawal(owner).message, ts: later / 1000 } } }),
-    "POST /v1/withdrawals": () => ({ id: "w3", venue: "polymarket", amount: "1000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null }),
+    "POST /v1/withdrawals": () => ({ id: "w3", venue: "polymarket", kind: "withdrawal", amount: "1000000", destination: owner, state: "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null }),
   });
   const signer = counting();
   await expect(withdraw(client, signer, { id: "w-3", venue: "polymarket", amount: 1_000_000n, to: "signer" })).rejects.toThrow();
@@ -97,7 +96,6 @@ test("an Aster withdrawal is refused before any request", async () => {
 });
 
 const t2 = new Date((now() + 3600) * 1000).toISOString();
-/** A maker's fill whose delivery inside Lighter was abandoned, its payment locked on HyperEVM. */
 const fill = {
   id: "fill-1", role: "maker", maker_leg: "ABANDONED", payment_leg: "LOCKED", t2, from_venue: "hyperliquid", to_venue: "lighter", maker_recipient: owner,
   maker_owner: owner, payer: other, swap_id: swap, order_id: `0x${"cc".repeat(32)}`, amount_in: "1000000", hashlock, deliver_by: t2 as string | null, delivery_hash: null,
@@ -110,10 +108,9 @@ const refundApi = (escrow = ESCROW) => fake({
   },
   "POST /v1/fills/fill-1/refund": () => null,
 });
-/** Each chain's reads: the payment lock in `paymentState`, the maker's slot in `makerState`, and the escrows read. */
-const readers = (paymentState = 1, makerState = 0, read: string[] = []): ChainReaders => ({
+/** The payment lock in `paymentState`, and the escrows read. */
+const readers = (paymentState = 1, read: string[] = []): ChainReaders => ({
   999: { readContract: async request => { read.push(`999:${request.address}`); return request.functionName === "locks" ? [1_000_000n, hashlock, owner, BigInt(Math.floor(Date.parse(t2) / 1000)), paymentState, 0] : `0x${"dd".repeat(32)}`; } },
-  137: { readContract: async request => { read.push(`137:${request.address}`); return [makerState ? 1_000_000n : 0n, `0x${"0".repeat(64)}`, makerState ? other : `0x${"0".repeat(40)}`, 0n, makerState, 0]; } },
 });
 
 test("a refund is signed only once the escrow its consent names confirms the payment lock", async () => {
@@ -122,11 +119,10 @@ test("a refund is signed only once the escrow its consent names confirms the pay
   await expect(refundPayment(client, signer, structuredClone(fill), {})).rejects.toThrow("No reader for hyperliquid");
   await expect(refundPayment(client, signer, structuredClone(fill), readers(2))).rejects.toThrow("no longer permit this refund");
   await expect(refundPayment(client, signer, { ...structuredClone(fill), delivery_hash: "1234" }, readers())).rejects.toThrow("This fill was delivered");
-  // From an escrow offer, the operator returns the payment itself.
   await expect(refundPayment(client, signer, { ...structuredClone(fill), to_venue: "polymarket", deliver_by: null }, readers())).rejects.toThrow("cannot be refunded early");
   expect(signer.signed).toBe(0);
   const read: string[] = [];
-  await refundPayment(client, signer, structuredClone(fill), readers(1, 0, read));
+  await refundPayment(client, signer, structuredClone(fill), readers(1, read));
   expect(signer.signed).toBe(1);
   expect(new Set(read)).toEqual(new Set([`999:${address(ESCROW)}`]));
   expect(calls.at(-1)).toBe("POST /v1/fills/fill-1/refund");
@@ -151,7 +147,7 @@ test("two calls with one id share one signature, and a pending outcome is read a
     "POST /v1/withdrawals/prepare": () => ({ typed_data: { ...polymarketWithdrawal(owner), message: { ...polymarketWithdrawal(owner).message, salt: ++salt } } }),
     "POST /v1/withdrawals": body => {
       submissions.push(String(record(body).signature));
-      return { id: "w1", venue: "polymarket", amount: "1000000", destination: owner, state: states.shift() ?? "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null };
+      return { id: "w1", venue: "polymarket", kind: "withdrawal", amount: "1000000", destination: owner, state: states.shift() ?? "relayed", venue_ref: null, error: null, created_at: "2026-10-17T00:00:00Z", relayed_at: null };
     },
   });
   const signer = counting();

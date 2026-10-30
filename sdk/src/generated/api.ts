@@ -500,7 +500,7 @@ export interface paths {
         put?: never;
         /**
          * Publish quote lines
-         * @description Accepts every draft and cancellation of a preparation and replaces the identity's lines, in one transaction, or none ([quotes](/how-it-works#quotes)). `STATE_CONFLICT` when the lines' revision moved since the preparation or a draft was accepted with another signature; `STALE_QUOTE` once the preparation is five minutes old, or unless each draft's pool is `live`, its lease current, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless each draft's sequence exceeds every published one. A cancellation is an unguarded `DELETE /v1/orders/{id}/quotes`. Retries never restore a cancelled or superseded set; reserved fills keep their quote. The quote signer signs with its key: a contract's (ERC-1271) signature is refused, as the escrow refuses it at delivery. Publishing an accepted preparation again returns the lines. Credential scope: `quote`, and `cancel` when it cancels.
+         * @description Accepts every draft and cancellation of a preparation and replaces the identity's lines, in one transaction, or none ([quotes](/how-it-works#quotes)). `STATE_CONFLICT` when the lines' revision moved since the preparation or a draft was accepted with another signature; `STALE_QUOTE` once the preparation is five minutes old, or unless each draft's pool is `live`, its lease current, before `valid_until`, at the current generation and `cancel_epoch`; `STALE_SEQUENCE` unless each draft's sequence exceeds every published one. A cancellation is an unguarded `DELETE /v1/orders/{id}/quotes`. Retries never restore a cancelled set. A superseded set stops admitting takes, but the takes prepared under it still execute under it until their `pay_by`; cancel to withdraw them. The quote signer signs with its key: a contract's (ERC-1271) signature is refused, as the escrow refuses it at delivery. Publishing an accepted preparation again returns the lines. Credential scope: `quote`, and `cancel` when it cancels.
          */
         post: operations["publishQuoteLines"];
         delete?: never;
@@ -1036,7 +1036,7 @@ export interface paths {
         put?: never;
         /**
          * Take at market
-         * @description Prepares up to `max_parts` fills in `PREPARED`, without reserving maker liquidity, paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). After signatures and payment preflight, all parts reserve atomically just before payment. A part follows the maker's newer quote set when it prices the part exactly as signed; a withdrawn, repriced or consumed offer expires it unpaid with a reason: prepare and sign again. No bond is required. One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
+         * @description Prepares up to `max_parts` fills in `PREPARED`, without reserving maker liquidity, paid from the payer's available balance in the `from` escrow ([takes](/how-it-works#takes)). After signatures and payment preflight, all parts reserve atomically just before payment, each under the quote set it was prepared under: the maker's newer sets do not retract it. A cancelled, expired or consumed offer expires it unpaid with a reason: prepare and sign again. No bond is required. One `pay_take` signature covers every payment and a wallet deposit of any shortfall; the deposit needs the payer's `permit` step (`SETUP_REQUIRED`). `PREFUNDING_REQUIRED`, reserving nothing, when balance and wallet together fall short: fund the wallet with a [transfer](/api-reference/transfers/create). Several takes may await payment at once: from an escrow venue, each is admitted against what the others hold of the same funds (`holdings.committed` of `/v1/balances`); a Lighter or Aster account pays one at a time. `STATE_CONFLICT` while a maker preparation or an escrow close is open on `from`. Persist `client_take_id`: the same body returns the same take. A transfer's take with its withdrawal prepared, not submitted, is signed at once with it (funding plan `signed_at_once`): its `pay_by` is a route's (`limits.route_pay_window_seconds` of `/v1/info`), its deposit what the wallet lacks once the withdrawal arrives; `PREFUNDING_REQUIRED` when the wallet and the withdrawal fall short, `WITHDRAWAL_EXPIRED` when the preparation leaves too little time to sign. Paid from Lighter or Aster: one fill and one `lighter_transfer` or `aster_transfer` signature; `PREFUNDING_REQUIRED` when that account cannot cover it with its fee, `VALIDATION_ERROR` when it backs a pool, `FORBIDDEN` while paying from a venue is suspended.
          */
         post: operations["postTake"];
         delete?: never;
@@ -1140,7 +1140,7 @@ export interface paths {
         put?: never;
         /**
          * Accept an active delivery before taker funding
-         * @description Commits the maker to deliver this fill, before `maker_accept_by`. The taker's payment waits for every acceptance of the take (both takes of a grouped route); a missing one expires the unpaid take. Retries of an accepted fill return 204, also after the deadline.
+         * @description Commits the maker to deliver this fill, before `maker_accept_by`. The taker's payment waits for every acceptance of the take (both takes of a grouped route); a missing one expires the unpaid take. Accepted, the fill is owed even if the maker cancels its quotes or closes the pool afterwards; it cannot be accepted once they were cancelled. Retries of an accepted fill return 204, also after the deadline.
          */
         post: operations["acceptFill"];
         delete?: never;
@@ -2243,12 +2243,21 @@ export interface components {
             withdrawal: components["schemas"]["Withdrawal"] | null;
             /** @description Returned on creation and with `funding_plan=true` while the transfer has no take and is not cancelled: before a withdrawal, or once a relayed withdrawal's funds at the wallet plus the available balance cover `amount_in`. Null otherwise, when paying from Lighter or Aster, or when it cannot be computed. */
             funding_plan: components["schemas"]["FundingPlan"] | null;
-            /** @description Why `funding_plan` could not be computed when it was asked for, such as `VALIDATION_ERROR` for a withdrawable balance short of the amount, or `VENUE_UNAVAILABLE` while a chain does not answer. Null otherwise. */
+            /** @description Why `funding_plan` could not be computed when it was asked for, as the refusal would carry it: such as `VALIDATION_ERROR` for a withdrawable balance short of the amount, `VENUE_UNAVAILABLE` while a chain does not answer, or `STATE_CONFLICT` with `retry_after` while an earlier withdrawal of the account is being sent. Null otherwise. */
             funding_plan_error: {
                 /** @description The [error](/api-reference/overview#errors) code. */
                 code: string;
                 /** @description Human-readable, such as the balance missing; do not parse. */
                 message: string;
+                /** @description Stable sub-case of `code`, as the refusal would carry it. */
+                reason?: string;
+                venue?: components["schemas"]["VenueId"];
+                /** @enum {string} */
+                step?: "permit" | "agent" | "api_key" | (string & {});
+                /** @description The HTTP status the refusal would have. */
+                status: number;
+                /** @description Seconds after which the plan may be computed, as `Retry-After` would say. */
+                retry_after?: number;
             } | null;
             take_id: components["schemas"]["Uuid"] | null;
             /** @description True once all its take's fills are final; null without a take. */
@@ -5697,7 +5706,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description No pending request, or the acceptance window closed. */
+            /** @description No pending request, the acceptance window closed, or the fill's quotes were cancelled. */
             409: {
                 headers: {
                     [name: string]: unknown;

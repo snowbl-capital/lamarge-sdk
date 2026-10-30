@@ -215,8 +215,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(uint(p.deadline) === BigInt(Math.floor(payBy)), differs("payments.deadline"));
     insist(uint(p.dex) === 0n || input.from === "hyperliquid" && uint(p.dex) === 4294967295n, differs("payments.dex"));
     insist(same(p.orderId, fill.order_id), differs("payments.orderId"));
-    // A fill that followed a requote at its signed price names the later set.
-    insist(uint(p.sequence) <= BigInt(fill.sequence), differs("payments.sequence"));
+    insist(uint(p.sequence) === BigInt(fill.sequence), differs("payments.sequence"));
     insist(uint(p.amountOut) === BigInt(fill.amount_out), differs("payments.amountOut"));
     insist(same(p.receiveRecipient, recipient), differs("payments.receiveRecipient"));
     insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && isPinnedEscrow(input.to, p.receiveEscrow)

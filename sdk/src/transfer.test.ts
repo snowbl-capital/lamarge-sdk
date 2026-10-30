@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createClient } from "./client.ts";
+import { createClient, LaMargeError } from "./client.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas, UNLIMITED_ALLOWANCE } from "./protocol/protocol.ts";
 import { array, record, required } from "./protocol/validation.ts";
 import type { Signing } from "./signer.ts";
@@ -285,6 +285,17 @@ test("wallet funds short of the amount sign no permit, even when the plan shows 
   await expect(transfer(client, signer, request)).rejects.toThrow("Wallet funds do not cover the transfer");
   expect(signer.signed).toBe(0);
   expect(calls.some(call => call.includes("/setup/"))).toBe(false);
+});
+
+test("a plan the server could not compute fails as its refusal, with when to ask again", async () => {
+  const { client, calls } = api({ withdrawalAmount: "600000", answered: { funding_plan: null,
+    funding_plan_error: { code: "STATE_CONFLICT", message: "an earlier transfer is being sent", status: 409, retry_after: 9 } } });
+  const signer = counting();
+  const refused = await transfer(client, signer, { ...request, funding: "venue" }).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(LaMargeError);
+  expect(refused).toMatchObject({ status: 409, code: "STATE_CONFLICT", retryAfterMs: 9_000 });
+  expect(signer.signed).toBe(0);
+  expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
 });
 
 test("margin leaves the venue only for a take the book can execute", async () => {

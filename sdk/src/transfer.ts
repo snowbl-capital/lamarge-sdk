@@ -349,6 +349,10 @@ async function pay(client: Client, signer: Signer, request: TransferRequest, opt
   };
   let authorizing = false;
   const checkPlan = () => {
+    // A plan the server could not compute fails as its refusal would: code, reason and Retry-After kept.
+    const refused = intent.funding_plan ? null : intent.funding_plan_error;
+    if (refused) throw new LaMargeError(refused.status, refused.code, refused.message, { reason: refused.reason, venue: refused.venue, step: refused.step,
+      retryAfterMs: refused.retry_after === undefined ? undefined : refused.retry_after * 1000 });
     const plan = checkFundingPlan(intent, now());
     insist(request.funding === "venue" || BigInt(plan.withdrawal_amount) === 0n, "Wallet funds do not cover the transfer");
     authorizing = ["required", "pending"].includes(plan.payment_setup);

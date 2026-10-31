@@ -50,6 +50,8 @@ export interface Transport {
   retryRateLimited?: boolean | undefined;
   /** The most of an answer that is read; a longer one is refused. Unbounded unless set. */
   maxAnswerBytes?: number | undefined;
+  /** How a retry waits, on the caller's clock; the machine's by default. */
+  sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
 const text = (value: unknown) => typeof value === "string" ? value : undefined;
@@ -117,8 +119,9 @@ export async function exchange(transport: Transport, request: Request): Promise<
       // The server says what may be retried; an answer without its envelope, from a proxy, only for a 429 or 5xx.
       const transient = !(error instanceof LaMargeError) || (error.status === 429 && transport.retryRateLimited === false ? false : error.retryable ?? (error.status === 429 || error.status >= 500));
       if (!request.retry || attempt >= 2 || !transient) throw error;
-      const delay = error instanceof LaMargeError && error.retryAfterMs !== undefined ? error.retryAfterMs : 250 * 2 ** attempt;
-      await wait(delay, request.signal);
+      // The SDK's own backoff is jittered, so that clients failed together come back apart.
+      const delay = error instanceof LaMargeError && error.retryAfterMs !== undefined ? error.retryAfterMs : Math.random() * 500 * 2 ** attempt;
+      await (transport.sleep?.(delay) ?? wait(delay, request.signal));
     }
   }
 }

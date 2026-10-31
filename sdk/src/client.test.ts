@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createClient, exchange, LaMargeError, type CallArguments } from "./client.ts";
 
 const send = async (...args: Parameters<typeof exchange>) => (await exchange(...args)).body;
@@ -40,6 +40,17 @@ test("only a request marked retryable is repeated, with the identical body", asy
   expect(await send({ apiUrl: "http://localhost:8080", fetch: retried.fetch }, { method: "POST", path: "/v1/fills/{id}/delivery", params: { id: "f/1" }, body: { tx_hash: "0x1" }, retry: true })).toEqual({ ok: true });
   expect(retried.seen.map(request => request.url)).toEqual(["http://localhost:8080/v1/fills/f%2F1/delivery", "http://localhost:8080/v1/fills/f%2F1/delivery"]);
   expect(await Promise.all(retried.seen.map(request => request.text()))).toEqual(['{"tx_hash":"0x1"}', '{"tx_hash":"0x1"}']);
+});
+
+test("a retry waits a jittered backoff that doubles, on the caller's clock", async () => {
+  const random = spyOn(Math, "random").mockReturnValue(0.5);
+  const failing = () => new Response("bad gateway", { status: 502 });
+  const waits: number[] = [];
+  const { fetch, seen } = answering(failing, failing, failing);
+  await expect(send({ apiUrl: "http://localhost:8080", fetch, sleep: async ms => { waits.push(ms); } }, { method: "GET", path: "/v1/orders", retry: true })).rejects.toMatchObject({ status: 502 });
+  expect(seen).toHaveLength(3);
+  expect(waits).toEqual([250, 500]);
+  random.mockRestore();
 });
 
 test("a caller keeping its own request budget gets a 429 at once, never retried", async () => {

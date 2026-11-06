@@ -3,7 +3,7 @@ import { checkLinkChallenge, checkSetupKind } from "./protocol/consents.ts";
 import { lighterAccountOwner, registrationMessage, TAKER_API_KEYS } from "./protocol/lighter.ts";
 import { checkAsterApproval, checkPermit, insist, same } from "./protocol/protocol.ts";
 import { fromHex, required } from "./protocol/validation.ts";
-import { signTyped, type BeforeSigning, type Signer } from "./signer.ts";
+import { attested, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
 
 type SetupStep = Answer<"postVenueSetupStep">;
 /** A step starting, or submitted and awaited until the venue shows it, with its transaction when it has one. */
@@ -42,7 +42,7 @@ async function signStep(client: Client, step: SetupStep, venue: string, owner: S
     const approval = { message: String(typed.message.msg), nonce: request.ref, expires_at: required(request.expires_at), typed_data: typed };
     checkAsterApproval(approval, owner.address, now(), pins.asterAgentName);
     await before?.({ kind: "setup", venue, step });
-    return signTyped(owner, approval.typed_data);
+    return signTyped(owner, approval.typed_data, attested(request));
   }
   // Lighter's own owner message: LaMarge's key at its index, for the linked account, at the key's nonce.
   // The account is an index: Lighter itself says whose it is, LaMarge's record of the link doesn't.
@@ -53,7 +53,8 @@ async function signStep(client: Client, step: SetupStep, venue: string, owner: S
   insist(key && keys.some(apiKey => message === registrationMessage({ account, apiKey, publicKey: fromHex(key), nonce: Number(request.ref) })), "Unexpected Lighter key registration");
   insist(same(await lighterAccountOwner(account, signal, client.fetch), owner.address), "The Lighter key registration names another account than yours");
   await before?.({ kind: "setup", venue, step });
-  return owner.signMessage({ message });
+  const context = attested(request);
+  return context ? owner.signMessage({ message }, context) : owner.signMessage({ message });
 }
 
 /** Prepares and, when it is still required, signs and submits one step; an unanswered submission is sent again unchanged. */

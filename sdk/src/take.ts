@@ -5,7 +5,7 @@ import { COLLATERAL_ROUTE, lighterAccountOwner, transferMessage, USDC_ASSET } fr
 import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Dex, type Typed } from "./protocol/protocol.ts";
 import { fromHex, record, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
-import { signedItem, signItems, signTyped, type BeforeSigning, type Signer } from "./signer.ts";
+import { attested, signedItem, signItems, signTyped, withoutAttestation, type BeforeSigning, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
 import { signWithdrawal } from "./withdraw.ts";
 
@@ -68,13 +68,14 @@ export async function signPayment(client: Client, prepared: Prepared, input: Tak
       amount: BigInt(terms.amount), fee: BigInt(terms.usdc_fee), memo: fromHex(terms.memo), expiredAt: 0, nonce: terms.nonce,
     });
     await checked();
-    return [signedItem(item, await signer.signMessage({ message }))];
+    const context = attested(item);
+    return [signedItem(item, await (context ? signer.signMessage({ message }, context) : signer.signMessage({ message })))];
   }
   if (isAster(item)) {
     checkAsterTakeIntent(to_sign, take.fills, input, payer.address, recipient, at);
     checkAsterRequest(item.typed_data, ASTER_TRANSFER_CHAIN_ID);
     await checked();
-    return [signedItem(item, await signTyped(signer, item.typed_data))];
+    return [signedItem(item, await signTyped(signer, item.typed_data, attested(item)))];
   }
   const typed = to_sign.filter((entry): entry is Exclude<Item, LighterItem | AsterItem> => !isLighter(entry) && !isAster(entry));
   checkTakeIntent(typed, take.fills, input, payer.address, recipient, at, options.payWindow);
@@ -104,7 +105,7 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   const loaded: unknown = await store.load(key);
   const kept = loaded === undefined ? undefined : record(loaded);
   let signatures = signedItems(kept?.items);
-  if (signatures && kept) insist(canonical(kept.to_sign) === canonical(to_sign) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
+  if (signatures && kept) insist(canonical(withoutAttestation(kept.to_sign)) === canonical(withoutAttestation(to_sign)) && canonical(kept.withdrawal) === canonical(withdrawal?.typed_data), "The take's payment differs from the one already signed");
   if (!signatures) {
     try {
       // Each request is checked at its own signing time: a wallet may hold the first one open.

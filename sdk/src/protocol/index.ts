@@ -1,4 +1,3 @@
-export * from "./attestation.ts";
 export * from "./consents.ts";
 export * from "./deployments.ts";
 export * from "./fees.ts";

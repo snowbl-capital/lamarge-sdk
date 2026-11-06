@@ -178,6 +178,26 @@ test("a run interrupted after the first signature resumes from the kept one, the
   expect(hooks).toEqual([`route ${JSON.stringify({ first: true, withdrawal: false, second: false })}`, "withdrawal", "take"]);
 });
 
+test("a checkpoint whose requests kept LaMarge's attestations resumes from the kept signature", async () => {
+  const { client } = api();
+  const { signer, signed } = wallet();
+  const stop = new Error("interrupted");
+  const interrupted = { ...signer, signTypedData: async () => { throw stop; } };
+  const kept = new Map<string, unknown>();
+  const durable = { load: async (key: string) => kept.get(key), save: async (key: string, value: unknown) => { kept.set(key, value); }, delete: async (key: string) => { if (key !== "route:transfer-first" || !crashed) kept.delete(key); } };
+  let crashed = true;
+  await expect(signRoute(client, signer, interrupted, first, { store: durable })).rejects.toBe(stop);
+  crashed = false;
+  // As an earlier SDK saved it: each request with the attestation it came with, which LaMarge may sign again differently.
+  const checkpoint = record(kept.get("route:transfer-first"));
+  const requests = record(checkpoint.requests);
+  const proof = { attestation: { signature: `0x${"aa".repeat(65)}` } };
+  const proven = (items: unknown) => array(items).map(item => ({ ...record(item), ...proof }));
+  kept.set("route:transfer-first", { ...checkpoint, requests: { ...requests, first: proven(requests.first), second: proven(requests.second) } });
+  expect((await signRoute(client, signer, signer, first, { store: durable }))?.state).toBe("committed");
+  expect(signed.filter(kind => kind === "message")).toHaveLength(1);
+});
+
 test("a route's checks compare its second transfer with the plan and its withdrawal with what the first take delivers", () => {
   const delivering = [{ amount_out: "10000000" }];
   checkRouteIntent(first, delivering, second, owner, now);

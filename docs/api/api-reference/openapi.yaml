@@ -5372,13 +5372,93 @@
         "pattern": "^0x[0-9a-fA-F]{130}$",
         "description": "A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2)."
       },
-      "Attestation": {
-        "allOf": [
-          {
+      "TakeAttestation": {
+        "type": "object",
+        "description": "Present when LaMarge attests the request (an environment may not, and none while its key cannot sign): LaMarge's word that it asks `signer` to sign this request for a take it commits to `terms`: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: \"LaMarge attestation\", version: \"2\"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it verifies it with `verifyAttestation` from `@lamarge/sdk/attestation` against LaMarge's pinned attester, then applies its own policy to the terms it returns: where the take delivers is in the terms, not in a payment made inside a venue.",
+        "required": [
+          "signature",
+          "terms"
+        ],
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/Signature"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/TakeTerms"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TakeTerms": {
+        "type": "object",
+        "description": "`TakeTerms(bytes32 take,string from,string to,address recipient,address token,uint256 amountOut,uint64 payBy)`: what the take delivers, as LaMarge committed it.",
+        "required": [
+          "take",
+          "from",
+          "to",
+          "recipient",
+          "token",
+          "amountOut",
+          "payBy"
+        ],
+        "properties": {
+          "take": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Bytes32"
+              }
+            ],
+            "description": "The take id's 16 bytes then 16 zero bytes."
+          },
+          "from": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "to": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "recipient": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              }
+            ],
+            "description": "The account linked on `to` the take delivers to."
+          },
+          "token": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              }
+            ],
+            "description": "The token `to` delivers."
+          },
+          "amountOut": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "description": "What the take delivers in all, in the token's base units."
+          },
+          "payBy": {
+            "type": "integer",
+            "description": "Unix seconds: the payment is signed before then, or not at all."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetupAttestation": {
+        "type": "object",
+        "description": "LaMarge's word that it asks `signer` to approve its Aster agent or register its Lighter key: its attester's EIP-712 signature of `SetupAttestation(address signer,bytes32 digest)` under the domain `{name: \"LaMarge attestation\", version: \"2\"}`, `digest` the hash the wallet signs. Verified with `verifyAttestation` from `@lamarge/sdk/attestation`.",
+        "required": [
+          "signature"
+        ],
+        "properties": {
+          "signature": {
             "$ref": "#/components/schemas/Signature"
           }
-        ],
-        "description": "LaMarge's word that it asks `signer` to sign this item: its attester's EIP-712 signature of `Attestation(address signer,bytes32 digest)` under the domain `{name: \"LaMarge attestation\", version: \"1\"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it checks the attestation against LaMarge's attester address, and signs nothing it doesn't attest: a recipient, an agent or a key its app made up."
+        },
+        "additionalProperties": false
       },
       "QuoteSignature": {
         "type": "string",
@@ -6269,8 +6349,8 @@
                         "$ref": "#/components/schemas/Timestamp"
                       },
                       "attestation": {
-                        "$ref": "#/components/schemas/Attestation",
-                        "description": "`aster_approval` and `lighter_api_key` carry one: the agent and the key are LaMarge's."
+                        "$ref": "#/components/schemas/SetupAttestation",
+                        "description": "`aster_approval` and `lighter_api_key` carry one when LaMarge attests them: the agent and the key are LaMarge's."
                       }
                     },
                     "additionalProperties": false
@@ -6887,8 +6967,8 @@
             "$ref": "#/components/schemas/TypedData"
           },
           "attestation": {
-            "$ref": "#/components/schemas/Attestation",
-            "description": "A take's `pay_take` carries one."
+            "$ref": "#/components/schemas/TakeAttestation",
+            "description": "A take's `pay_take` carries one when LaMarge attests it."
           }
         }
       },
@@ -6899,8 +6979,7 @@
           "kind",
           "signer",
           "typed_data",
-          "fill_id",
-          "attestation"
+          "fill_id"
         ],
         "properties": {
           "kind": {
@@ -6922,8 +7001,8 @@
             "$ref": "#/components/schemas/LighterTransferTerms"
           },
           "attestation": {
-            "$ref": "#/components/schemas/Attestation",
-            "description": "Over the hash of the owner message the terms write."
+            "$ref": "#/components/schemas/TakeAttestation",
+            "description": "Its `digest` is the hash of the owner message the terms write."
           }
         }
       },
@@ -6982,8 +7061,7 @@
           "kind",
           "signer",
           "typed_data",
-          "fill_id",
-          "attestation"
+          "fill_id"
         ],
         "properties": {
           "kind": {
@@ -7010,7 +7088,7 @@
             "description": "`Message{msg}`, `AsterSignTransaction` domain, chain 1666, where `msg` is `asset=USDT&amount=…&toAddress=…&clientTranId=…&nonce=…&user=…`: `amount_in` with six decimals at most, rounded up, to the maker's linked Aster address, the take id in 32 hexadecimal characters, a microsecond nonce 55 seconds ahead, from your address, addresses checksummed."
           },
           "attestation": {
-            "$ref": "#/components/schemas/Attestation"
+            "$ref": "#/components/schemas/TakeAttestation"
           }
         }
       },

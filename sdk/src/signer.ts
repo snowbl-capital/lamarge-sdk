@@ -1,6 +1,6 @@
 import { requireSigningDomains, type DeploymentManifest, ESCROW_DEPLOYMENTS } from "./protocol/deployments.ts";
 import { convert, insist, same, type SignItem, type TransferTyped } from "./protocol/protocol.ts";
-import { address, record } from "./protocol/validation.ts";
+import { address, isRecord, record } from "./protocol/validation.ts";
 import type { Answer } from "./client.ts";
 import type { components } from "./generated/api.ts";
 
@@ -13,13 +13,19 @@ export interface TypedDataRequest {
 }
 
 /**
+ * What comes with a request LaMarge asks to sign: its `attestation`, for a signer that holds the key apart from the
+ * app, which checks it with `verifyAttestation` from `@lamarge/sdk/attestation` before signing.
+ */
+export interface SignContext { attestation?: components["schemas"]["TakeAttestation"] | components["schemas"]["SetupAttestation"] }
+
+/**
  * Whatever holds the key: a viem `LocalAccount` (a private key, or KMS through `toAccount`) fits as
  * is; a browser wallet wraps its client. The SDK hands it only data its checks already accepted.
  */
 export interface Signer {
   readonly address: Hex;
-  signMessage(request: { message: string }): Promise<Hex>;
-  signTypedData(request: TypedDataRequest): Promise<Hex>;
+  signMessage(request: { message: string }, context?: SignContext): Promise<Hex>;
+  signTypedData(request: TypedDataRequest, context?: SignContext): Promise<Hex>;
 }
 /** A quote key that may sign elsewhere (`Quoter.prepareLines`). */
 export type QuoteSigner = Pick<Signer, "address"> & Partial<Pick<Signer, "signTypedData">>;
@@ -36,9 +42,9 @@ export function typedDataRequest(typed: TransferTyped): TypedDataRequest {
   };
 }
 
-export async function signTyped(signer: Partial<Pick<Signer, "signTypedData">>, typed: TransferTyped): Promise<Hex> {
+export async function signTyped(signer: Partial<Pick<Signer, "signTypedData">>, typed: TransferTyped, context?: SignContext): Promise<Hex> {
   insist(signer.signTypedData, "This signer cannot sign typed data");
-  return signer.signTypedData(typedDataRequest(typed));
+  return context?.attestation ? signer.signTypedData(typedDataRequest(typed), context) : signer.signTypedData(typedDataRequest(typed));
 }
 
 /**
@@ -54,6 +60,17 @@ export type Signing =
   | { kind: "route"; preparation: Answer<"prepareGroupedRoute">; second: Answer<"getTransfer">; signed: { first: boolean; withdrawal: boolean; second: boolean } };
 export type BeforeSigning = (signing: Signing) => void | Promise<void>;
 
+/** An item's attestation, when it carries one, to hand the signer. */
+export const attested = (item: object): SignContext | undefined => {
+  const attestation = "attestation" in item ? item.attestation : undefined;
+  return isProof(attestation) ? { attestation } : undefined;
+};
+const isProof = (value: unknown): value is NonNullable<SignContext["attestation"]> => isRecord(value) && typeof value.signature === "string";
+
+/** An item as recovery compares it: its request, never its attestation, whose bytes change whenever LaMarge signs it again. */
+export const withoutAttestation = (items: unknown): unknown =>
+  Array.isArray(items) ? items.map((item: unknown) => isRecord(item) ? (({ attestation: _, ...rest }) => rest)(item) : item) : items;
+
 export interface SignedItem { kind: string; fill_id?: string; signature: Hex }
 
 export const signedItem = (item: { kind: string; fill_id?: string | undefined }, signature: Hex): SignedItem =>
@@ -65,6 +82,6 @@ export async function signItems(signer: QuoteSigner, items: readonly SignItem[],
   insist(items.every(item => same(item.signer, signer.address)), "This key cannot sign for a different linked account");
   insist(signer.signTypedData, "Prepare unsigned and submit the collected contract signature");
   const signed: SignedItem[] = [];
-  for (const item of items) signed.push(signedItem(item, await signTyped(signer, item.typed_data)));
+  for (const item of items) signed.push(signedItem(item, await signTyped(signer, item.typed_data, attested(item))));
   return signed;
 }

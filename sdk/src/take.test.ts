@@ -3,7 +3,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { createClient } from "./client.ts";
 import { checkLighterTakeIntent, type TakeFill } from "./protocol/intents.ts";
 import { fillMemo, LIGHTER_API, transferMessage } from "./protocol/lighter.ts";
-import { take } from "./take.ts";
+import { memoryStore } from "./store.ts";
+import { take, takeKey } from "./take.ts";
 
 const owner = privateKeyToAccount(`0x${"44".repeat(32)}`);
 const fill = "018f8d98-f485-7f48-9630-e0b7368fe28f";
@@ -20,7 +21,7 @@ const reserved = { id: fill, take_id: "take-1", order_id: "0x01", sequence: 1, r
   signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null, delivery_hash: null };
 
 /** A take paid from the Lighter account #42, the API and Lighter itself answering; `owners` is whose account each index is, as Lighter says. */
-function lighter(owners: Record<number, string> = { 42: owner.address, 731033: maker }) {
+function lighter(owners: Record<number, string> = { 42: owner.address, 731033: maker }, asked: object = item) {
   const calls: string[] = [];
   const fetch = Object.assign(async (url: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(url, init);
@@ -32,14 +33,15 @@ function lighter(owners: Record<number, string> = { 42: owner.address, 731033: m
     const route = `${request.method} ${target.pathname}`;
     calls.push(route);
     if (route === "GET /v1/balances") return Response.json([{ venue: "lighter", address: owner.address, venue_wallet: "42" }, { venue: "hyperliquid", address: owner.address, venue_wallet: null }]);
-    if (route === "POST /v1/takes") return Response.json({ take: { id: "take-1", fills: [reserved] }, to_sign: [item] });
+    if (route === "POST /v1/takes") return Response.json({ take: { id: "take-1", fills: [reserved] }, to_sign: [asked] });
     if (route === "POST /v1/takes/take-1/signatures") return Response.json({ fills: [{ ...reserved, state: "PAID" }] });
     if (route === "DELETE /v1/takes/take-1") return new Response(null, { status: 204 });
     return Response.json({ error: { code: "NOT_FOUND", message: route, request_id: "r", retryable: false } }, { status: 404 });
   }, { preconnect: globalThis.fetch.preconnect });
   const messages: string[] = [];
-  const signer = { address: owner.address, signTypedData: owner.signTypedData, signMessage: ({ message }: { message: string }) => { messages.push(message); return owner.signMessage({ message }); } };
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, messages, signer };
+  const contexts: unknown[] = [];
+  const signer = { address: owner.address, signTypedData: owner.signTypedData, signMessage: ({ message }: { message: string }, context?: unknown) => { messages.push(message); contexts.push(context); return owner.signMessage({ message }); } };
+  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, messages, contexts, signer };
 }
 
 test("a take paid from Lighter signs the transfer message its terms build, once Lighter confirms both accounts", async () => {
@@ -77,4 +79,25 @@ test("a take paid from Lighter checks its one transfer against the reserved fill
   expect(() => check([{ ...item, typed_data: { ...terms, api_key_index: 4 } }])).toThrow("Unexpected Lighter key");
   check([{ ...item, typed_data: { ...terms, usdc_fee: "1000000" } }]);
   expect(() => check([{ ...item, typed_data: { ...terms, usdc_fee: "1000001" } }])).toThrow("above 1 USDC");
+});
+
+const attestation = (byte: string) => ({ signature: `0x${byte.repeat(65)}`, terms: { take: `0x${"01".repeat(32)}`, from: "lighter", to: "hyperliquid", recipient: owner.address, token: `0x${"02".repeat(20)}`, amountOut: "2000000", payBy: 1 } });
+
+test("a take hands its signer the attestation of each request", async () => {
+  const { client, contexts, signer } = lighter(undefined, { ...item, attestation: attestation("aa") });
+  await take(client, signer, input);
+  expect(contexts).toEqual([{ attestation: attestation("aa") }]);
+});
+
+test("a take resumes its kept signature when only LaMarge's attestation of the request changed", async () => {
+  const store = memoryStore();
+  const kept = { items: [{ kind: "lighter_transfer", fill_id: fill, signature: `0x${"cc".repeat(65)}` }] };
+  await store.save(takeKey("take-1"), { ...kept, to_sign: [{ ...item, attestation: attestation("aa") }] });
+  const resumed = lighter(undefined, { ...item, attestation: attestation("bb") });
+  expect((await take(resumed.client, resumed.signer, input, { store })).map(row => row.state)).toEqual(["PAID"]);
+  expect(resumed.messages).toEqual([]);
+  // Another request is another payment: the kept signature never goes with it.
+  await store.save(takeKey("take-1"), { ...kept, to_sign: [{ ...item, typed_data: { ...terms, amount: "1" } }] });
+  const other = lighter(undefined, { ...item, attestation: attestation("bb") });
+  await expect(take(other.client, other.signer, input, { store })).rejects.toThrow("differs from the one already signed");
 });

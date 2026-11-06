@@ -2,7 +2,7 @@ import { LaMargeError, type Answer, type Client } from "./client.ts";
 import { checkRouteIntent } from "./protocol/intents.ts";
 import { groupable, insist, ROUTE_PAY_WINDOW_SECONDS, same } from "./protocol/protocol.ts";
 import { isHex, isRecord, required } from "./protocol/validation.ts";
-import { signTyped, type BeforeSigning, type SignedItem, type Signer } from "./signer.ts";
+import { signTyped, withoutAttestation, type BeforeSigning, type SignedItem, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
 import { signPayment, type TakeOptions } from "./take.ts";
 import { takeInput, type TransferIntent } from "./transfer.ts";
@@ -84,7 +84,7 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
     const payer = account(first.from, signer), between = account(second.from, hub);
     const kept: unknown = await store.load(key);
     // Signatures already made for this very route are kept, one by one: a restart asks only the rest.
-    const partial: Partial<Signed> = isRecord(kept) && canonical(kept.requests) === canonical(requests(preparation, second)) ? stored(kept) : {};
+    const partial: Partial<Signed> = isRecord(kept) && isRecord(kept.requests) && canonical(keptRequests(kept.requests)) === canonical(requests(preparation, second)) ? stored(kept) : {};
     const left = () => Date.parse(route.commit_by) - now() > REQUEST_MARGIN_MS;
     const save = async (progress: Partial<Signed>) => { signal?.throwIfAborted(); await store.save(key, { requests: requests(preparation, second), ...progress }); };
     const before = options.beforeSigning;
@@ -140,7 +140,10 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
 interface Signed { first: SignedItem[]; second: SignedItem[]; withdrawal?: `0x${string}` | undefined }
 
 const requests = (preparation: GroupedPreparation, second: TransferIntent) =>
-  ({ first: preparation.first.to_sign, second: preparation.second.to_sign, withdrawal: second.withdrawal_preparation?.typed_data ?? null });
+  ({ first: withoutAttestation(preparation.first.to_sign), second: withoutAttestation(preparation.second.to_sign), withdrawal: second.withdrawal_preparation?.typed_data ?? null });
+
+/** Requests a checkpoint kept, as `requests` writes them: one an earlier SDK saved still holds attestations. */
+const keptRequests = (kept: Record<string, unknown>) => ({ ...kept, first: withoutAttestation(kept.first), second: withoutAttestation(kept.second) });
 
 function stored(kept: Record<string, unknown>): Partial<Signed> {
   const first = signedItems(kept.first), second = signedItems(kept.second);

@@ -1524,8 +1524,30 @@ export interface components {
         Bytes32: string;
         /** @description A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2). */
         Signature: string;
-        /** @description LaMarge's word that it asks `signer` to sign this item: its attester's EIP-712 signature of `Attestation(address signer,bytes32 digest)` under the domain `{name: "LaMarge attestation", version: "1"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it checks the attestation against LaMarge's attester address, and signs nothing it doesn't attest: a recipient, an agent or a key its app made up. */
-        Attestation: components["schemas"]["Signature"];
+        /** @description Present when LaMarge attests the request (an environment may not, and none while its key cannot sign): LaMarge's word that it asks `signer` to sign this request for a take it commits to `terms`: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: "LaMarge attestation", version: "2"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it verifies it with `verifyAttestation` from `@lamarge/sdk/attestation` against LaMarge's pinned attester, then applies its own policy to the terms it returns: where the take delivers is in the terms, not in a payment made inside a venue. */
+        TakeAttestation: {
+            signature: components["schemas"]["Signature"];
+            terms: components["schemas"]["TakeTerms"];
+        };
+        /** @description `TakeTerms(bytes32 take,string from,string to,address recipient,address token,uint256 amountOut,uint64 payBy)`: what the take delivers, as LaMarge committed it. */
+        TakeTerms: {
+            /** @description The take id's 16 bytes then 16 zero bytes. */
+            take: components["schemas"]["Bytes32"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            /** @description The account linked on `to` the take delivers to. */
+            recipient: components["schemas"]["Address"];
+            /** @description The token `to` delivers. */
+            token: components["schemas"]["Address"];
+            /** @description What the take delivers in all, in the token's base units. */
+            amountOut: components["schemas"]["Amount"];
+            /** @description Unix seconds: the payment is signed before then, or not at all. */
+            payBy: number;
+        };
+        /** @description LaMarge's word that it asks `signer` to approve its Aster agent or register its Lighter key: its attester's EIP-712 signature of `SetupAttestation(address signer,bytes32 digest)` under the domain `{name: "LaMarge attestation", version: "2"}`, `digest` the hash the wallet signs. Verified with `verifyAttestation` from `@lamarge/sdk/attestation`. */
+        SetupAttestation: {
+            signature: components["schemas"]["Signature"];
+        };
         /** @description An EOA signature. Trade proofs of older fills may carry an opaque ERC-1271 signature (up to 16384 bytes) from a quote delegate. */
         QuoteSignature: string;
         /**
@@ -1779,8 +1801,8 @@ export interface components {
                 typed_data?: components["schemas"]["TypedData"];
                 message?: string;
                 expires_at?: components["schemas"]["Timestamp"];
-                /** @description `aster_approval` and `lighter_api_key` carry one: the agent and the key are LaMarge's. */
-                attestation?: components["schemas"]["Attestation"];
+                /** @description `aster_approval` and `lighter_api_key` carry one when LaMarge attests them: the agent and the key are LaMarge's. */
+                attestation?: components["schemas"]["SetupAttestation"];
             };
             /** @description The permit's relay transaction, while one is known. */
             hash: string | null;
@@ -1967,8 +1989,8 @@ export interface components {
              */
             fill_id?: string;
             typed_data: components["schemas"]["TypedData"];
-            /** @description A take's `pay_take` carries one. */
-            attestation?: components["schemas"]["Attestation"];
+            /** @description A take's `pay_take` carries one when LaMarge attests it. */
+            attestation?: components["schemas"]["TakeAttestation"];
         };
         /** @description A take paid from Lighter: sign Lighter's owner message for the transfer `typed_data` names with `personal_sign`, not EIP-712. */
         LighterTransferItem: {
@@ -1982,8 +2004,8 @@ export interface components {
              */
             fill_id: string;
             typed_data: components["schemas"]["LighterTransferTerms"];
-            /** @description Over the hash of the owner message the terms write. */
-            attestation: components["schemas"]["Attestation"];
+            /** @description Its `digest` is the hash of the owner message the terms write. */
+            attestation?: components["schemas"]["TakeAttestation"];
         };
         /** @description The internal transfer LaMarge sends from your Lighter account once every maker accepted, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
         LighterTransferTerms: {
@@ -2017,7 +2039,7 @@ export interface components {
             fill_id: string;
             /** @description `Message{msg}`, `AsterSignTransaction` domain, chain 1666, where `msg` is `asset=USDT&amount=…&toAddress=…&clientTranId=…&nonce=…&user=…`: `amount_in` with six decimals at most, rounded up, to the maker's linked Aster address, the take id in 32 hexadecimal characters, a microsecond nonce 55 seconds ahead, from your address, addresses checksummed. */
             typed_data: components["schemas"]["TypedData"];
-            attestation: components["schemas"]["Attestation"];
+            attestation?: components["schemas"]["TakeAttestation"];
         };
         /** @description Aster only, required until the withdrawal is recorded (exact retries need none): the account's own signature over this withdrawal request, relayed as is within 50 seconds of `nonce`. */
         AsterEnvelope: {

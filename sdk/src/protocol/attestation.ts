@@ -13,7 +13,7 @@ export type Environment = "production" | "development";
 
 /** LaMarge's attester addresses by environment, the newest first; a key rotation lists both until the old one retires. */
 export const ATTESTERS: Readonly<Record<Environment, readonly Hex[]>> = Object.freeze({
-  production: Object.freeze<Hex[]>([]),
+  production: Object.freeze<Hex[]>(["0x4552ab53f861f8990ab504cea09369d4ec5dc787"]),
   development: Object.freeze<Hex[]>(["0xf9d52b2ab0912cd972aaf545049e9c86dd74a7e9"]),
 });
 

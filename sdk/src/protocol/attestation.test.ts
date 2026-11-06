@@ -60,6 +60,8 @@ describe("verifyAttestation", () => {
     await expect(verifyAttestation({ request: REQUEST, address: SIGNER, attestation: { signature, terms: TERMS }, attesters: ATTESTERS.development, now: NOW }))
       .rejects.toThrow("another key signed it");
     await expect(verifyAttestation({ request: REQUEST, address: SIGNER, attestation: { signature, terms: TERMS }, attesters: ATTESTERS.production, now: NOW }))
+      .rejects.toThrow("another key signed it");
+    await expect(verifyAttestation({ request: REQUEST, address: SIGNER, attestation: { signature, terms: TERMS }, attesters: [], now: NOW }))
       .rejects.toThrow("no attester pinned");
   });
 

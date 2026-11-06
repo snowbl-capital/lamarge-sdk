@@ -4979,6 +4979,64 @@
         }
       }
     },
+    "/v1/trades/pending": {
+      "get": {
+        "tags": [
+          "Events and recovery"
+        ],
+        "summary": "List pending trades",
+        "operationId": "getV1TradesPending",
+        "description": "Signed trades not yet final, newest first: they leave the list when settled, refunded or expired. Unsigned preparations are not listed. `scope=mine` needs a session.",
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine`: trades where you are maker or taker.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "mine"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pending trades.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingTradeList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -5313,6 +5371,14 @@
         "type": "string",
         "pattern": "^0x[0-9a-fA-F]{130}$",
         "description": "A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2)."
+      },
+      "Attestation": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Signature"
+          }
+        ],
+        "description": "LaMarge's word that it asks `signer` to sign this item: its attester's EIP-712 signature of `Attestation(address signer,bytes32 digest)` under the domain `{name: \"LaMarge attestation\", version: \"1\"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it checks the attestation against LaMarge's attester address, and signs nothing it doesn't attest: a recipient, an agent or a key its app made up."
       },
       "QuoteSignature": {
         "type": "string",
@@ -6201,6 +6267,10 @@
                       },
                       "expires_at": {
                         "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "attestation": {
+                        "$ref": "#/components/schemas/Attestation",
+                        "description": "`aster_approval` and `lighter_api_key` carry one: the agent and the key are LaMarge's."
                       }
                     },
                     "additionalProperties": false
@@ -6815,6 +6885,10 @@
           },
           "typed_data": {
             "$ref": "#/components/schemas/TypedData"
+          },
+          "attestation": {
+            "$ref": "#/components/schemas/Attestation",
+            "description": "A take's `pay_take` carries one."
           }
         }
       },
@@ -6825,7 +6899,8 @@
           "kind",
           "signer",
           "typed_data",
-          "fill_id"
+          "fill_id",
+          "attestation"
         ],
         "properties": {
           "kind": {
@@ -6845,6 +6920,10 @@
           },
           "typed_data": {
             "$ref": "#/components/schemas/LighterTransferTerms"
+          },
+          "attestation": {
+            "$ref": "#/components/schemas/Attestation",
+            "description": "Over the hash of the owner message the terms write."
           }
         }
       },
@@ -6903,7 +6982,8 @@
           "kind",
           "signer",
           "typed_data",
-          "fill_id"
+          "fill_id",
+          "attestation"
         ],
         "properties": {
           "kind": {
@@ -6928,6 +7008,9 @@
               }
             ],
             "description": "`Message{msg}`, `AsterSignTransaction` domain, chain 1666, where `msg` is `asset=USDT&amount=…&toAddress=…&clientTranId=…&nonce=…&user=…`: `amount_in` with six decimals at most, rounded up, to the maker's linked Aster address, the take id in 32 hexadecimal characters, a microsecond nonce 55 seconds ahead, from your address, addresses checksummed."
+          },
+          "attestation": {
+            "$ref": "#/components/schemas/Attestation"
           }
         }
       },
@@ -11590,6 +11673,61 @@
           },
           "has_more": {
             "type": "boolean"
+          }
+        }
+      },
+      "PendingTrade": {
+        "type": "object",
+        "required": [
+          "id",
+          "from",
+          "to",
+          "amount_in",
+          "amount_out",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "from": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "to": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "amount_in": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "amount_out": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FillState"
+              }
+            ],
+            "description": "One of `PREPARED`, `RESERVED`, `PAID`, `PAYING`, `LOCKED`, `CLAIMING`, `REFUNDING`."
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "PendingTradeList": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingTrade"
+            },
+            "maxItems": 500
           }
         }
       },

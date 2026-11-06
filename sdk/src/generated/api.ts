@@ -1389,6 +1389,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/trades/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List pending trades
+         * @description Signed trades not yet final, newest first: they leave the list when settled, refunded or expired. Unsigned preparations are not listed. `scope=mine` needs a session.
+         */
+        get: operations["getV1TradesPending"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/events": {
         parameters: {
             query?: never;
@@ -1504,6 +1524,8 @@ export interface components {
         Bytes32: string;
         /** @description A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2). */
         Signature: string;
+        /** @description LaMarge's word that it asks `signer` to sign this item: its attester's EIP-712 signature of `Attestation(address signer,bytes32 digest)` under the domain `{name: "LaMarge attestation", version: "1"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the message's `personal_sign` hash). A signer that holds the taker's key apart from the app that asks it checks the attestation against LaMarge's attester address, and signs nothing it doesn't attest: a recipient, an agent or a key its app made up. */
+        Attestation: components["schemas"]["Signature"];
         /** @description An EOA signature. Trade proofs of older fills may carry an opaque ERC-1271 signature (up to 16384 bytes) from a quote delegate. */
         QuoteSignature: string;
         /**
@@ -1757,6 +1779,8 @@ export interface components {
                 typed_data?: components["schemas"]["TypedData"];
                 message?: string;
                 expires_at?: components["schemas"]["Timestamp"];
+                /** @description `aster_approval` and `lighter_api_key` carry one: the agent and the key are LaMarge's. */
+                attestation?: components["schemas"]["Attestation"];
             };
             /** @description The permit's relay transaction, while one is known. */
             hash: string | null;
@@ -1943,6 +1967,8 @@ export interface components {
              */
             fill_id?: string;
             typed_data: components["schemas"]["TypedData"];
+            /** @description A take's `pay_take` carries one. */
+            attestation?: components["schemas"]["Attestation"];
         };
         /** @description A take paid from Lighter: sign Lighter's owner message for the transfer `typed_data` names with `personal_sign`, not EIP-712. */
         LighterTransferItem: {
@@ -1956,6 +1982,8 @@ export interface components {
              */
             fill_id: string;
             typed_data: components["schemas"]["LighterTransferTerms"];
+            /** @description Over the hash of the owner message the terms write. */
+            attestation: components["schemas"]["Attestation"];
         };
         /** @description The internal transfer LaMarge sends from your Lighter account once every maker accepted, signed by its key at `api_key_index` and `nonce`: USDC (asset 3) between collateral routes (0), on chain 304. Build Lighter's transfer message from these terms and sign it. */
         LighterTransferTerms: {
@@ -1989,6 +2017,7 @@ export interface components {
             fill_id: string;
             /** @description `Message{msg}`, `AsterSignTransaction` domain, chain 1666, where `msg` is `asset=USDT&amount=…&toAddress=…&clientTranId=…&nonce=…&user=…`: `amount_in` with six decimals at most, rounded up, to the maker's linked Aster address, the take id in 32 hexadecimal characters, a microsecond nonce 55 seconds ahead, from your address, addresses checksummed. */
             typed_data: components["schemas"]["TypedData"];
+            attestation: components["schemas"]["Attestation"];
         };
         /** @description Aster only, required until the withdrawal is recorded (exact retries need none): the account's own signature over this withdrawal request, relayed as is within 50 seconds of `nonce`. */
         AsterEnvelope: {
@@ -3219,6 +3248,19 @@ export interface components {
             data: components["schemas"]["TradeHistoryRow"][];
             next_cursor: string | null;
             has_more: boolean;
+        };
+        PendingTrade: {
+            id: components["schemas"]["Uuid"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            amount_in: components["schemas"]["Amount"];
+            amount_out: components["schemas"]["Amount"];
+            /** @description One of `PREPARED`, `RESERVED`, `PAID`, `PAYING`, `LOCKED`, `CLAIMING`, `REFUNDING`. */
+            state: components["schemas"]["FillState"];
+            created_at: components["schemas"]["Timestamp"];
+        };
+        PendingTradeList: {
+            data: components["schemas"]["PendingTrade"][];
         };
         /** @enum {string} */
         FillRole: "taker" | "maker" | (string & {});
@@ -6180,6 +6222,34 @@ export interface operations {
             500: components["responses"]["Internal"];
         };
     };
+    getV1TradesPending: {
+        parameters: {
+            query?: {
+                /** @description `mine`: trades where you are maker or taker. */
+                scope?: "all" | "mine";
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pending trades. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingTradeList"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+        };
+    };
     getV1Events: {
         parameters: {
             query?: {
@@ -6622,6 +6692,10 @@ export const routes = {
   },
   "getV1TradesHistory": {
     "path": "/v1/trades/history",
+    "method": "GET"
+  },
+  "getV1TradesPending": {
+    "path": "/v1/trades/pending",
     "method": "GET"
   },
   "getV1Events": {

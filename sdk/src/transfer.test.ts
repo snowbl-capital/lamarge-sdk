@@ -24,7 +24,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
   previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string;
-  fromDex?: string; sourceDex?: string } = {}) {
+  fromDex?: string; sourceDex?: string; moved?: { out: boolean } } = {}) {
   const calls: string[] = [];
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
@@ -36,6 +36,10 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   // answer unless `live` gives each of its reads after a withdrawal.
   let held = 0n, liveReads = 0;
   const from = options.from ?? "hyperliquid";
+  // GMX has an escrow in development only: its transfers pay and receive on that environment's escrows.
+  const escrowOf = (venue: string) => from === "gmx" ? required({ gmx: "0x66e4c25d7e92c3e2765b021a748e740f775ac112", polymarket: "0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1" }[venue]) : ESCROW;
+  const fromChain = required(CHAINS[from]).id;
+  const withdrawalKind = from === "gmx" ? "transfer_out" : "margin_move";
   const setup = options.setup ?? (options.permit ? "required" : "done");
   const withdrawal = (state: string) => ({ id: "withdrawal-1", venue: from, amount: options.withdrawalAmount ?? "600000", destination: payer, state, venue_ref: null,
     error: state === "refused" ? "Margin unavailable" : null, created_at: at(0), relayed_at: state === "relayed" ? at(0) : null });
@@ -47,17 +51,17 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       : options.freshPreparation ? { amount: "600000", created_at: at(0), typed_data: sendAsset("600000") } : null as unknown,
     take_final: null, previous_transfer_id: options.previous ? "transfer-0" : null, continuable: null, cancelled_at: null as string | null, created_at: at(0), ...options.then ? { then: options.then } : {},
     ...options.fromDex ? { from_dex: options.fromDex } : {},
-    funding_plan: { venue: "hyperliquid", owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
+    funding_plan: { venue: from, owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
       withdrawal_to: options.withdrawalAmount ? "signer" : null, observed_at: at(0), payment_setup: setup, ...options.atOnce ? { signed_at_once: true } : {},
-      requests: [...setup === "required" ? [{ kind: "permit", signer: payer, chain_id: 999 }] : [], ...options.withdrawalAmount ? [{ kind: "margin_move", signer: payer, chain_id: 999 }] : [], { kind: "pay_take", signer: payer, chain_id: 999 }] },
+      requests: [...setup === "required" ? [{ kind: "permit", signer: payer, chain_id: fromChain }] : [], ...options.withdrawalAmount ? [{ kind: withdrawalKind, signer: payer, chain_id: fromChain }] : [], { kind: "pay_take", signer: payer, chain_id: fromChain }] },
   };
-  const fill = { id: "fill-1", take_id: "take-1", order_id: id, sequence: 1, role: "taker", state: "PREPARED", from_venue: "hyperliquid", to_venue: "polymarket",
+  const fill = { id: "fill-1", take_id: "take-1", order_id: id, sequence: 1, role: "taker", state: "PREPARED", from_venue: from, to_venue: "polymarket",
     amount_in: "1000000", amount_out: "1005000", payer, maker_recipient: maker, taker_recipient: payer, taker_fee: "0", swap_id: id, hashlock: `0x${"bb".repeat(32)}`,
     pay_by: at(options.payWindow ?? 45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_hash: null, payment_locked_at: null, maker_claimed_at: null };
   const payment = { payer, swapId: id, recipient: maker, amount: "1000000", hashlock: fill.hashlock, refundAt: now() + 7200, deadline: now() + (options.payWindow ?? 45), orderId: id, sequence: 1,
-    amountOut: fill.amount_out, receiveChainId: 137, receiveToken: required(CHAINS.polymarket).token, receiveEscrow: ESCROW, receiveRecipient: options.recipient ?? payer, dex: 0 };
+    amountOut: fill.amount_out, receiveChainId: 137, receiveToken: required(CHAINS.polymarket).token, receiveEscrow: escrowOf("polymarket"), receiveRecipient: options.recipient ?? payer, dex: 0 };
   const prepared = () => ({ take: { id: "take-1", fills: [{ ...fill, ...committed ? { signed_at: at(0) } : {}, ...options.takeFill }] }, to_sign: committed ? [] : [{ kind: "pay_take", fill_id: fill.id, signer: payer,
-    typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] });
+    typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: fromChain, verifyingContract: escrowOf(from) }, message: { payer, deposit: "0", payments: [payment] } } }] });
   const permitStep = (status: string) => ({ step: "permit", status, reason: null, expires_at: null, needed_for: ["pay"], hash: null,
     to_sign: status === "required" ? { kind: "permit", signer: payer, ref: "permit-1", typed_data: permitTyped() } : null });
   const payerBalance = () => {
@@ -70,6 +74,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   const answer = (query: URLSearchParams) => {
     const plan = intent.funding_plan;
     if (query.get("funding_plan") !== "true" || intent.take_id || intent.cancelled_at) return { ...intent, funding_plan: null };
+    // From GMX, the payer's own transferOut moves the funds; the plan then needs no withdrawal.
+    if (options.moved?.out) return { ...intent, funding_plan: { ...plan, withdrawal_amount: "0", withdrawal_to: null, requests: plan.requests.filter(request => request.kind !== "transfer_out") } };
     if (!intent.withdrawal) return options.spent ? { ...intent, funding_plan: { ...plan, withdrawal_amount: options.spent } } : intent;
     const live = options.live ? BigInt(options.live[Math.min(liveReads++, options.live.length - 1)] ?? "0") : held;
     if (intent.withdrawal.state !== "relayed" || live < BigInt(intent.amount_in)) return { ...intent, funding_plan: null };
@@ -78,7 +84,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   const routes: Record<string, (body: unknown, query: URLSearchParams) => unknown> = {
     "GET /v1/venues": () => [],
     "GET /v1/orders": () => [],
-    "GET /v1/books": () => ({ from: "hyperliquid", to: "polymarket", max_fill: "100000000", levels: options.levels ?? [{ order_id: id, supply: "1005000", receive: "1000000", available: "100000000", min_fill: "1", valid_until: at(60) }] }),
+    "GET /v1/books": () => ({ from, to: "polymarket", max_fill: "100000000", levels: options.levels ?? [{ order_id: id, supply: "1005000", receive: "1000000", available: "100000000", min_fill: "1", valid_until: at(60) }] }),
     "POST /v1/transfers": body => {
       const id = String(record(body).client_transfer_id);
       if (id.startsWith("renew:")) { Object.assign(intent, { id: "transfer-2", client_transfer_id: id, cancelled_at: null, withdrawal_preparation: null }); unsent = false; }
@@ -821,4 +827,31 @@ test("a take signed at once whose withdrawal another run submitted meanwhile fol
   expect(calls).not.toContain("POST /v1/transfers/transfer-1/withdrawal");
   const other = api({ chainBalance: "1000000", withdrawalAmount: "600000", atOnce: true, conflict: "another financial preparation is open" });
   await expect(transfer(other.client, counting(), atOnce)).rejects.toThrow("another financial preparation is open");
+});
+
+test("paying from GMX, the signer sends its own transferOut once, then pays from the wallet", async () => {
+  const moved = { out: false };
+  const { client, calls } = api({ from: "gmx", withdrawalAmount: "1000000", moved, funds: [{ chain_balance: "0" }, { chain_balance: "0" }, { chain_balance: "1000000" }] });
+  const sent: { chainId: number; to: string; data: string }[] = [];
+  const signer = { ...counting(), sendTransaction: async (transaction: { chainId: number; to: `0x${string}`; data: `0x${string}` }, broadcast?: (hash: `0x${string}`) => void | Promise<void>) => {
+    sent.push(transaction);
+    await broadcast?.(`0x${"cd".repeat(32)}`);
+    moved.out = true;
+    return `0x${"cd".repeat(32)}` as const;
+  } };
+  const { now, sleep } = clock();
+  const fills = await transfer(client, signer, { ...request, from: "gmx", funding: "venue" }, { now, sleep, pollMs: 10, arrivalWaitMs: 60_000 });
+  expect(fills[0]?.state).toBe("PAID");
+  expect(sent.map(({ chainId, to }) => ({ chainId, to }))).toEqual([{ chainId: 42161, to: "0x3f6772b95423fc03264adf90efb8a9922b6c8c6e" }]);
+  expect(sent[0]?.data.startsWith("0x0b9066d9")).toBe(true);
+  expect(signer.kinds).toEqual(["PayTake"]);
+  expect(count(calls, "POST /v1/transfers/transfer-1/withdrawal")).toBe(0);
+});
+
+test("a signer that cannot send GMX's transferOut stops before anything is asked or signed", async () => {
+  const { client, calls } = api({ from: "gmx", withdrawalAmount: "1000000" });
+  const signer = counting();
+  await expect(transfer(client, signer, { ...request, from: "gmx", funding: "venue" })).rejects.toThrow("cannot send GMX's transferOut");
+  expect(calls).toEqual([]);
+  expect(signer.signed).toBe(0);
 });

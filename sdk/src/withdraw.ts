@@ -137,7 +137,7 @@ function lockOf(value: unknown): EscrowLock {
 export type RefundFill = Pick<components["schemas"]["Fill"], "id" | "role" | "maker_leg" | "payment_leg" | "t2" | "from_venue" | "to_venue" | "maker_recipient"
   | "maker_owner" | "payer" | "swap_id" | "order_id" | "amount_in" | "hashlock" | "deliver_by" | "delivery_hash">;
 
-/** Read the payment at a finalized block from the pinned escrow and require its consent ABI before an in-venue refund. */
+/** Read the payment at the block LaMarge acts on from the pinned escrow and require its consent ABI before an in-venue refund. */
 export async function checkEscrowLocks(fill: RefundFill, deadline: number, readers: ChainReaders, escrows: Readonly<Record<string, string | undefined>>): Promise<void> {
   const reader = (venue: string) => required(readers[required(CHAINS[venue], "Unknown venue").id], `No reader for ${venue}'s chain`);
   const escrow = (venue: string) => {
@@ -145,8 +145,10 @@ export async function checkEscrowLocks(fill: RefundFill, deadline: number, reade
     insist(isPinnedEscrow(venue, named), "API deployment differs from the reviewed deployment");
     return address(named);
   };
+  // At the block LaMarge acts on: Arbitrum's escrow acts at its head, the others at finality.
+  const blockTag = fill.from_venue === "gmx" ? "latest" : "finalized";
   const [payment] = await Promise.all([
-    reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: LOCKS, functionName: "locks", args: [address(fill.payer), ZERO, hex(fill.swap_id)], blockTag: "finalized" }),
+    reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: LOCKS, functionName: "locks", args: [address(fill.payer), ZERO, hex(fill.swap_id)], blockTag }),
     reader(fill.from_venue).readContract({ address: escrow(fill.from_venue), abi: DIGEST, functionName: "refundPaymentDigest", args: [{ payer: address(fill.payer), swapId: hex(fill.swap_id), deadline: BigInt(deadline) }] }),
   ]);
   checkRefundLocks(fill, lockOf(payment));

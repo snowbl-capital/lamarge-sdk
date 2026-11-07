@@ -1,8 +1,8 @@
 import { ESCROW_DEPLOYMENTS } from "./deployments.ts";
-import { CHAINS, checkDeadline, checkEscrowTyped, checkRegistry, insist, same, type SignItem } from "./protocol.ts";
+import { CHAINS, checkDeadline, checkEscrowTyped, checkRegistry, insist, OWNER_WITHDRAWS, same, type SignItem } from "./protocol.ts";
 import { required, type Verified } from "./validation.ts";
 
-const VENUE_NAMES: Record<string, string> = { hyperliquid: "Hyperliquid", polymarket: "Polymarket Perps", lighter: "Lighter", aster: "Aster" };
+const VENUE_NAMES: Record<string, string> = { hyperliquid: "Hyperliquid", polymarket: "Polymarket Perps", lighter: "Lighter", aster: "Aster", gmx: "GMX" };
 
 /** The message `address` signs to be linked on `venue` under `master`: six lines, naming all three, valid ten minutes at most. */
 export function checkLinkChallenge(challenge: { message: string; nonce: string; expires_at: string }, address: string, master: string, venue: string, now = Date.now()): void {
@@ -24,7 +24,10 @@ type FundingPlan = {
   observed_at: string; payment_setup: string; requests: FundingRequest[];
 };
 
-/** What a transfer from wallet funds will ask its payer to sign: at most a permit, a margin withdrawal and the payment, on the pinned escrow chain, for this amount. */
+/**
+ * What a transfer from wallet funds will ask its payer to sign: at most a permit, a margin withdrawal and the payment, on the pinned escrow chain, for this amount.
+ * From GMX the withdrawal is a `transfer_out`, a transaction the payer sends itself.
+ */
 export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; payer: string; amount_in: string; recipient?: string | undefined; to_dex?: string | undefined;
   funding_plan: P | null; funding_plan_error?: { message: string } | null }, now = Date.now()): P {
   const plan = required(intent.funding_plan, intent.funding_plan_error?.message ?? "Funding details unavailable; try again shortly");
@@ -42,18 +45,19 @@ export function checkFundingPlan<P extends FundingPlan>(intent: { from: string; 
   const requests = moving ? plan.requests.slice(0, -1) : plan.requests;
   const kinds = requests.map(request => request.kind);
   const permit = plan.payment_setup === "required";
+  const withdrawal = OWNER_WITHDRAWS.has(intent.from) ? "transfer_out" : "margin_move";
   insist(requests.every(request => same(request.signer, intent.payer) && request.chain_id === chain.id)
     && kinds.filter(kind => kind === "pay_take").length === 1 && new Set(kinds).size === kinds.length
-    && kinds.every(kind => kind === "permit" || kind === "margin_move" || kind === "pay_take")
-    && kinds.includes("margin_move") === (BigInt(plan.withdrawal_amount) > 0n)
+    && kinds.every(kind => kind === "permit" || kind === withdrawal || kind === "pay_take")
+    && kinds.includes(withdrawal) === (BigInt(plan.withdrawal_amount) > 0n)
     && kinds.includes("permit") === permit && (!permit || kinds[0] === "permit" && BigInt(plan.deposit) > 0n), "Funding requests differ from the transfer");
   return plan;
 }
 
 /** How long a release signature may be good for, and the clock's margin. */
 const CLOSE_TTL = 3_600 + 60;
-/** Where a release may go on each venue: Hyperliquid's perps or spot, Polymarket's or Aster's account. */
-const DEXES: Record<string, number[]> = { hyperliquid: [0, 4_294_967_295], polymarket: [0], aster: [0] };
+/** Where a release may go on each venue: Hyperliquid's perps or spot, Polymarket's, Aster's or GMX's account. */
+const DEXES: Record<string, number[]> = { hyperliquid: [0, 4_294_967_295], polymarket: [0], aster: [0], gmx: [0] };
 
 type PreparedClose = { venue: string; order_id: string; to_margin: boolean; dex: number; nonce: string; deadline: number; to_sign: SignItem[] };
 type PreparedWithdrawal = PreparedClose & { amount: string };

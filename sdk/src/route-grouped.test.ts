@@ -50,7 +50,7 @@ function api(options: { state?: string | null; closedAfter?: number; paid?: bool
     "GET /v1/transfers/transfer-third": () => successor,
     "POST /v1/transfers/transfer-first/grouped": options.prepare ?? (() => error(409, "STATE_CONFLICT", "grouped_unavailable")),
     "GET /v1/balances": () => [{ venue: from, address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null,
-      withdrawable: options.venueRead === false ? null : "100000000", withdrawal_fee: "0", read_at: options.venueRead === false ? null : at(1), chain_balance: "0",
+      withdrawable: options.venueRead === false ? null : "100000000", withdrawal_fee: "0", withdrawal_reserve: "0", read_at: options.venueRead === false ? null : at(1), chain_balance: "0",
       escrow_balance: options.escrow ?? "0", deposit_balance: "0", chain_read_at: at(0) }, { venue: "polymarket", address: owner }],
     "GET /v1/takes/take-first": () => state() ? { take: { id: "take-first", fills: options.mixed
       ? [{ ...fill("take-first", "SETTLED", "5003250", "5000000"), maker_destination: "escrow" }, { ...fill("take-first", "SETTLED", "5003250", "5000000"), id: "fill-other", maker_destination: "venue" }]

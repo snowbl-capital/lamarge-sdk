@@ -20,3 +20,9 @@ export function prefunded(balance: Held | undefined, now = Date.now()): bigint |
   return balance?.chain_balance !== null && balance?.chain_balance !== undefined && !balance.chain_error && fresh(balance.chain_read_at, now)
     ? BigInt(balance.chain_balance) + BigInt(balance.escrow_balance ?? 0) : null;
 }
+
+/** Amount kept outside a withdrawal, including fees and a gas reserve; null when unknown. */
+export function withdrawalBudget(balance: { venue: string; withdrawal_fee: string | null; withdrawal_reserve?: string | null | undefined } | undefined): bigint | null {
+  if (!balance || balance.withdrawal_fee === null || balance.venue === "hyperliquid" && balance.withdrawal_reserve == null) return null;
+  return BigInt(balance.withdrawal_fee) + BigInt(balance.withdrawal_reserve ?? 0);
+}

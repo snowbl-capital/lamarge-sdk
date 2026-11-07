@@ -8,6 +8,7 @@ export const ESCROW_DEPLOYMENTS: DeploymentManifest = Object.freeze([
   { version: 5, chainId: 137, address: "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6", environment: "production" },
   { version: 5, chainId: 999, address: "0x948e65c40442d935d4ee990bdbd01bdd825c4873", environment: "development" },
   { version: 5, chainId: 137, address: "0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1", environment: "development" },
+  { version: 5, chainId: 42161, address: "0x66e4c25d7e92c3e2765b021a748e740f775ac112", environment: "development" },
 ]);
 
 /** Retired v5 proxies are trusted for existing proofs, never new signatures. */

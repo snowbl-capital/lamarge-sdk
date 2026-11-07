@@ -1841,6 +1841,8 @@ export interface components {
             withdrawable: string | null;
             /** @description Estimated venue withdrawal fee; 0 when none, null when unavailable. Rechecked at preparation. */
             withdrawal_fee: string | null;
+            /** @description Additional source-token balance kept for withdrawal gas, in base units; not a fee added to the signed amount. On Hyperliquid, twice the current 200,000-gas bridge estimate in USDC, rounded up, unless available HyperCore HYPE covers that budget. Read with the venue balance. Null (or absent on older servers) means unknown and must not authorize a Hyperliquid withdrawal. Zero on other venues. Internal sends and moves do not use this reserve. */
+            withdrawal_reserve?: string | null;
             /** @description True when `withdrawable` is only an upper bound from the venue's public data; false while `read_at` is null ([venues](/how-it-works#venues-and-balances)). */
             withdrawable_estimated: boolean;
             /** @description Account mode on venues with several ([venues](/how-it-works#venues-and-balances)). */
@@ -2065,7 +2067,7 @@ export interface components {
             }[];
         };
         /**
-         * @description Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move.
+         * @description Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move. GMX accepts only `wallet`: its account's funds leave by the owner's own `transferOut`.
          * @enum {string}
          */
         FundingSource: "wallet" | "venue" | (string & {});
@@ -2809,10 +2811,10 @@ export interface components {
             signed_at_once: boolean;
             requests: {
                 /**
-                 * @description `move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move)).
+                 * @description `transfer_out`: GMX only, a transaction the signer sends itself, not a signature: `transferOut((token, withdrawal_amount, 0, 0x0, 0x))` on GMX's MultichainTransferRouter `0x3f6772B95423fC03264adf90Efb8A9922B6C8c6e`, Arbitrum USDC from its GMX Account to its own address; then read the plan again. `move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move)).
                  * @enum {string}
                  */
-                kind: "permit" | "margin_move" | "pay_take" | "move" | (string & {});
+                kind: "permit" | "margin_move" | "transfer_out" | "pay_take" | "move" | (string & {});
                 signer: components["schemas"]["Address"];
                 chain_id: number;
             }[];
@@ -3561,7 +3563,10 @@ export interface operations {
     };
     getVenues: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description `true` lists GMX as it is. Without it GMX is listed disabled, its terms null: SDK releases up to 0.14, which refuse an enabled venue they do not pin, keep signing in. */
+                all?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3659,6 +3664,8 @@ export interface operations {
                 min_out?: components["schemas"]["Amount"];
                 /** @description The highest taker fee the takes would accept: each leg is priced at its pair's fee, a leg whose fee is higher left out, as the take would refuse it. Without it, legs pay no fee, as takes without `max_fee_bps` do. */
                 max_fee_bps?: components["schemas"]["FeeBps"];
+                /** @description `true` may route through GMX. Without it, no route goes through GMX: SDK releases up to 0.14 cannot follow one. */
+                all?: boolean;
             };
             header?: never;
             path?: never;

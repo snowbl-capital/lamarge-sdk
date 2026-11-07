@@ -3,7 +3,7 @@ import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
 import { signableUntil } from "./protocol/intents.ts";
-import { CHAINS, checkWithdrawal, insist, same, VENUE_SETTLED, type Dex, type Typed } from "./protocol/protocol.ts";
+import { CHAINS, checkWithdrawal, GMX_TRANSFER_ROUTER, gmxTransferOut, insist, OWNER_WITHDRAWS, same, VENUE_SETTLED, type Dex, type Typed } from "./protocol/protocol.ts";
 import { hex, record, required } from "./protocol/validation.ts";
 import type { BeforeSigning, Hex, Signer } from "./signer.ts";
 import { exclusive, memoryStore, transferTypedData, type SignatureStore } from "./store.ts";
@@ -72,7 +72,7 @@ export class TransferPending extends Error {
 
 async function reviewQuote(client: Client, input: TakeInput, now: number, signal?: AbortSignal) {
   const [book, orders, venues] = await Promise.all([
-    client.call("getBook", { query: { from: input.from, to: input.to }, signal }), client.call("getOrders", { signal }), client.call("getVenues", { signal })]);
+    client.call("getBook", { query: { from: input.from, to: input.to }, signal }), client.call("getOrders", { signal }), client.call("getVenues", { query: { all: true }, signal })]);
   checkQuote(book, new Set(orders.map(order => order.id)), input, BigInt(venues.find(venue => venue.id === input.to)?.release_minimum ?? 0), now);
 }
 
@@ -134,8 +134,47 @@ async function withdrawFor(client: Client, signer: Signer, intent: TransferInten
   });
 }
 
+/** Where a GMX transfer records its `transferOut`, from just before it is sent: its funds may have left GMX. */
+export const transferOutKey = (id: string) => `transfer_out:${id}`;
+/**
+ * A `transferOut` asked or broadcast but not seen mined is not sent again for this long: it may still land. After
+ * it, one whose funds never arrived may be sent again: a second only moves the signer's own funds to itself.
+ */
+const TRANSFER_OUT_PENDING_MS = 10 * 60_000;
+
+/** Paying from GMX, the signer must send its own `transferOut`: checked before anything is signed. */
+export const sendsFrom = (venue: string, signer: Pick<Signer, "sendTransaction">) =>
+  insist(!OWNER_WITHDRAWS.has(venue) || signer.sendTransaction, "This signer cannot send GMX's transferOut");
+
+/**
+ * From GMX, `amount` of the signer's GMX Account to its own address, by its own transaction; then the plan
+ * finds it in the wallet. One mined, or sent within ten minutes, for this transfer is not sent again; another
+ * store (tab, process) may send a second, which moves only the signer's own funds to its own address.
+ */
+async function transferOut(signer: Signer, intent: TransferIntent, amount: bigint, store: SignatureStore, now: () => number, beforeSigning?: BeforeSigning) {
+  const key = transferOutKey(intent.id);
+  return exclusive(store, key, async () => {
+    const known: unknown = await store.load(key);
+    if (known !== undefined && (record(known).mined === true || now() - Number(record(known).at) < TRANSFER_OUT_PENDING_MS)) return;
+    await beforeSigning?.({ kind: "transfer_out", venue: "gmx", amount });
+    const terms = { amount: amount.toString() };
+    await store.save(key, { ...terms, at: now() });
+    let broadcast = false;
+    try {
+      const hash = await required(signer.sendTransaction)({ chainId: required(CHAINS.gmx).id, to: GMX_TRANSFER_ROUTER, data: gmxTransferOut(amount) },
+        async sent => { broadcast = true; await store.save(key, { ...terms, at: now(), hash: sent }); });
+      await store.save(key, { ...terms, at: now(), hash, mined: true });
+    } catch (error) {
+      // Refused before broadcast, nothing left GMX; broadcast, its outcome stays unknown.
+      if (!broadcast) await store.delete(key);
+      throw error;
+    }
+  });
+}
+
 /** Resumes durable operations before new funding or payment; a short balance never repeats a withdrawal. */
 export async function transfer(client: Client, signer: Signer, request: TransferRequest, options: TransferOptions = {}): Promise<Fill[]> {
+  if (request.funding !== "wallet") sendsFrom(request.from, signer);
   let latest: TransferIntent | undefined;
   let checked: Pick<Fill, "id" | "to_venue" | "amount_out">[] = [];
   const fills = await pay(client, signer, request, { ...options,
@@ -378,6 +417,8 @@ async function pay(client: Client, signer: Signer, request: TransferRequest, opt
   // spent it. It also withdraws at most what a route signed at once may still: the rest is on its way.
   const plan = intent.withdrawal ? undefined : await fund();
   const withdrawal = plan ? BigInt(plan.withdrawal_amount) : 0n;
+  // GMX funds sent to the wallet by the signer's transaction, which the plan has yet to see.
+  let movedOut = false;
   if (withdrawal > 0n) {
     // Margin leaves the venue only for a take the book can execute now.
     if (!intent.withdrawal_preparation) await reviewQuote(client, takeInput(intent), now(), signal);
@@ -389,6 +430,11 @@ async function pay(client: Client, signer: Signer, request: TransferRequest, opt
         insist(BigInt(preparation.amount) === withdrawal, "Funding amount changed; review the transfer again");
         const signed = await takeAtOnce(preparation, funds?.balances);
         if (signed) return signed;
+      } else if (OWNER_WITHDRAWS.has(intent.from)) {
+        // Its funds leave GMX by the signer's transaction, whose arrival only a fresh read shows.
+        insist(funds !== null, "A fresh balance is required; try again shortly");
+        await transferOut(signer, intent, withdrawal, store, now, options.beforeSigning);
+        movedOut = true;
       } else intent.withdrawal = await withdrawFor(client, signer, intent, withdrawal, store, now, signal, options.beforeSigning);
     } catch (error) {
       // An earlier withdrawal of the route is still arriving: nothing is withdrawn again.
@@ -397,18 +443,21 @@ async function pay(client: Client, signer: Signer, request: TransferRequest, opt
     }
     checkWithdrawalState();
     // The plan read before it is no sign of its arrival: the transfer is read again, with its plan once relayed.
-    await readIntent(intent.withdrawal?.state === "relayed");
+    await readIntent(movedOut || intent.withdrawal?.state === "relayed");
     reread = true;
   }
-  insist(intent.withdrawal || funds !== null, "A fresh balance is required; try again shortly");
+  insist(intent.withdrawal || movedOut || funds !== null, "A fresh balance is required; try again shortly");
   // Only the live funding plan proves arrival or detects funds spent since the balance read.
   // A grouped route may still have funds in transit.
   let arriving: boolean | undefined;
   const waitingForFunds = async () => {
     const { withdrawal, funding_plan, previous_transfer_id: previous } = intent;
     if (withdrawal) return !funds || withdrawal.state !== "relayed" || !funding_plan;
+    // The plan reads the chain itself: it needs no withdrawal once the transferOut arrived; the rest, such as
+    // a deposit address's sweep, still shows in the spendable balance.
+    if (movedOut && (!funding_plan || BigInt(funding_plan.withdrawal_amount) > 0n)) return true;
     if (funding_plan && BigInt(funding_plan.withdrawal_amount) > 0n) {
-      arriving ??= !!previous && !!(await client.call("getTransfer", { path: { id: previous }, signal })).grouped;
+      arriving ??= movedOut || !!previous && !!(await client.call("getTransfer", { path: { id: previous }, signal })).grouped;
       insist(arriving, request.funding === "wallet" ? "Wallet funds do not cover the transfer" : "Funding amount changed; review the transfer again");
     }
     return !funds || funds.ready < amount;

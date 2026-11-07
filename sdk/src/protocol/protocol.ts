@@ -19,8 +19,25 @@ export const CHAINS: Record<string, { id: number; token: string; decimals: numbe
   // BSC, Aster's vault and USDT.
   aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
   lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
+  // GMX Accounts, settled in an escrow on Arbitrum; no production escrow yet.
+  gmx: { id: 42161, token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", decimals: 6, permit: "USD Coin", version: "2", escrow: "0x0000000000000000000000000000000000000000" },
 };
+/** GMX's MultichainTransferRouter on Arbitrum: an account's own `transferOut` moves its GMX Account funds to its address. */
+export const GMX_TRANSFER_ROUTER = "0x3f6772b95423fc03264adf90efb8a9922b6c8c6e";
+/**
+ * Calldata of `transferOut((token, amount, 0, 0x0, 0x))`, GMX's `BridgeOutParams`: `amount` of Arbitrum USDC from
+ * the sender's GMX Account to the sender's own address, never elsewhere.
+ */
+export function gmxTransferOut(amount: bigint): `0x${string}` {
+  insist(amount > 0n && amount < 1n << 256n, "Invalid amount");
+  const word = (value: bigint) => value.toString(16).padStart(64, "0");
+  const token = BigInt(required(CHAINS.gmx).token);
+  // Selector of transferOut((address,uint256,uint256,address,bytes)); the tuple, then its empty bytes.
+  return `0x0b9066d9${word(32n)}${word(token)}${word(amount)}${word(0n)}${word(0n)}${word(160n)}${word(0n)}`;
+}
 export const VENUE_SETTLED = new Set(["lighter", "aster"]);
+/** Venues whose account's funds leave only by their owner's own transaction (GMX's `transferOut`): LaMarge relays no withdrawal there. */
+export const OWNER_WITHDRAWS = new Set(["gmx"]);
 /** A route whose first take pays inside a venue and goes through an escrow venue: LaMarge can have it signed at once. */
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
 /** The most seconds to a route's second take's `pay_by` when signed at once: the server's 180 s bound and a clock margin. */

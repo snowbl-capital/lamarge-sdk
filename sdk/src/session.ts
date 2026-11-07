@@ -1,15 +1,16 @@
 import type { Client } from "./client.ts";
 import { ESCROW_DEPLOYMENTS, escrowDeployment, type DeploymentManifest, type EscrowDeployment } from "./protocol/deployments.ts";
-import { checkLoginChallenge, checkRegistry, insist, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { CHAINS, checkLoginChallenge, checkRegistry, insist, VENUE_SETTLED } from "./protocol/protocol.ts";
 import type { Signer } from "./signer.ts";
 
 /**
  * Every chain the API names must be a reviewed deployment pinned in this release of the SDK, settled as pinned; only a disabled venue names none.
- * Returns the environment its escrows belong to.
+ * A venue this release does not know is skipped: nothing here signs for it. Returns the environment its escrows belong to.
  */
 export async function checkDeployment(client: Client, signal?: AbortSignal, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS): Promise<EscrowDeployment["environment"]> {
   const environments = new Set<EscrowDeployment["environment"]>();
-  for (const venue of await client.call("getVenues", { signal })) {
+  for (const venue of await client.call("getVenues", { query: { all: true }, signal })) {
+    if (!CHAINS[venue.id]) continue;
     insist(venue.chain || !venue.enabled, "API deployment differs from the reviewed deployment");
     if (!venue.chain) continue;
     checkRegistry(venue.id, venue.chain, manifest);

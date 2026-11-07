@@ -80,7 +80,8 @@ test("the client refuses plain HTTP outside localhost and carries its token", as
   expect(seen[0]?.headers.get("authorization")).toBe("Bearer mk_scoped");
 });
 
-const listed = () => Object.entries(CHAINS).map(([id, chain]) => ({ id, enabled: true, settlement: VENUE_SETTLED.has(id) ? "venue" : "escrow",
+// Production's listing: GMX, without a production escrow yet, is not enabled there.
+const listed = () => Object.entries(CHAINS).filter(([, chain]) => !/^0x0+$/.test(chain.escrow)).map(([id, chain]) => ({ id, enabled: true, settlement: VENUE_SETTLED.has(id) ? "venue" : "escrow",
   chain: { id: chain.id, token: chain.token, decimals: chain.decimals, escrow: chain.escrow, permit: chain.permit ? { name: chain.permit, version: chain.version } : null } }));
 const venues = () => Response.json(listed());
 const signer = { address: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A" as const, signMessage: async () => { signed++; return "0x00" as const; } };
@@ -109,7 +110,9 @@ test("sign-in refuses a venue settled otherwise than pinned, another permit, or 
     await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("reviewed deployment");
   }
   expect(signed).toBe(0);
-  const rows = [...listed(), { id: "grvt", enabled: false, settlement: null, chain: null }];
+  // A disabled venue names no chain; one this release does not know, enabled or not, is not traded here.
+  const unknown = { id: "newcomer", enabled: true, settlement: "escrow", chain: { id: 1, token: `0x${"22".repeat(20)}`, decimals: 6, escrow: `0x${"33".repeat(20)}`, permit: null } };
+  const rows = [...listed(), { id: "grvt", enabled: false, settlement: null, chain: null }, unknown];
   const { fetch } = answering(() => Response.json({ message: "", nonce: "n1", expires_at: "" }), () => Response.json(rows));
   await expect(signIn(createClient({ apiUrl: "http://localhost:8080", fetch }), signer, "http://localhost:5173")).rejects.toThrow("sign-in challenge");
 });

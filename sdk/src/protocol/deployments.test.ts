@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { CHAINS, checkEscrowTyped, checkRegistry, EIP712Domain, ESCROW, ESCROW_DEPLOYMENTS, ESCROW_PROOF_DEPLOYMENTS, isPinnedEscrow, RETIRED_V5_DEPLOYMENTS, schemas, VENUE_DOMAINS, escrowDeployment, requireSigningDomains, requireV5Deployment, type DeploymentManifest, required, type Typed } from "./index.ts";
 
 test("only the reviewed proxy permits balances and deposit receivers", () => {
-  expect(new Set(ESCROW_DEPLOYMENTS.map(deployment => deployment.chainId))).toEqual(new Set([999, 137]));
+  expect(new Set(ESCROW_DEPLOYMENTS.map(deployment => deployment.chainId))).toEqual(new Set([999, 137, 42161]));
   for (const deployment of ESCROW_DEPLOYMENTS) expect(requireV5Deployment(deployment.chainId, deployment.address).version).toBe(5);
   // Earlier proxies: v4 on HyperEVM, Polygon and BSC, and v1 at the address BSC's v4 reuses.
   for (const [chainId, address] of [[999, "0xe0384a3026d52120c20c12ceb33e73096e1d2eca"], [137, "0xe0384a3026d52120c20c12ceb33e73096e1d2eca"], [56, "0xf0946794b2932ca342e68a9fd54ad30e5ff952e3"], [999, "0xf0946794b2932ca342e68a9fd54ad30e5ff952e3"]] as const) {
@@ -12,11 +12,10 @@ test("only the reviewed proxy permits balances and deposit receivers", () => {
   expect(() => requireV5Deployment(137, "0x5000000000000000000000000000000000000001")).toThrow("No pinned escrow");
 });
 
-test("each pinned deployment names its environment, which has one escrow on each chain", () => {
-  for (const environment of ["production", "development"]) {
-    const escrows = ESCROW_DEPLOYMENTS.filter(deployment => deployment.environment === environment);
-    expect(escrows.map(deployment => deployment.chainId).sort()).toEqual([137, 999]);
-  }
+test("each pinned deployment names its environment, which has one escrow on each of its chains", () => {
+  const chains = (environment: string) => ESCROW_DEPLOYMENTS.filter(deployment => deployment.environment === environment).map(deployment => deployment.chainId).sort();
+  expect(chains("production")).toEqual([137, 999]);
+  expect(chains("development")).toEqual([137, 42161, 999]);
   expect(ESCROW_DEPLOYMENTS.every(deployment => deployment.environment !== undefined)).toBe(true);
 });
 

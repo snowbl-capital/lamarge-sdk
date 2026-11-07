@@ -5,7 +5,7 @@ import { required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import type { Signer } from "./signer.ts";
 import type { Fill } from "./take.ts";
-import { consent, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
+import { consent, sendsFrom, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferStage } from "./transfer.ts";
 import { RouteAbandoned, signRoute } from "./grouped.ts";
 
 export interface RouteRequest {
@@ -79,6 +79,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   const stage = (value: RouteStage) => { signal?.throwIfAborted(); onStage?.(value); };
   const secondId = `${request.client_transfer_id}.2`;
   insist(secondId.length <= 64 && request.via !== request.from && request.via !== request.to, "Unexpected route");
+  if (request.funding !== "wallet") sendsFrom(request.from, signer);
   let first: TransferIntent = request.transfer_id
     ? await client.call("getTransfer", { path: { id: request.transfer_id }, signal })
     : await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
@@ -108,6 +109,9 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     fills = (await client.call("getV1TakesId", { path: { id: grouped.first_take_id }, signal })).take.fills;
   } else {
     if (options.grouped === true) throw new RouteAbandoned(first.id, first.grouped?.state === "aborted" || first.cancelled_at ? "aborted" : "unavailable", first.grouped?.commit_by ?? null, now());
+    // Sequential, the second transfer may pay from `via`'s own funds: from GMX, by its own transaction. A grouped
+    // route keeps its first delivery in escrow and withdraws nothing there.
+    sendsFrom(request.via, hub);
     fills = await transfer(client, signer, { client_transfer_id: first.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
       recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps, from_dex: request.from_dex }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
     stage("relaying");

@@ -20,12 +20,19 @@ export interface SignContext { attestation?: components["schemas"]["TakeAttestat
 
 /**
  * Whatever holds the key: a viem `LocalAccount` (a private key, or KMS through `toAccount`) fits as
- * is; a browser wallet wraps its client. The SDK hands it only data its checks already accepted.
+ * is, except to pay from GMX, which takes `sendTransaction`; a browser wallet wraps its client. The SDK
+ * hands it only data its checks already accepted.
  */
 export interface Signer {
   readonly address: Hex;
   signMessage(request: { message: string }, context?: SignContext): Promise<Hex>;
   signTypedData(request: TypedDataRequest, context?: SignContext): Promise<Hex>;
+  /**
+   * Sends a transaction from `address`: calls `sent` with its hash once broadcast, then resolves with it once mined
+   * successfully, rejecting if it is refused or reverts. Only a transfer paying from GMX needs it: GMX Account funds
+   * leave by their owner's own `transferOut`.
+   */
+  sendTransaction?(request: { chainId: number; to: Hex; data: Hex }, sent?: (hash: Hex) => void | Promise<void>): Promise<Hex>;
 }
 /** A quote key that may sign elsewhere (`Quoter.prepareLines`). */
 export type QuoteSigner = Pick<Signer, "address"> & Partial<Pick<Signer, "signTypedData">>;
@@ -56,6 +63,8 @@ export type Signing =
   /** `move`: a received transfer's move from the perps to the signer's own trade.xyz. */
   | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true; move?: true }
   | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
+  /** A transaction, not a signature: GMX Account funds to the signer's own address on Arbitrum. */
+  | { kind: "transfer_out"; venue: "gmx"; amount: bigint }
   /** `signed`: what a resumed route already signed, never asked again. */
   | { kind: "route"; preparation: Answer<"prepareGroupedRoute">; second: Answer<"getTransfer">; signed: { first: boolean; withdrawal: boolean; second: boolean } };
 export type BeforeSigning = (signing: Signing) => void | Promise<void>;

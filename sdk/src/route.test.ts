@@ -46,7 +46,7 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
       typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: pay.id, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] };
   };
   const balance = (venue: string, held: string) => ({ venue, address: venue === "hyperliquid" ? hub : owner, venue_wallet: null, chain_balance: held, chain_error: null, chain_read_at: at(0), escrow_balance: "0",
-    deposit_balance: "0", withdrawable: "0", withdrawal_fee: "0", read_at: at(0) });
+    deposit_balance: "0", withdrawable: "0", withdrawal_fee: "0", withdrawal_reserve: "0", read_at: at(0) });
   const book = (from: string, to: string) => ({ from, to, max_fill: String(10n ** 24n), levels: [{ order_id: id, supply: to === "aster" ? String(10n ** 18n) : "1000000", receive: "1000000", available: String(10n ** 24n), min_fill: "1", valid_until: at(60) }] });
   const routes: Record<string, (body: Record<string, unknown>, query: URLSearchParams) => unknown> = {
     "GET /v1/venues": () => [],

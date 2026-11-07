@@ -196,6 +196,18 @@
         "summary": "List venues",
         "description": "Every venue in display order, with its settlement terms, token, permit domain, margin-transfer format and deposit minimum, all null when disabled. Check them against the [deployment values](/how-it-works#deployment-values) before signing.",
         "operationId": "getVenues",
+        "parameters": [
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "`true` lists GMX as it is. Without it GMX is listed disabled, its terms null: SDK releases up to 0.14, which refuse an enabled venue they do not pin, keep signing in."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Every venue, enabled or not.",
@@ -378,6 +390,16 @@
             "schema": {
               "$ref": "#/components/schemas/FeeBps"
             }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "`true` may route through GMX. Without it, no route goes through GMX: SDK releases up to 0.14 cannot follow one."
           }
         ],
         "responses": {
@@ -6509,6 +6531,13 @@
             ],
             "description": "Estimated venue withdrawal fee; 0 when none, null when unavailable. Rechecked at preparation."
           },
+          "withdrawal_reserve": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Additional source-token balance kept for withdrawal gas, in base units; not a fee added to the signed amount. On Hyperliquid, twice the current 200,000-gas bridge estimate in USDC, rounded up, unless available HyperCore HYPE covers that budget. Read with the venue balance. Null (or absent on older servers) means unknown and must not authorize a Hyperliquid withdrawal. Zero on other venues. Internal sends and moves do not use this reserve."
+          },
           "withdrawable_estimated": {
             "type": "boolean",
             "description": "True when `withdrawable` is only an upper bound from the venue's public data; false while `read_at` is null ([venues](/how-it-works#venues-and-balances))."
@@ -7161,7 +7190,7 @@
           "wallet",
           "venue"
         ],
-        "description": "Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move."
+        "description": "Where the deposit, the added capital the available balance does not cover, comes from ([maker capital](/how-it-works#maker-capital)). `wallet`: the linked address on the escrow chain; `VALIDATION_ERROR` if it holds less than the deposit. `venue`: one `margin_move` of the whole deposit to the linked address; the funding goes once that address holds the deposit, and fails if it does not within 10 minutes of the move. GMX accepts only `wallet`: its account's funds leave by the owner's own `transferOut`."
       },
       "MakerInput": {
         "type": "object",
@@ -9838,10 +9867,11 @@
                   "enum": [
                     "permit",
                     "margin_move",
+                    "transfer_out",
                     "pay_take",
                     "move"
                   ],
-                  "description": "`move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move))."
+                  "description": "`transfer_out`: GMX only, a transaction the signer sends itself, not a signature: `transferOut((token, withdrawal_amount, 0, 0x0, 0x))` on GMX's MultichainTransferRouter `0x3f6772B95423fC03264adf90Efb8A9922B6C8c6e`, Arbitrum USDC from its GMX Account to its own address; then read the plan again. `move`: received for trade.xyz, the recipient's move, signed after the take ([POST /v1/transfers/{id}/move](/api-reference/transfers/submit-move))."
                 },
                 "signer": {
                   "$ref": "#/components/schemas/Address"

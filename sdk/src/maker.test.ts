@@ -211,17 +211,20 @@ test("delegated lines are checked, then every pool's set is signed and published
 });
 
 test("the environment comes from the escrows the API names, and an Aster link needs one",async()=>{
-  const dev={hyperliquid:"0x948e65c40442d935d4ee990bdbd01bdd825c4873",polymarket:"0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1"};
+  const dev={hyperliquid:"0x948e65c40442d935d4ee990bdbd01bdd825c4873",polymarket:"0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1",gmx:"0x66e4c25d7e92c3e2765b021a748e740f775ac112"};
   const calls:string[]=[];
   const named=(escrows:Record<string,string>)=>api(url=>{
     calls.push(url);
-    if(!url.endsWith("/venues"))return new Response("unexpected",{status:500});
-    return Response.json(Object.entries(CHAINS).map(([venue,chain])=>({id:venue,enabled:true,settlement:["aster","lighter"].includes(venue)?"venue":"escrow",chain:{id:chain.id,token:chain.token,decimals:chain.decimals,escrow:escrows[venue] ?? chain.escrow}})));
+    if(new URL(url).pathname!=="/v1/venues"||new URL(url).searchParams.get("all")!=="true")return new Response("unexpected",{status:500});
+    // A venue the environment has no escrow for is listed disabled, without its chain.
+    return Response.json(Object.entries(CHAINS).map(([venue,chain])=>{const escrow=escrows[venue] ?? chain.escrow;
+      return /^0x0+$/.test(escrow)?{id:venue,enabled:false,settlement:null,chain:null}
+        :{id:venue,enabled:true,settlement:["aster","lighter"].includes(venue)?"venue":"escrow",chain:{id:chain.id,token:chain.token,decimals:chain.decimals,escrow}};}));
   });
   expect(await checkDeployment(named({}))).toBe("production");
   expect(await checkDeployment(named(dev))).toBe("development");
   await expect(checkDeployment(named({hyperliquid:dev.hyperliquid}))).rejects.toThrow("API deployment differs");
   calls.length=0;
   await expect(new Maker(named({}),account,operator,"http://localhost:5173",testDeployments).link("aster")).rejects.toThrow("no pinned escrow environment");
-  expect(calls.every(url=>url.endsWith("/venues"))).toBe(true);
+  expect(calls.every(url=>new URL(url).pathname==="/v1/venues")).toBe(true);
 });

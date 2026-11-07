@@ -5,12 +5,12 @@ export { signItems, signTyped, typedDataRequest, type BeforeSigning, type Hex, t
 export type { components, operations, paths } from "./generated/api.ts";
 export { linkAccount, setUpVenue, type SetupProgress } from "./account.ts";
 export { changes, type Change, type ChangeOptions, type EventPage, type Snapshot, type SocketConstructor } from "./events.ts";
-export { fresh, FRESH_MS, prefunded, sweepable } from "./funds.ts";
+export { fresh, FRESH_MS, prefunded, sweepable, withdrawalBudget } from "./funds.ts";
 export { memoryStore, type SignatureStore } from "./store.ts";
 export { checkQuote, paysAll, MAX_PARTS, minimumTake, QuoteUnavailable, sweep, type Sweep } from "./book.ts";
 export { takeFee, type Fee } from "./protocol/fees.ts";
 export { take, takeKey, type Balance, type Fill, type TakeInput, type TakeOptions } from "./take.ts";
-export { consent, moveToXyz, transfer, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferRequest, type TransferStage } from "./transfer.ts";
+export { consent, moveToXyz, transfer, transferOutKey, TransferPending, unsignedReservation, type Funding, type TransferIntent, type TransferOptions, type TransferRequest, type TransferStage } from "./transfer.ts";
 export { errorText, Refused, VenueDeliverer, type DeliveryJournal, type FillSource, type Log } from "./delivery.ts";
 export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type Order } from "./maker.ts";
 export { checkEscrowLocks, refundPayment, withdraw, type ChainReaders, type RefundFill, type Withdrawal, type WithdrawalRequest } from "./withdraw.ts";

@@ -97,7 +97,7 @@ test("a quote key held elsewhere reviews its lines here and its signature goes a
 });
 
 test("the fill feed keeps the identity's fills from one snapshot and their events, replayed while the stream is down",async()=>{
-  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
+  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from_venue:"hyperliquid",to_venue:"lighter",payment_verified_at:null};
   const replayed=Promise.withResolvers<void>();
   // A stream that closes at once: pages come by HTTP replay.
   class Down { onopen=()=>{};onmessage=()=>{};onclose=()=>{}; constructor(){queueMicrotask(()=>this.onclose());} send(){} close(){} }
@@ -118,8 +118,9 @@ test("the fill feed keeps the identity's fills from one snapshot and their event
   expect(reads).toBe(1);
 });
 
-test("the fill feed takes its pages from the stream, from the cursor it processed",async()=>{
-  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from:"hyperliquid",to:"lighter",payment_verified_at:null};
+test("the fill feed takes its pages from the stream, from the cursor it processed, and ignores stale events",async()=>{
+  const fill={id:"f1",revision:"1",role:"maker",state:"PAID",from_venue:"hyperliquid",to_venue:"lighter",payment_verified_at:null};
+  const settled={...fill,id:"f2"};
   const subscriptions:unknown[]=[];
   const subscription=Promise.withResolvers<void>();
   class Stream {
@@ -129,13 +130,16 @@ test("the fill feed takes its pages from the stream, from the cursor it processe
       subscriptions.push({url:this.url,...record(JSON.parse(text))});
       this.onmessage({data:JSON.stringify({next_cursor:"6",has_more:false,events:[{cursor:"6",kind:"fill.changed",resource_id:"f1",revision:"2",data:{...fill,payment_verified_at:"2026-10-13T00:00:00Z"}}]})});
       this.onmessage({data:JSON.stringify({next_cursor:"7",has_more:false,events:[{cursor:"7",kind:"fill.changed",resource_id:"f1",revision:"1",data:fill}]})});
+      // Settled, then a stale event: the fill stays settled.
+      this.onmessage({data:JSON.stringify({next_cursor:"9",has_more:false,events:[{cursor:"8",kind:"fill.changed",resource_id:"f2",revision:"2",data:{...settled,state:"SETTLED"}},
+        {cursor:"9",kind:"fill.changed",resource_id:"f2",revision:"1",data:settled}]})});
       subscription.resolve();
     }
     close() {this.onclose();}
   }
   let replays=0;
   const client=api(url=>{
-    if(url.includes("/me/snapshot")) return Response.json({cursor:"5",orders:[],fills:[fill]});
+    if(url.includes("/me/snapshot")) return Response.json({cursor:"5",orders:[],fills:[fill,settled]});
     if(url.includes("/me/events")){replays++;return Response.json({next_cursor:"6",has_more:false,events:[]});}
     return new Response("unexpected",{status:500});
   },"mk_token");
@@ -144,7 +148,10 @@ test("the fill feed takes its pages from the stream, from the cursor it processe
   await subscription.promise;
   stop.abort();
   await feed.done;
-  expect((await feed.fills())[0]).toMatchObject({id:"f1",payment_verified_at:"2026-10-13T00:00:00Z"});
+  const fills=await feed.fills();
+  expect(fills).toHaveLength(2);
+  expect(fills[0]).toMatchObject({id:"f1",payment_verified_at:"2026-10-13T00:00:00Z"});
+  expect(fills[1]).toMatchObject({id:"f2",state:"SETTLED"});
   expect(subscriptions[0]).toEqual({url:"ws://localhost:8080/v1/stream",token:"mk_token",after:"5"});
   expect(replays).toBe(0);
 });

@@ -2,7 +2,7 @@ import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { isAddress, required, type Verified } from "./validation.ts";
 import { escrowDeployment } from "./deployments.ts";
 import { checkFee } from "./fees.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent, type Typed } from "./protocol.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
 export type FundingSource = "wallet" | "venue";
 type MakerIntent = { venue: string; amount: string; quote_identity_id?: string | null | undefined; client_request_id: string; funding_source: FundingSource };
@@ -156,21 +156,15 @@ export function signableUntil(prepared: { take: { fills: readonly { pay_by: stri
   return Math.min(...prepared.take.fills.map(fill => Date.parse(fill.pay_by) / 1000), ...nonces);
 }
 type RouteTransfer = { id: string; from: string; to: string; amount_in: string; min_out: string; payer: string; recipient: string; previous_transfer_id: string | null;
-  withdrawal_preparation: { amount: string; typed_data: Typed } | null; max_fee_bps?: number | undefined };
-/** The second leg must spend no more than the first delivers, at least 1% of the plan, at the planned price. Its withdrawal goes only to `hub`. */
+  withdrawal_preparation: unknown; max_fee_bps?: number | undefined };
+/** The second leg must spend no more than the first delivers, at least 1% of the plan, at the planned price, and withdraw nothing: the first take's delivery stays in the escrow for it. */
 export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string; max_fee_bps?: number | undefined } | null | undefined },
-  delivering: readonly { amount_out: string }[], second: RouteTransfer, hub: string, now = Date.now() / 1000): void {
+  delivering: readonly { amount_out: string }[], second: RouteTransfer, hub: string): void {
   const then = first.then;
   insist(then && second.previous_transfer_id === first.id && second.from === first.to && second.to === then.to && same(second.payer, hub) && same(second.recipient, then.recipient)
-    && second.max_fee_bps === then.max_fee_bps, "The route's second transfer differs from the route");
+    && second.max_fee_bps === then.max_fee_bps && second.withdrawal_preparation === null, "The route's second transfer differs from the route");
   const delivers = delivering.reduce((sum, fill) => sum + uint(fill.amount_out), 0n), pays = uint(second.amount_in), planned = uint(then.amount_in);
   insist(pays > 0n && pays <= delivers && pays * 100n >= planned && uint(second.min_out) >= uint(then.min_out) * pays / planned, "The route's second take differs from its plan");
-  const withdrawal = second.withdrawal_preparation;
-  if (withdrawal) {
-    const amount = uint(withdrawal.amount);
-    insist(amount <= delivers, "The route withdraws more than it brings");
-    checkWithdrawal(withdrawal.typed_data, second.from, hub, hub, amount, now);
-  }
 }
 
 /** `payWindow`: the most seconds to `pay_by`, `ROUTE_PAY_WINDOW_SECONDS` for a route's second take signed at once. */

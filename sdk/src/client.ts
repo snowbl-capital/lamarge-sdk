@@ -1,6 +1,5 @@
 import { routes, type operations } from "./generated/api.ts";
 import { isRecord, required } from "./protocol/validation.ts";
-import { retryAfterMs } from "./retry-after.ts";
 
 /** An API refusal or an unusable answer. `code` and `reason` are stable; `message` is for people. */
 export class LaMargeError extends Error {
@@ -55,6 +54,13 @@ export interface Transport {
 }
 
 const text = (value: unknown) => typeof value === "string" ? value : undefined;
+
+/** Retry-After accepts either seconds or an HTTP date. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) return undefined;
+  const milliseconds = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - now;
+  return Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : undefined;
+}
 
 function refusal(status: number, raw: unknown, headers: Headers): LaMargeError {
   const error = isRecord(raw) && isRecord(raw.error) ? raw.error : undefined;

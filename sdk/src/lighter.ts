@@ -118,13 +118,21 @@ export class LighterDeliverer extends VenueDeliverer<LighterDelivery> {
   }
   /** Moves one persisted delivery forward; false while its outcome on Lighter is unknown. */
   protected async settle(quoter: FillSource, delivery: LighterDelivery, fill: DeliveryFill | undefined, deliveries: Record<string, LighterDelivery>, log: Log): Promise<boolean> {
+    const id = delivery.fill_id;
+    if (!fill && (delivery.attempted || delivery.sent)) {
+      // Fills listed after a resync or a restart are the open ones: this one may have ended with
+      // this transfer, and the server's answer to the report tells.
+      if (!this.reportDue(id)) return true;
+      const outcome = await this.report(quoter, id, delivery.tx_hash, log);
+      if (outcome) { delivery.outcome = outcome; await this.store.save(deliveries); }
+      return true;
+    }
     if (!this.awaits(fill) || fill.delivery_hash === delivery.tx_hash) {
       delivery.outcome = fill?.delivery_hash === delivery.tx_hash ? "reported" : "failed";
       await this.store.save(deliveries);
       log(`${delivery.fill_id}: fill no longer awaits this delivery`);
       return true;
     }
-    const id = delivery.fill_id;
     if (!this.reportDue(id)) return true;
     // Back off between reads and sends whatever the outcome, failures included.
     if (!this.executed.has(id) && !this.turn(this.readAt, id)) return false;

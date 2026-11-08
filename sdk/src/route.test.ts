@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { createClient } from "./client.ts";
+import { apiError, countingSigner, mockApi, type Handler } from "./mock.test.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas } from "./protocol/protocol.ts";
-import { record, required } from "./protocol/validation.ts";
+import { required } from "./protocol/validation.ts";
 import { route, type RouteRequest } from "./route.ts";
 import { memoryStore } from "./store.ts";
 import { TransferPending } from "./transfer.ts";
@@ -13,7 +13,6 @@ const at = (seconds: number) => new Date((now() + seconds) * 1000).toISOString()
 /** The API for a route from Polymarket to Aster through Hyperliquid, 1 USDC each take, the second continuing what the first delivered. */
 function api(options: { continuable?: string; received?: string; unknownReads?: number; hub?: string; undelivered?: boolean; refunded?: boolean; viaHeld?: string; secondExpired?: boolean } = {}) {
   const hub = options.hub ?? owner;
-  const calls: string[] = [];
   const legs = { first: { from: "polymarket", to: "hyperliquid" }, second: { from: "hyperliquid", to: "aster" } };
   const intents: Record<string, Record<string, unknown>> = {};
   const records: Record<string, unknown>[] = [];
@@ -48,7 +47,7 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
   const balance = (venue: string, held: string) => ({ venue, address: venue === "hyperliquid" ? hub : owner, venue_wallet: null, chain_balance: held, chain_error: null, chain_read_at: at(0), escrow_balance: "0",
     deposit_balance: "0", withdrawable: "0", withdrawal_fee: "0", withdrawal_reserve: "0", read_at: at(0) });
   const book = (from: string, to: string) => ({ from, to, max_fill: String(10n ** 24n), levels: [{ order_id: id, supply: to === "aster" ? String(10n ** 18n) : "1000000", receive: "1000000", available: String(10n ** 24n), min_fill: "1", valid_until: at(60) }] });
-  const routes: Record<string, (body: Record<string, unknown>, query: URLSearchParams) => unknown> = {
+  const routes: Record<string, Handler> = {
     "GET /v1/venues": () => [],
     "GET /v1/orders": () => [],
     "GET /v1/books": (_body, query) => book(String(query.get("from")), String(query.get("to"))),
@@ -57,7 +56,7 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
       const known = records.find(row => row.client_transfer_id === body.client_transfer_id);
       if (known) {
         // The server answers a client id again only with the terms it was first opened with.
-        if (known.amount_in !== body.amount_in || known.min_out !== body.min_out) return Response.json({ error: { code: "STATE_CONFLICT", message: "client ID was already used with different parameters", request_id: "r", retryable: false } }, { status: 409 });
+        if (known.amount_in !== body.amount_in || known.min_out !== body.min_out) return apiError(409, "STATE_CONFLICT", "client ID was already used with different parameters");
         return known;
       }
       const opened = intent(key, body);
@@ -75,29 +74,20 @@ function api(options: { continuable?: string; received?: string; unknownReads?: 
     "POST /v1/takes/take-second/signatures": () => ({ fills: [fill("second")] }),
     "GET /v1/takes/take-second": () => ({ take: { id: "take-second", fills: [options.secondExpired ? { ...fill("second"), state: "EXPIRED", maker_leg: "ABANDONED" } : fill("second")] }, to_sign: [] }),
   };
-  const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init), url = new URL(request.url);
-    const name = `${request.method} ${url.pathname}`;
-    calls.push(name);
+  // Any transfer opened is read, and cancelled unless it has a take.
+  const { client, calls } = mockApi(routes, name => {
     const opened = records.find(row => name === `GET /v1/transfers/${String(row.id)}`);
     const cancelled = records.find(row => name === `DELETE /v1/transfers/${String(row.id)}`);
-    const handler = routes[name] ?? (opened ? () => opened : cancelled ? () => {
-      if (cancelled.take_id) return Response.json({ error: { code: "STATE_CONFLICT", message: "a transfer with a take cannot be cancelled", request_id: "r", retryable: false } }, { status: 409 });
+    return opened ? () => opened : cancelled ? () => {
+      if (cancelled.take_id) return apiError(409, "STATE_CONFLICT", "a transfer with a take cannot be cancelled");
       cancelled.cancelled_at = at(0);
-      return new Response(null, { status: 204 });
-    } : undefined);
-    if (!handler) return Response.json({ error: { code: "NOT_FOUND", message: name, request_id: "r", retryable: false } }, { status: 404 });
-    const body = request.method === "GET" || request.method === "DELETE" ? {} : record(await request.json());
-    const answer = handler(body, url.searchParams);
-    return answer instanceof Response ? answer : Response.json(answer);
-  }, { preconnect: globalThis.fetch.preconnect });
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, intents, records, options };
+      return null;
+    } : undefined;
+  });
+  return { client, calls, intents, records, options };
 }
 
-const signer = (address: `0x${string}` = owner) => {
-  const counted = { address, signed: 0, signMessage: async () => "0x00" as const, signTypedData: async () => { counted.signed++; return "0x00" as const; } };
-  return counted;
-};
+const signer = (address: `0x${string}` = owner) => countingSigner(address);
 const request: RouteRequest = { client_transfer_id: "move-1", from: "polymarket", via: "hyperliquid", to: "aster", amount_in: "1000000", min_out: "1000000",
   then: { amount_in: "1000000", min_out: String(10n ** 18n) }, recipient: owner, funding: "wallet" };
 

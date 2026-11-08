@@ -14,7 +14,7 @@ import { required } from "./protocol/validation.ts";
 
 export type Order = components["schemas"]["Order"];
 export type Credential = components["schemas"]["CredentialCreated"];
-export type FeedFill = Omit<components["schemas"]["FillPreview"], "from" | "to"> & { from_venue: string; to_venue: string };
+export type FeedFill = Omit<components["schemas"]["FillPreview"], "from" | "to">;
 export type DeliveryFill = Pick<components["schemas"]["Fill"], "id" | "role" | "state" | "payment_leg" | "maker_leg" | "to_venue" | "amount_out"
   | "maker_accept_by" | "maker_accepted_at" | "deliver_by" | "report_by" | "delivery_to" | "delivery_hash" | "payment_verified_at">;
 
@@ -171,8 +171,9 @@ export class Quoter {
     return this.timed(() => this.client.call("submitDelivery", { path: { id: fillId }, body: { tx_hash: txHash }, retry: true }));
   }
   /**
-   * The identity's open fills kept current from its event journal: a snapshot, then only the
-   * changes, pushed over the stream. `fills()` throws until the first snapshot is in.
+   * The identity's fills kept current from its event journal: the open ones from a snapshot, then
+   * every change, a fill that ends staying until the next snapshot. `fills()` throws until the
+   * first snapshot is in.
    */
   fillFeed(signal: AbortSignal, log: (line: string) => void = console.error, WebSocket?: SocketConstructor) {
     const current = new Map<string, FeedFill>();
@@ -182,8 +183,8 @@ export class Quoter {
       const next = BigInt(revision);
       if ((revisions.get(fill.id) ?? 0n) > next) return;
       revisions.set(fill.id, next);
-      const { from, to, ...rest } = fill;
-      current.set(fill.id, { ...rest, from_venue: from, to_venue: to });
+      // A final fill stays: a delivery LaMarge settled before its report's answer came back is told by its hash.
+      current.set(fill.id, fill);
     };
     const done = (async () => {
       while (!signal.aborted) {

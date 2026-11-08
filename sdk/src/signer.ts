@@ -60,8 +60,7 @@ export async function signTyped(signer: Partial<Pick<Signer, "signTypedData">>, 
  */
 export type Signing =
   | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
-  /** `move`: a received transfer's move from the perps to the signer's own trade.xyz. */
-  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true; move?: true }
+  | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true }
   | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
   /** A transaction, not a signature: GMX Account funds to the signer's own address on Arbitrum. */
   | { kind: "transfer_out"; venue: "gmx"; amount: bigint }

@@ -1,6 +1,6 @@
 {
   "name": "@lamarge/sdk",
-  "version": "0.15.0-rc.0",
+  "version": "0.15.0-rc.1",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
   "homepage": "https://docs.lamarge.trade/sdk",
@@ -39,8 +39,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist",
-    "!dist/**/*.test.*"
+    "dist"
   ],
   "scripts": {
     "api:generate": "bun run scripts/generate-api.ts",

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { createClient, LaMargeError } from "./client.ts";
+import { LaMargeError } from "./client.ts";
+import { apiError, countingSigner, mockApi, type Handler } from "./mock.test.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas, UNLIMITED_ALLOWANCE } from "./protocol/protocol.ts";
 import { array, record, required } from "./protocol/validation.ts";
 import type { Signing } from "./signer.ts";
@@ -25,10 +26,8 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
   previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string;
   fromDex?: string; sourceDex?: string; moved?: { out: boolean } } = {}) {
-  const calls: string[] = [];
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
-  const bodies: Record<string, unknown[]> = {};
   let failures = options.failSubmissions ?? 0;
   let unreadable = options.unreadable ?? 0;
   let lostWithdrawals = options.loseWithdrawals ?? 0, unrecorded = options.unrecorded ?? 0, lostReplacements = options.loseReplacements ?? 0, reads = 0, permitReads = 0;
@@ -81,7 +80,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     if (intent.withdrawal.state !== "relayed" || live < BigInt(intent.amount_in)) return { ...intent, funding_plan: null };
     return { ...intent, funding_plan: { ...plan, withdrawal_amount: "0", withdrawal_to: null, requests: plan.requests.filter(request => request.kind !== "margin_move") } };
   };
-  const routes: Record<string, (body: unknown, query: URLSearchParams) => unknown> = {
+  const routes: Record<string, Handler> = {
     "GET /v1/venues": () => [],
     "GET /v1/orders": () => [],
     "GET /v1/books": () => ({ from, to: "polymarket", max_fill: "100000000", levels: options.levels ?? [{ order_id: id, supply: "1005000", receive: "1000000", available: "100000000", min_fill: "1", valid_until: at(60) }] }),
@@ -100,7 +99,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     "GET /v1/transfers/transfer-2": (_, query) => answer(query),
     "GET /v1/transfers/transfer-0": () => ({ ...intent, id: "transfer-0", previous_transfer_id: null, grouped: options.previous === "grouped" ? { state: "closed" } : null }),
     "DELETE /v1/transfers/transfer-1": () => {
-      if (options.refuseCancel) return Response.json({ error: { code: "STATE_CONFLICT", message: "withdrawal accepted", request_id: "r", retryable: false } }, { status: 409 });
+      if (options.refuseCancel) return apiError(409, "STATE_CONFLICT", "withdrawal accepted");
       intent.cancelled_at = at(0);
       if (options.loseCancel) { options.loseCancel = false; throw new TypeError("lost cancel acknowledgement"); }
       return null;
@@ -137,20 +136,20 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
         options.submittedMeanwhile = false;
         intent.withdrawal = withdrawal("relayed");
         unsent = false;
-        return Response.json({ error: { code: "STATE_CONFLICT", reason: "withdrawal_submitted", message: "the withdrawal was submitted meanwhile: take again", request_id: "r", retryable: false } }, { status: 409 });
+        return apiError(409, "STATE_CONFLICT", "the withdrawal was submitted meanwhile: take again", { reason: "withdrawal_submitted" });
       }
       if (options.conflict) {
         intent.withdrawal = withdrawal("relayed");
-        return Response.json({ error: { code: "STATE_CONFLICT", message: options.conflict, request_id: "r", retryable: false } }, { status: 409 });
+        return apiError(409, "STATE_CONFLICT", options.conflict);
       }
-      if (unsent && !options.atOnce) return Response.json({ error: { code: "STATE_CONFLICT", message: "the prepared withdrawal must be resolved before taking", request_id: "r", retryable: false } }, { status: 409 });
+      if (unsent && !options.atOnce) return apiError(409, "STATE_CONFLICT", "the prepared withdrawal must be resolved before taking");
       intent.take_id = "take-1";
       delete options.takeFill;
       return prepared();
     },
     "GET /v1/takes/take-1": () => prepared(),
     "DELETE /v1/takes/take-1": () => {
-      if (options.refuseTakeCancel) return Response.json({ error: { code: "STATE_CONFLICT", message: "take signed", request_id: "r", retryable: false } }, { status: 409 });
+      if (options.refuseTakeCancel) return apiError(409, "STATE_CONFLICT", "take signed");
       options.takeFill = { ...options.takeFill, state: "EXPIRED", maker_leg: "ABANDONED" };
       return null;
     },
@@ -160,39 +159,20 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       const moves = array(record(body).signatures).filter(item => record(item).kind === "margin_move");
       if (unsent) {
         // Signed at once: the withdrawal is sent now, the payment once its funds arrive.
-        if (moves.length !== 1) return Response.json({ error: { code: "VALIDATION_ERROR", message: "the take's withdrawal needs one signature", request_id: "r", retryable: false } }, { status: 400 });
+        if (moves.length !== 1) return apiError(400, "VALIDATION_ERROR", "the take's withdrawal needs one signature");
         intent.withdrawal = withdrawal(options.withdrawn ?? "relayed");
         unsent = false;
         committed = true;
         return { fills: [{ ...fill, signed_at: at(0) }] };
       }
-      if (moves.length) return Response.json({ error: { code: "VALIDATION_ERROR", message: "submit only the requested signatures", request_id: "r", retryable: false } }, { status: 400 });
+      if (moves.length) return apiError(400, "VALIDATION_ERROR", "submit only the requested signatures");
       return { fills: [{ ...fill, state: "PAID", signed_at: at(0) }] };
     },
   };
-  const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    const route = `${request.method} ${new URL(request.url).pathname}`;
-    calls.push(route);
-    const handler = routes[route];
-    if (!handler) return Response.json({ error: { code: "NOT_FOUND", message: route, request_id: "r", retryable: false } }, { status: 404 });
-    const body: unknown = request.method === "GET" || request.method === "DELETE" ? undefined : await request.json();
-    (bodies[route] ??= []).push(body);
-    const answered = handler(body, new URL(request.url).searchParams);
-    return answered instanceof Response ? answered : answered === null ? new Response(null, { status: 204 }) : Response.json(answered);
-  }, { preconnect: globalThis.fetch.preconnect });
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, bodies, intent, fill, payment };
+  return { ...mockApi(routes), intent, fill, payment };
 }
 
-const counting = (decline: (type: string) => boolean = () => false) => {
-  const signer = { address: payer, signed: 0, kinds: [] as string[], signMessage: async () => "0x00" as const, signTypedData: async ({ primaryType }: { primaryType: string }) => {
-    if (decline(primaryType)) throw new Error("User rejected the request");
-    signer.signed++;
-    signer.kinds.push(primaryType);
-    return "0x00" as const;
-  } };
-  return signer;
-};
+const counting = (decline?: (type: string) => boolean) => countingSigner(payer, decline);
 /** The caller's clock, moved only by its own sleeps, each of which may change what the API answers next. */
 const clock = (onSleep: () => void = () => {}) => {
   let time = Date.now();
@@ -274,6 +254,15 @@ test("a resumed take never pays an account other than the transfer's recipient",
   const { client } = api({ takeId: "take-1", recipient: maker, linkedRecipient: maker });
   const signer = counting();
   await expect(transfer(client, signer, { ...request, transfer_id: "transfer-1" })).rejects.toThrow("Linked account changed");
+  expect(signer.signed).toBe(0);
+});
+
+test("a transfer into trade.xyz is refused before any request", async () => {
+  const { client, calls } = api();
+  const signer = counting();
+  const intoXyz = { ...request, to: "hyperliquid", to_dex: "xyz" } as TransferRequest;
+  await expect(transfer(client, signer, intoXyz)).rejects.toThrow("trade.xyz is not a transfer destination");
+  expect(calls).toEqual([]);
   expect(signer.signed).toBe(0);
 });
 

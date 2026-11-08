@@ -50,7 +50,7 @@ function aster(spot = "10") {
 }
 
 const memory = () => { let saved: Record<string, AsterDelivery> = {}; const writes: Record<string, AsterDelivery>[] = []; return { writes, load: () => structuredClone(saved), save: (value: Record<string, AsterDelivery>) => { saved = structuredClone(value); writes.push(saved); } }; };
-const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => LaMargeError | null): FillSource => ({ fills: async () => fills(), accept: async () => undefined, deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } });
+const quoterOf = (fills: () => DeliveryFill[], reported: [string, string][] = [], answer?: () => Error | null): FillSource => ({ fills: async () => fills(), accept: async () => undefined, deliver: async (id: string, hash: string) => { reported.push([id, hash]); const error = answer?.(); if (error) throw error; return { fill: { ...fill({ id }), delivery_hash: hash, state: "CLAIMING" } }; } });
 const deliverer = (store = memory(), now = () => Date.now()) => new AsterDeliverer(owner, agent, store, api, now);
 
 test("a delivery is the fill's transfer request, signed by the account at chain 1666", async () => {
@@ -162,6 +162,46 @@ test("a pending report is retried less often, a refused one is final", async () 
   now += 5_000;
   await bot.run(quoter, () => {});
   expect(store.load()[fill().id]?.outcome).toBe("failed");
+});
+
+test("a sent transfer whose fill a resync no longer lists takes the server's answer to its report", async () => {
+  const book = aster();
+  let now = Date.now();
+  const store = memory();
+  const reported: [string, string][] = [];
+  let listed = [fill()];
+  let answer: Error | null = new TypeError("fetch failed");
+  const bot = deliverer(store, () => now);
+  const quoter = quoterOf(() => listed, reported, () => answer);
+  await bot.run(quoter, () => {});
+  // The report's answer was lost, LaMarge settled the fill with this transfer, and the snapshot lists open fills only.
+  listed = [];
+  now += 1_500;
+  await bot.run(quoter, () => {});
+  expect(store.load()[fill().id]?.outcome).toBeUndefined();
+  answer = null;
+  now += 1_500;
+  await bot.run(quoter, () => {});
+  expect(reported).toEqual([[fill().id, "73170000"], [fill().id, "73170000"], [fill().id, "73170000"]]);
+  expect(store.load()[fill().id]?.outcome).toBe("reported");
+  expect(book.sent.length).toBe(1);
+});
+
+test("after a restart, unlisted fills take the server's answer for sent transfers, and an unsent one fails unreported", async () => {
+  aster();
+  const store = memory();
+  const bot = deliverer(store);
+  const unsent = fill({ id: "0192f0a1-b2c3-7d4e-8f90-00000000cafe" });
+  store.save({
+    [fill().id]: { ...(await bot.sign(fill(), 1)), attempted: true, transfer_id: "73170000" },
+    [second().id]: { ...(await bot.sign(second(), 2)), attempted: true, transfer_id: "73170001" },
+    [unsent.id]: await bot.sign(unsent, 3),
+  });
+  const reported: [string, string][] = [];
+  const ended = new LaMargeError(409, "STATE_CONFLICT", "the payment must be locked and the delivery still due", { reason: "not_due" });
+  await deliverer(store).run(quoterOf(() => [], reported, () => reported.at(-1)?.[0] === second().id ? ended : null), () => {});
+  expect(reported).toEqual([[fill().id, "73170000"], [second().id, "73170001"]]);
+  expect(Object.values(store.load()).map(delivery => delivery.outcome)).toEqual(["reported", "failed", "failed"]);
 });
 
 test("nothing is signed or sent within fifteen seconds of deliver_by", async () => {

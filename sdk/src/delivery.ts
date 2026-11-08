@@ -107,7 +107,7 @@ export abstract class VenueDeliverer<D extends { fill_id: string; outcome?: stri
     } catch (error) {
       const code = error instanceof LaMargeError ? error.code : undefined;
       const reason = error instanceof LaMargeError ? error.reason : undefined;
-      if (code === "VALIDATION_ERROR" || code === "STATE_CONFLICT") {
+      if (code === "VALIDATION_ERROR" || code === "STATE_CONFLICT" || code === "NOT_FOUND") {
         log(`${id}: delivery refused (${String(reason ?? code)}): ${errorText(error)}`);
         return "failed";
       }

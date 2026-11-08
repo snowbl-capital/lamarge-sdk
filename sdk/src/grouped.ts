@@ -1,8 +1,8 @@
 import { LaMargeError, type Answer, type Client } from "./client.ts";
 import { checkRouteIntent } from "./protocol/intents.ts";
 import { groupable, insist, ROUTE_PAY_WINDOW_SECONDS, same } from "./protocol/protocol.ts";
-import { isHex, isRecord, required } from "./protocol/validation.ts";
-import { signTyped, withoutAttestation, type BeforeSigning, type SignedItem, type Signer } from "./signer.ts";
+import { isRecord, required } from "./protocol/validation.ts";
+import { withoutAttestation, type BeforeSigning, type SignedItem, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
 import { signPayment, type TakeOptions } from "./take.ts";
 import { takeInput, type TransferIntent } from "./transfer.ts";
@@ -37,10 +37,10 @@ export class RouteAbandoned extends Error {
 
 /**
  * Signs every request of a route at once: reserves the first take, has the server reserve the
- * second, checks both against the route and the linked accounts, signs the first take's payment,
- * the withdrawal from `via` and the second take's payment back to back and commits them together,
- * inside `lock` throughout. A refused or expired attempt throws `RouteAbandoned`; nothing is
- * signed again automatically. `signer` pays on `first.from`, `hub` on `via`.
+ * second, checks both against the route and the linked accounts, signs the first take's payment
+ * and the second take's payment back to back and commits them together, inside `lock` throughout.
+ * A refused or expired attempt throws `RouteAbandoned`; nothing is signed again automatically.
+ * `signer` pays on `first.from`, `hub` on `via`.
  */
 export async function signRoute(client: Client, signer: Signer, hub: Signer, first: TransferIntent, options: GroupedOptions = {}): Promise<GroupedRoute> {
   const { lock, ...unlocked } = options;
@@ -75,7 +75,7 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
     const [second, balances] = await Promise.all([client.call("getTransfer", { path: { id: route.second_transfer_id }, signal }), client.call("getBalances", { signal })]);
     insist(preparation.first.take.id === route.first_take_id && (!first.take_id || first.take_id === route.first_take_id) && preparation.second.take.id === route.second_take_id
       && second.take_id === route.second_take_id, "The route's takes differ from its transfers");
-    checkRouteIntent(first, preparation.first.take.fills, second, hub.address, now() / 1000);
+    checkRouteIntent(first, preparation.first.take.fills, second, hub.address);
     const account = (venue: string, owner: Signer) => {
       const linked = required(balances.find(balance => balance.venue === venue), "Link both venues first");
       insist(same(linked.address, owner.address), "The signer is not the account paying on this venue");
@@ -84,33 +84,25 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
     const payer = account(first.from, signer), between = account(second.from, hub);
     const kept: unknown = await store.load(key);
     // Signatures already made for this very route are kept, one by one: a restart asks only the rest.
-    const partial: Partial<Signed> = isRecord(kept) && isRecord(kept.requests) && canonical(keptRequests(kept.requests)) === canonical(requests(preparation, second)) ? stored(kept) : {};
+    const partial: Partial<Signed> = isRecord(kept) && isRecord(kept.requests) && canonical(keptRequests(kept.requests)) === canonical(requests(preparation)) ? stored(kept) : {};
     const left = () => Date.parse(route.commit_by) - now() > REQUEST_MARGIN_MS;
-    const save = async (progress: Partial<Signed>) => { signal?.throwIfAborted(); await store.save(key, { requests: requests(preparation, second), ...progress }); };
+    const save = async (progress: Partial<Signed>) => { signal?.throwIfAborted(); await store.save(key, { requests: requests(preparation), ...progress }); };
     const before = options.beforeSigning;
     const progress = { ...partial };
     signed = null;
     if (left()) {
-      if (!progress.first || !progress.second || second.withdrawal_preparation && !progress.withdrawal) await before?.({ kind: "route", preparation, second, signed: { first: !!progress.first, withdrawal: !!progress.withdrawal, second: !!progress.second } });
+      if (!progress.first || !progress.second) await before?.({ kind: "route", preparation, second, signed: { first: !!progress.first, withdrawal: false, second: !!progress.second } });
       const payment = { signal, before, route: true };
       // The first take's request first: its venue nonce is the shortest-lived.
       if (!progress.first && left()) {
         progress.first = await signPayment(client, preparation.first, takeInput(first), signer, payer, first.recipient, { ...payment, at: now() / 1000 });
         await save(progress);
       }
-      const withdrawal = second.withdrawal_preparation;
-      if (withdrawal && !progress.withdrawal && left()) {
-        await before?.({ kind: "withdrawal", venue: second.from, destination: hub.address, amount: BigInt(withdrawal.amount), typed: withdrawal.typed_data, route: true });
-        progress.withdrawal = await signTyped(hub, withdrawal.typed_data);
-        await save(progress);
-      }
       if (!progress.second && left()) {
         progress.second = await signPayment(client, preparation.second, takeInput(second), hub, between, second.recipient, { ...payment, at: now() / 1000, payWindow: ROUTE_PAY_WINDOW_SECONDS });
         await save(progress);
       }
-      if (progress.first && progress.second && (!withdrawal || progress.withdrawal)) {
-        signed = [...progress.first, ...progress.withdrawal ? [{ kind: "margin_move", signature: progress.withdrawal }] : [], ...progress.second];
-      }
+      if (progress.first && progress.second) signed = [...progress.first, ...progress.second];
     }
   } catch (error) {
     // Keep stored signatures if the abort cannot be confirmed; preserve the signing error.
@@ -137,16 +129,15 @@ export async function signRoute(client: Client, signer: Signer, hub: Signer, fir
   }
 }
 
-interface Signed { first: SignedItem[]; second: SignedItem[]; withdrawal?: `0x${string}` | undefined }
+interface Signed { first: SignedItem[]; second: SignedItem[] }
 
-const requests = (preparation: GroupedPreparation, second: TransferIntent) =>
-  ({ first: withoutAttestation(preparation.first.to_sign), second: withoutAttestation(preparation.second.to_sign), withdrawal: second.withdrawal_preparation?.typed_data ?? null });
+const requests = (preparation: GroupedPreparation) => ({ first: withoutAttestation(preparation.first.to_sign), second: withoutAttestation(preparation.second.to_sign) });
 
-/** Requests a checkpoint kept, as `requests` writes them: one an earlier SDK saved still holds attestations. */
-const keptRequests = (kept: Record<string, unknown>) => ({ ...kept, first: withoutAttestation(kept.first), second: withoutAttestation(kept.second) });
+/** Requests a checkpoint kept, as `requests` writes them: earlier SDKs saved a null withdrawal, and attestations. */
+const keptRequests = (kept: Record<string, unknown>) =>
+  kept.withdrawal == null ? { first: withoutAttestation(kept.first), second: withoutAttestation(kept.second) } : null;
 
 function stored(kept: Record<string, unknown>): Partial<Signed> {
   const first = signedItems(kept.first), second = signedItems(kept.second);
-  const withdrawal = isHex(kept.withdrawal) ? kept.withdrawal : undefined;
-  return { ...first ? { first } : {}, ...second ? { second } : {}, ...withdrawal ? { withdrawal } : {} };
+  return { ...first ? { first } : {}, ...second ? { second } : {} };
 }

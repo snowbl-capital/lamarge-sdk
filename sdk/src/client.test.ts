@@ -1,10 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
-import { createClient, exchange, LaMargeError, type CallArguments } from "./client.ts";
-
-const send = async (...args: Parameters<typeof exchange>) => (await exchange(...args)).body;
+import { createClient, exchange, LaMargeError, retryAfterMs, type CallArguments } from "./client.ts";
 import { CHAINS, VENUE_SETTLED } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import { signIn } from "./session.ts";
+
+const send = async (...args: Parameters<typeof exchange>) => (await exchange(...args)).body;
 
 const answering = (...answers: (() => Response)[]) => {
   const seen: Request[] = [];
@@ -26,6 +26,15 @@ test("a refusal keeps its code, reason, correlation, retry hint and setup step",
   expect(error).toMatchObject({ status: 409, code: "SETUP_REQUIRED", reason: "permit", requestId: "request-1", retryable: false, retryAfterMs: 2000, venue: "polymarket", step: "permit" });
 });
 
+test("a retry hint is read as seconds or an HTTP date, never negative, and an unreadable one is ignored", () => {
+  const now = Date.parse("2026-01-01T00:00:00Z");
+  expect(retryAfterMs("2", now)).toBe(2_000);
+  expect(retryAfterMs("Thu, 01 Jan 2026 00:00:10 GMT", now)).toBe(10_000);
+  expect(retryAfterMs("Wed, 31 Dec 2025 23:59:50 GMT", now)).toBe(0);
+  expect(retryAfterMs("invalid", now)).toBeUndefined();
+  expect(retryAfterMs(" ", now)).toBeUndefined();
+});
+
 test("an answer without the error envelope is UNKNOWN, with the server's request id", async () => {
   const { fetch } = answering(() => new Response("bad gateway", { status: 502, headers: { "x-request-id": "edge-1" } }));
   await expect(send({ apiUrl: "http://localhost:8080", fetch }, { method: "GET", path: "/v1/me" })).rejects.toMatchObject({ code: "UNKNOWN", requestId: "edge-1" });
@@ -34,7 +43,7 @@ test("an answer without the error envelope is UNKNOWN, with the server's request
 test("only a request marked retryable is repeated, with the identical body", async () => {
   const busy = () => Response.json({ error: { code: "RATE_LIMITED", message: "", request_id: "r", retryable: true } }, { status: 429, headers: { "retry-after": "0" } });
   const once = answering(busy);
-  await expect(send({ apiUrl: "http://localhost:8080", fetch: once.fetch }, { method: "POST", path: "/v1/quotes/batch", body: { cancels: ["a"] } })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+  await expect(send({ apiUrl: "http://localhost:8080", fetch: once.fetch }, { method: "POST", path: "/v1/quote-lines", body: { lines: [] } })).rejects.toMatchObject({ code: "RATE_LIMITED" });
   expect(once.seen).toHaveLength(1);
   const retried = answering(busy, () => Response.json({ ok: true }));
   expect(await send({ apiUrl: "http://localhost:8080", fetch: retried.fetch }, { method: "POST", path: "/v1/fills/{id}/delivery", params: { id: "f/1" }, body: { tx_hash: "0x1" }, retry: true })).toEqual({ ok: true });

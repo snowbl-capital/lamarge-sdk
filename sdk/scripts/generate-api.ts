@@ -68,7 +68,9 @@ async function generate(spec: Node): Promise<string> {
       .map(([status]) => Number(status));
     routes[id] = { path, method: method.toUpperCase(), ...(accept.length ? { accept } : {}) };
   }
-  return `${astToString(nodes)}\nexport const routes = ${JSON.stringify(routes, null, 2)} as const;\n`;
+  const table = Object.entries(routes).map(([id, route]) => `  ${id}: ${JSON.stringify(route)},`).join("\n");
+  const types = nodes.filter(node => !((ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) && ["paths", "webhooks", "$defs"].includes(node.name.text)));
+  return `${astToString(types)}\nexport const routes = {\n${table}\n} as const;\n`;
 }
 
 if (import.meta.main) {

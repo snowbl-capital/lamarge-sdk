@@ -101,6 +101,14 @@ export class AsterDeliverer extends VenueDeliverer<AsterDelivery> {
   protected async settle(quoter: FillSource, delivery: AsterDelivery, fill: DeliveryFill | undefined, deliveries: Record<string, AsterDelivery>, log: Log): Promise<boolean> {
     const id = delivery.fill_id;
     const save = async () => { await this.store.save(deliveries); };
+    if (!fill && delivery.transfer_id !== undefined) {
+      // Fills listed after a resync or a restart are the open ones: this one may have ended with
+      // this transfer, and the server's answer to the report tells.
+      if (!this.reportDue(id)) return true;
+      const outcome = await this.report(quoter, id, delivery.transfer_id, log);
+      if (outcome) { delivery.outcome = outcome; await save(); }
+      return true;
+    }
     const reported = delivery.transfer_id !== undefined && fill?.delivery_hash === delivery.transfer_id;
     if (!this.awaits(fill) || reported) {
       delivery.outcome = reported ? "reported" : "failed";

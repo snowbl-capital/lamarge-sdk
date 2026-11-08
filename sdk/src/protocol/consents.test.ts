@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { canRefundPayment, checkCloseOffer, checkEscrowWithdrawal, checkFundingPlan, checkLinkChallenge, checkPaymentRefund, checkRefundLocks, checkRegistry, checkSetupKind, CHAINS, EIP712Domain, ESCROW, required, schemas, type SignItem } from "./index.ts";
+import { canRefundPayment, checkEscrowWithdrawal, checkFundingPlan, checkLinkChallenge, checkPaymentRefund, checkRefundLocks, checkRegistry, checkSetupKind, CHAINS, EIP712Domain, ESCROW, required, schemas, type SignItem } from "./index.ts";
 
 const address = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A", master = "0x14791697260E4c9A71f18484C9f997B308e59325";
 
@@ -38,23 +38,8 @@ test("a funding plan lists the permit first, only when a wallet deposit needs it
     { payment_setup: "pending" },
     { requests: kinds("margin_move", "pay_take") },
     { deposit: "0", withdrawal_amount: "0", withdrawal_to: null, requests: kinds("permit", "pay_take") },
+    { requests: [...kinds("permit", "margin_move", "pay_take"), { kind: "move", signer: master, chain_id: 999 }] },
   ]) expect(() => checkFundingPlan(intent(plan))).toThrow("Funding requests differ");
-});
-
-test("a transfer received for trade.xyz by the payer's own account lists its move last, signed on HyperEVM", () => {
-  const other = `0x${"44".repeat(20)}`;
-  const kinds = (...names: string[]) => names.map(kind => ({ kind, signer: master, chain_id: 137 }));
-  const move = (patch: Record<string, unknown> = {}) => ({ kind: "move", signer: master, chain_id: 999, ...patch });
-  const intent = (requests: { kind: string; signer: string; chain_id: number }[], to_dex = "xyz", recipient = master) => ({ from: "polymarket", payer: master, recipient, to_dex, amount_in: "10000000",
-    funding_plan: { observed_at: new Date().toISOString(), venue: "polymarket", owner: master, amount: "10000000", deposit: "0", withdrawal_amount: "0", withdrawal_to: null,
-      payment_setup: "done", requests } });
-  expect(checkFundingPlan(intent([...kinds("pay_take"), move()])).requests).toHaveLength(2);
-  for (const requests of [kinds("pay_take"), [move(), ...kinds("pay_take")], [...kinds("pay_take"), move({ signer: other })], [...kinds("pay_take"), move({ chain_id: 137 })]])
-    expect(() => checkFundingPlan(intent(requests))).toThrow("Funding requests differ");
-  // Without to_dex, or for another recipient, who moves its funds itself, no move is listed.
-  expect(() => checkFundingPlan(intent([...kinds("pay_take"), move()], ""))).toThrow("Funding requests differ");
-  expect(() => checkFundingPlan(intent([...kinds("pay_take"), move({ signer: other })], "xyz", other))).toThrow("Funding requests differ");
-  expect(checkFundingPlan(intent(kinds("pay_take"), "xyz", other)).requests).toHaveLength(1);
 });
 
 test("a missing funding plan throws the server's reason when it gives one", () => {
@@ -72,26 +57,28 @@ const order = {
 };
 const now = 1_790_000_000;
 
-type PreparedClose = Parameters<typeof checkCloseOffer>[0];
+type PreparedWithdrawal = Parameters<typeof checkEscrowWithdrawal>[0];
 
-const prepared = (): PreparedClose => ({
+const withdrawal = (): PreparedWithdrawal => ({
   venue: "hyperliquid",
   order_id: order.order_id,
+  amount: "2000000",
   to_margin: true,
   dex: 4_294_967_295,
   nonce: "18446744073709551615",
   deadline: now + 3_600,
   to_sign: [
     {
-      kind: "close_offer",
+      kind: "escrow_withdrawal",
       signer: owner,
       typed_data: {
-        types: structuredClone({ EIP712Domain, ...schemas.CloseOffer }),
-        primaryType: "CloseOffer",
+        types: structuredClone({ EIP712Domain, ...schemas.Withdrawal }),
+        primaryType: "Withdrawal",
         domain: { name: "LaMarge", version: "1", chainId: 999, verifyingContract: ESCROW },
         message: {
           owner,
           offerId: order.order_id,
+          amount: "2000000",
           toMargin: true,
           dex: 4_294_967_295,
           nonce: "18446744073709551615",
@@ -102,75 +89,47 @@ const prepared = (): PreparedClose => ({
   ],
 });
 
-test("the close asked passes", () => {
-  expect(checkCloseOffer(prepared(), order, chain, now)).toBe(true);
-});
-
-const tamperings: [string, (close: PreparedClose) => void][] = [
-  ["an extra message field", (close) => (required(close.to_sign[0]).typed_data.message.extra = "unexpected")],
-  ["another kind", (close) => (required(close.to_sign[0]).kind = "close_orders")],
-  ["another signer", (close) => (required(close.to_sign[0]).signer = chain.token)],
-  ["a second item", (close) => close.to_sign.push(required(close.to_sign[0]))],
-  ["another primary type", (close) => (required(close.to_sign[0]).typed_data.primaryType = "FundOffer")],
-  ["a field more", (close) => required(required(close.to_sign[0]).typed_data.types.CloseOffer).push({ name: "to", type: "address" })],
-  ["another chain", (close) => (required(close.to_sign[0]).typed_data.domain.chainId = 137)],
-  ["another contract", (close) => (required(close.to_sign[0]).typed_data.domain.verifyingContract = chain.token)],
-  ["another owner", (close) => (required(close.to_sign[0]).typed_data.message.owner = chain.token)],
-  ["another order", (close) => (required(close.to_sign[0]).typed_data.message.offerId = `0x${"1".repeat(64)}`)],
-  ["to an address", (close) => (required(close.to_sign[0]).typed_data.message.toMargin = false)],
-  ["a dex unlike the body's", (close) => (required(close.to_sign[0]).typed_data.message.dex = 0)],
-  ["a dex no venue takes, in both", (close) => {
-    close.dex = 123;
-    required(close.to_sign[0]).typed_data.message.dex = 123;
-  }],
-  ["a nonce unlike the body's", (close) => (close.nonce = "1")],
-  ["a deadline past the hour", (close) => {
-    close.deadline = now + 7_200;
-    required(close.to_sign[0]).typed_data.message.deadline = String(now + 7_200);
-  }],
-  ["an expired deadline", (close) => {
-    close.deadline = now - 1;
-    required(close.to_sign[0]).typed_data.message.deadline = String(now - 1);
-  }],
-];
-
-for (const [name, tamper] of tamperings) {
-  test(`${name} is refused`, () => {
-    const close = prepared();
-    tamper(close);
-    expect(checkCloseOffer(close, order, chain, now)).toBe(false);
-  });
-}
-
-type PreparedWithdrawal = Parameters<typeof checkEscrowWithdrawal>[0];
-
-const withdrawal = (): PreparedWithdrawal => {
-  const close = prepared();
-  const item = required(close.to_sign[0]);
-  item.kind = "escrow_withdrawal";
-  item.typed_data.types = structuredClone({ EIP712Domain, ...schemas.Withdrawal });
-  item.typed_data.primaryType = "Withdrawal";
-  item.typed_data.message.amount = "2000000";
-  return { ...close, amount: "2000000" };
-};
-
 test("the withdrawal asked passes", () => {
   expect(checkEscrowWithdrawal(withdrawal(), order, chain, 2_000_000n, now)).toBe(true);
 });
 
-const withdrawalTamperings: [string, (prepared: PreparedWithdrawal) => void][] = [
+const tamperings: [string, (prepared: PreparedWithdrawal) => void][] = [
+  ["an extra message field", (prepared) => (required(prepared.to_sign[0]).typed_data.message.extra = "unexpected")],
+  ["another kind", (prepared) => (required(prepared.to_sign[0]).kind = "close_orders")],
+  ["another signer", (prepared) => (required(prepared.to_sign[0]).signer = chain.token)],
+  ["a second item", (prepared) => prepared.to_sign.push(required(prepared.to_sign[0]))],
+  ["another primary type", (prepared) => (required(prepared.to_sign[0]).typed_data.primaryType = "FundOffer")],
+  ["a field more", (prepared) => required(required(prepared.to_sign[0]).typed_data.types.Withdrawal).push({ name: "to", type: "address" })],
+  ["another chain", (prepared) => (required(prepared.to_sign[0]).typed_data.domain.chainId = 137)],
+  ["another contract", (prepared) => (required(prepared.to_sign[0]).typed_data.domain.verifyingContract = chain.token)],
+  ["another owner", (prepared) => (required(prepared.to_sign[0]).typed_data.message.owner = chain.token)],
+  ["another order", (prepared) => (required(prepared.to_sign[0]).typed_data.message.offerId = `0x${"1".repeat(64)}`)],
+  ["to an address", (prepared) => (required(prepared.to_sign[0]).typed_data.message.toMargin = false)],
+  ["a dex unlike the body's", (prepared) => (required(prepared.to_sign[0]).typed_data.message.dex = 0)],
+  ["a dex no venue takes, in both", (prepared) => {
+    prepared.dex = 123;
+    required(prepared.to_sign[0]).typed_data.message.dex = 123;
+  }],
+  ["a nonce unlike the body's", (prepared) => (prepared.nonce = "1")],
+  ["a deadline past the hour", (prepared) => {
+    prepared.deadline = now + 7_200;
+    required(prepared.to_sign[0]).typed_data.message.deadline = String(now + 7_200);
+  }],
+  ["an expired deadline", (prepared) => {
+    prepared.deadline = now - 1;
+    required(prepared.to_sign[0]).typed_data.message.deadline = String(now - 1);
+  }],
   ["another amount signed", (prepared) => (required(prepared.to_sign[0]).typed_data.message.amount = "3000000")],
   ["another amount in the body", (prepared) => (prepared.amount = "3000000")],
-  ["a close instead", (prepared) => (required(prepared.to_sign[0]).kind = "close_offer")],
   ["a close's type", (prepared) => {
     const item = required(prepared.to_sign[0]);
-    item.typed_data.types = structuredClone({ EIP712Domain, ...schemas.CloseOffer });
+    item.typed_data.types = { EIP712Domain, CloseOffer: required(item.typed_data.types.Withdrawal).filter(field => field.name !== "amount") };
     item.typed_data.primaryType = "CloseOffer";
     delete item.typed_data.message.amount;
   }],
 ];
 
-for (const [name, tamper] of withdrawalTamperings) {
+for (const [name, tamper] of tamperings) {
   test(`a withdrawal with ${name} is refused`, () => {
     const prepared = withdrawal();
     tamper(prepared);
@@ -186,21 +145,21 @@ test("a withdrawal of nothing is refused", () => {
 });
 
 test("wallet release requires an explicit matching choice in the request and signature", () => {
-  const close = prepared();
-  close.to_margin = false;
-  close.dex = 0;
-  required(close.to_sign[0]).typed_data.message.toMargin = false;
-  required(close.to_sign[0]).typed_data.message.dex = 0;
-  expect(checkCloseOffer(close, order, chain, now)).toBe(false);
-  expect(checkCloseOffer(close, order, chain, now, false)).toBe(true);
-  required(close.to_sign[0]).typed_data.message.toMargin = true;
-  expect(checkCloseOffer(close, order, chain, now, false)).toBe(false);
+  const prepared = withdrawal();
+  prepared.to_margin = false;
+  prepared.dex = 0;
+  required(prepared.to_sign[0]).typed_data.message.toMargin = false;
+  required(prepared.to_sign[0]).typed_data.message.dex = 0;
+  expect(checkEscrowWithdrawal(prepared, order, chain, 2_000_000n, now)).toBe(false);
+  expect(checkEscrowWithdrawal(prepared, order, chain, 2_000_000n, now, false)).toBe(true);
+  required(prepared.to_sign[0]).typed_data.message.toMargin = true;
+  expect(checkEscrowWithdrawal(prepared, order, chain, 2_000_000n, now, false)).toBe(false);
 });
 
 test("a substituted registry cannot authorize another escrow", () => {
-  const close = prepared();
-  required(close.to_sign[0]).typed_data.domain.verifyingContract = chain.token;
-  expect(checkCloseOffer(close, order, { ...chain, escrow: chain.token }, now)).toBe(false);
+  const prepared = withdrawal();
+  required(prepared.to_sign[0]).typed_data.domain.verifyingContract = chain.token;
+  expect(checkEscrowWithdrawal(prepared, order, { ...chain, escrow: chain.token }, 2_000_000n, now)).toBe(false);
 });
 
 const maker = `0x${"11".repeat(20)}`, taker = `0x${"22".repeat(20)}`;
@@ -233,7 +192,7 @@ test("only a maker payment abandoned inside its venue can be reviewed for an ear
 test("refund consent binds the payment, recipient, chain, contract, fields and expiry", () => {
   const changed = "Refund terms changed", domain = "Unexpected signing domain";
   const mutations: [(item: SignItem) => void, string][] = [
-    [item => { item.kind = "close_offer"; }, changed],
+    [item => { item.kind = "escrow_withdrawal"; }, changed],
     [item => { item.fill_id = "other-fill"; }, changed],
     [item => { item.signer = taker; }, changed],
     [item => { item.typed_data.message.payer = maker; }, changed],

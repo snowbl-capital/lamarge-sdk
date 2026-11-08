@@ -10,7 +10,7 @@ export type Withdrawal = components["schemas"]["Withdrawal"];
 
 export async function signWithdrawal(signer: Signer, typed: TransferTyped, venue: string, destination: string, amount: bigint, at: number, beforeSigning?: BeforeSigning, send = false, dex?: Dex): Promise<Hex> {
   checkTransfer(typed, venue, signer.address, destination, amount, send, at, dex);
-  await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed, ...send && !dex && same(destination, signer.address) && venue === "hyperliquid" ? { move: true as const } : {} });
+  await beforeSigning?.({ kind: "withdrawal", venue, destination, amount, typed });
   return signTyped(signer, typed);
 }
 
@@ -55,12 +55,8 @@ export interface WithdrawalRequest {
   id: string;
   venue: string;
   amount: bigint;
-  /**
-   * `signer`, the linked address; `wallet`, its venue wallet; `account`, a send to `recipient`.
-   * A standard Hyperliquid account: `xyz` moves from its perps to its own trade.xyz balance,
-   * `perps` back from there.
-   */
-  to: "wallet" | "signer" | "account" | "xyz" | "perps";
+  /** `signer`, the linked address; `wallet`, its venue wallet; `account`, a send to `recipient`. */
+  to: "wallet" | "signer" | "account";
   /** With `to: "account"`: another account on the same venue. On Polymarket, its Perps owner (signer) address. */
   recipient?: string;
   /** `xyz`: a standard Hyperliquid account's trade.xyz balance pays a withdrawal or send instead of its perps. */
@@ -69,8 +65,7 @@ export interface WithdrawalRequest {
 
 /**
  * Withdraws exactly `amount` from the signer's Hyperliquid or Polymarket account, or with
- * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster; `to: "xyz"` or
- * `"perps"` moves it between a standard Hyperliquid account's perps and trade.xyz. Its signature and
+ * `to: "account"` sends it to `recipient` on Hyperliquid, Polymarket or Aster. Its signature and
  * outcome stay in `store` under `id`: running the same request again returns the outcome or
  * submits the same signature, and a refused one asks for a new id. On Aster, only sends.
  */
@@ -78,14 +73,11 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
   options: { store?: SignatureStore | undefined; signal?: AbortSignal | undefined; beforeSigning?: BeforeSigning | undefined; now?: (() => number) | undefined } = {}): Promise<Withdrawal> {
   const { id, venue, amount, to, dex } = request;
   const { store = memoryStore(), signal } = options;
-  const move = to === "xyz" || to === "perps";
-  const send = to === "account" || move;
-  insist(venue === "hyperliquid" || venue === "polymarket" && !move || to === "account" && venue === "aster", `Withdrawals from ${venue} are not supported here`);
-  insist((to === "account") === (request.recipient !== undefined), "A recipient goes with to: account, and only with it");
-  // A send to the signer itself would sign a move between its balances it did not ask for.
-  insist(to !== "account" || !same(request.recipient, signer.address), "A send goes to another account");
-  insist(!dex || venue === "hyperliquid" && !move, "Only a Hyperliquid withdrawal or send pays from trade.xyz");
-  const from: Dex = to === "perps" ? "xyz" : dex;
+  const send = to === "account";
+  insist(venue === "hyperliquid" || venue === "polymarket" || send && venue === "aster", `Withdrawals from ${venue} are not supported here`);
+  insist(send === (request.recipient !== undefined), "A recipient goes with to: account, and only with it");
+  insist(!send || !same(request.recipient, signer.address), "A send goes to another account");
+  insist(!dex || venue === "hyperliquid", "Only a Hyperliquid withdrawal or send pays from trade.xyz");
   const key = `withdrawal:${id}`;
   return exclusive(store, key, async () => {
     const context = { venue, amount: amount.toString(), to, signer: signer.address.toLowerCase(), ...(to === "account" ? { recipient: required(request.recipient).toLowerCase() } : {}), ...(dex ? { dex } : {}) };
@@ -103,7 +95,7 @@ export async function withdraw(client: Client, signer: Signer, request: Withdraw
     const body = { venue, amount: amount.toString(), to, ...(to === "account" ? { recipient: destination } : {}), ...(dex ? { dex } : {}) };
     try {
       const { result, saved } = await submitWithdrawal({
-        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now, send, dex: from,
+        key, context, venue, signer, destination, amount, store, signal, beforeSigning: options.beforeSigning, now: options.now, send, dex,
         prepare: async () => transferTypedData((await client.call("postWithdrawalPrepare", { body, signal })).typed_data),
         submit: (typed, signature) => client.call("postWithdrawal", { body: { venue, typed_data: typed, signature }, signal, retry: true }),
       });

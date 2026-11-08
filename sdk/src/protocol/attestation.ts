@@ -1,4 +1,4 @@
-// LaMarge's attestations (ACC-19), checked by a signer that holds a taker's key apart from the app that asks it:
+// LaMarge's attestations, checked by a signer that holds a taker's key apart from the app that asks it:
 // the request it is about to sign is the one LaMarge asks, and a take's terms are the ones LaMarge committed to.
 import { getAddress, hashMessage, hashTypedData, isAddress, recoverTypedDataAddress, type Hex } from "viem";
 import type { components } from "../generated/api.ts";

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createClient } from "./client.ts";
+import { countingSigner, mockApi } from "./mock.test.ts";
 import { asterAmount, checkSend, CHAINS, EIP712Domain, opHash, schemas, signedAt, type OpTyped, type Typed } from "./protocol/protocol.ts";
 import { record, required } from "./protocol/validation.ts";
 import { typedDataRequest } from "./signer.ts";
@@ -109,50 +109,39 @@ test("a Polymarket operation keeps its op through a store and never shows it to 
 
 test("a send signs once to its recipient, and a lost answer resubmits the same signature", async () => {
   let lose = 3;
-  const bodies: Record<string, unknown>[] = [];
-  const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    const route = `${request.method} ${new URL(request.url).pathname}`;
-    const body = record(await request.json().catch(() => ({})));
-    if (route === "GET /v1/balances") return Response.json([{ venue: "polymarket", address: owner, venue_wallet: null }]);
-    if (route === "POST /v1/withdrawals/prepare") { bodies.push(body); return Response.json({ typed_data: internalTransfer() }); }
-    bodies.push(body);
-    if (lose-- > 0) throw new TypeError("connection reset");
-    return Response.json({ id: "s1", venue: "polymarket", kind: "send", amount: "10500000", destination: recipient, state: "relayed", venue_ref: "7", error: null, created_at: "2026-10-24T00:00:00Z", relayed_at: null });
-  }, { preconnect: globalThis.fetch.preconnect });
-  const client = createClient({ apiUrl: "http://localhost:8080", fetch });
-  const signer = { address: owner, signed: 0, signMessage: async () => "0x00" as const, signTypedData: async () => { signer.signed++; return "0x00" as const; } };
+  const { client, bodies } = mockApi({
+    "GET /v1/balances": () => [{ venue: "polymarket", address: owner, venue_wallet: null }],
+    "POST /v1/withdrawals/prepare": () => ({ typed_data: internalTransfer() }),
+    "POST /v1/withdrawals": () => {
+      if (lose-- > 0) throw new TypeError("connection reset");
+      return { id: "s1", venue: "polymarket", kind: "send", amount: "10500000", destination: recipient, state: "relayed", venue_ref: "7", error: null, created_at: "2026-10-24T00:00:00Z", relayed_at: null };
+    },
+  });
+  const signer = countingSigner(owner);
   const store = memoryStore();
   const request = { id: "s-1", venue: "polymarket", amount: 10_500_000n, to: "account", recipient } as const;
   await expect(withdraw(client, signer, request, { store })).rejects.toThrow("connection reset");
   expect(await withdraw(client, signer, request, { store })).toMatchObject({ kind: "send", state: "relayed" });
   expect(signer.signed).toBe(1);
-  expect(bodies[0]).toEqual({ venue: "polymarket", amount: "10500000", to: "account", recipient });
+  expect(bodies["POST /v1/withdrawals/prepare"]).toEqual([{ venue: "polymarket", amount: "10500000", to: "account", recipient }]);
   // Both submissions carry the same operation, `op` included.
-  const [first, second] = bodies.slice(1).map(body => JSON.stringify(body));
+  const [first, second] = required(bodies["POST /v1/withdrawals"]).map(body => JSON.stringify(body));
   expect(first).toBe(second);
-  expect(record(record(bodies[1]).typed_data).op).toEqual(internalTransfer().op);
+  expect(record(bodies["POST /v1/withdrawals"]?.[0]?.typed_data).op).toEqual(internalTransfer().op);
   await expect(withdraw(client, signer, { id: "s-2", venue: "polymarket", amount: 1n, to: "account" })).rejects.toThrow("recipient");
   await expect(withdraw(client, signer, { id: "s-3", venue: "lighter", amount: 1n, to: "account", recipient })).rejects.toThrow("not supported");
-  // To the signer itself, it would sign a move it did not ask for: nothing is prepared or signed.
+  // To the signer itself: nothing is prepared or signed.
   await expect(withdraw(client, signer, { id: "s-4", venue: "hyperliquid", amount: 1n, to: "account", recipient: signer.address })).rejects.toThrow("another account");
   expect(signer.signed).toBe(1);
 });
 
-test("trade.xyz pays a Hyperliquid send only when asked, and a move goes to the signer between its perps and trade.xyz", () => {
+test("trade.xyz pays a Hyperliquid send only when asked, and nothing goes to the signer itself", () => {
   const at = now();
   expect(() => checkSend(sendAsset({ sourceDex: "xyz" }), "hyperliquid", owner, recipient, 5_250_000n, at, "xyz")).not.toThrow();
   expect(() => checkSend(sendAsset({ sourceDex: "" }), "hyperliquid", owner, recipient, 5_250_000n, at, "xyz")).toThrow("sourceDex");
-  const move = (sourceDex: string, destinationDex: string) => sendAsset({ destination: owner, sourceDex, destinationDex });
-  // A move goes from the perps to trade.xyz, or with `dex` back.
-  expect(() => checkSend(move("", "xyz"), "hyperliquid", owner, owner, 5_250_000n, at)).not.toThrow();
-  expect(() => checkSend(move("xyz", ""), "hyperliquid", owner, owner, 5_250_000n, at, "xyz")).not.toThrow();
-  for (const [typed, dex, reason] of [
-    [move("", ""), undefined, "destinationDex"],
-    [move("spot", "xyz"), undefined, "sourceDex"],
-    [move("xyz", ""), undefined, "sourceDex"],
-    [move("xyz", "xyz"), "xyz", "destinationDex"],
-  ] as const) expect(() => checkSend(typed, "hyperliquid", owner, owner, 5_250_000n, at, dex)).toThrow(reason);
+  // Its own perps and trade.xyz, either way.
+  for (const [sourceDex, destinationDex, dex] of [["", "xyz", undefined], ["xyz", "", "xyz"]] as const)
+    expect(() => checkSend(sendAsset({ destination: owner, sourceDex, destinationDex }), "hyperliquid", owner, owner, 5_250_000n, at, dex)).toThrow("recipient");
   // Another account never receives on trade.xyz, and only Hyperliquid has it.
   expect(() => checkSend(sendAsset({ destinationDex: "xyz" }), "hyperliquid", owner, recipient, 5_250_000n, at)).toThrow("destinationDex");
   expect(() => checkSend(asterSend(), "aster", owner, recipient, 5_000_000_000_000_000_000n, at, "xyz")).toThrow("venue");

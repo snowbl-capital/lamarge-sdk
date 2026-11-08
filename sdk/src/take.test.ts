@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
-import { createClient } from "./client.ts";
+import { mockApi } from "./mock.test.ts";
 import { checkLighterTakeIntent, type TakeFill } from "./protocol/intents.ts";
-import { fillMemo, LIGHTER_API, transferMessage } from "./protocol/lighter.ts";
+import { fillMemo, transferMessage } from "./protocol/lighter.ts";
 import { memoryStore } from "./store.ts";
 import { take, takeKey } from "./take.ts";
 
@@ -22,26 +22,17 @@ const reserved = { id: fill, take_id: "take-1", order_id: "0x01", sequence: 1, r
 
 /** A take paid from the Lighter account #42, the API and Lighter itself answering; `owners` is whose account each index is, as Lighter says. */
 function lighter(owners: Record<number, string> = { 42: owner.address, 731033: maker }, asked: object = item) {
-  const calls: string[] = [];
-  const fetch = Object.assign(async (url: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(url, init);
-    const target = new URL(request.url);
-    if (request.url.startsWith(LIGHTER_API)) {
-      const index = Number(target.searchParams.get("value"));
-      return Response.json({ accounts: [{ index, l1_address: owners[index] }] });
-    }
-    const route = `${request.method} ${target.pathname}`;
-    calls.push(route);
-    if (route === "GET /v1/balances") return Response.json([{ venue: "lighter", address: owner.address, venue_wallet: "42" }, { venue: "hyperliquid", address: owner.address, venue_wallet: null }]);
-    if (route === "POST /v1/takes") return Response.json({ take: { id: "take-1", fills: [reserved] }, to_sign: [asked] });
-    if (route === "POST /v1/takes/take-1/signatures") return Response.json({ fills: [{ ...reserved, state: "PAID" }] });
-    if (route === "DELETE /v1/takes/take-1") return new Response(null, { status: 204 });
-    return Response.json({ error: { code: "NOT_FOUND", message: route, request_id: "r", retryable: false } }, { status: 404 });
-  }, { preconnect: globalThis.fetch.preconnect });
+  const { client, calls } = mockApi({
+    "GET /api/v1/account": (_, query) => ({ accounts: [{ index: Number(query.get("value")), l1_address: owners[Number(query.get("value"))] }] }),
+    "GET /v1/balances": () => [{ venue: "lighter", address: owner.address, venue_wallet: "42" }, { venue: "hyperliquid", address: owner.address, venue_wallet: null }],
+    "POST /v1/takes": () => ({ take: { id: "take-1", fills: [reserved] }, to_sign: [asked] }),
+    "POST /v1/takes/take-1/signatures": () => ({ fills: [{ ...reserved, state: "PAID" }] }),
+    "DELETE /v1/takes/take-1": () => null,
+  });
   const messages: string[] = [];
   const contexts: unknown[] = [];
   const signer = { address: owner.address, signTypedData: owner.signTypedData, signMessage: ({ message }: { message: string }, context?: unknown) => { messages.push(message); contexts.push(context); return owner.signMessage({ message }); } };
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls, messages, contexts, signer };
+  return { client, calls, messages, contexts, signer };
 }
 
 test("a take paid from Lighter signs the transfer message its terms build, once Lighter confirms both accounts", async () => {

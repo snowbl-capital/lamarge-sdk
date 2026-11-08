@@ -38,6 +38,8 @@ export function gmxTransferOut(amount: bigint): `0x${string}` {
 export const VENUE_SETTLED = new Set(["lighter", "aster"]);
 /** Venues whose account's funds leave only by their owner's own transaction (GMX's `transferOut`): LaMarge relays no withdrawal there. */
 export const OWNER_WITHDRAWS = new Set(["gmx"]);
+/** Fill states that never change again. */
+export const FINAL_FILL_STATES = new Set(["SETTLED", "EXPIRED", "REFUNDED", "TAKER_LOSS", "MAKER_LOSS"]);
 /** A route whose first take pays inside a venue and goes through an escrow venue: LaMarge can have it signed at once. */
 export const groupable = (from: string, via: string) => VENUE_SETTLED.has(from) && !VENUE_SETTLED.has(via) && CHAINS[via] !== undefined;
 /** The most seconds to a route's second take's `pay_by` when signed at once: the server's 180 s bound and a clock margin. */
@@ -122,8 +124,6 @@ export const schemas: Record<string, Record<string, { name: string; type: string
   QuoteSet: { QuoteSet: fields("owner:address,offerId:bytes32,sequence:uint64,expiresAt:uint64,quotes:Quote[]"), Quote: quote },
   PayTake: { PayTake: fields("payer:address,deposit:uint256,payments:LockPayment[]"), LockPayment: lockPayment },
   CloseOrders: { CloseOrders: fields("account:address,orders:bytes32[],nonce:uint256,deadline:uint256") },
-  /** @deprecated Signed by `close_offer` items only; use `Withdrawal`. */
-  CloseOffer: { CloseOffer: fields("owner:address,offerId:bytes32,toMargin:bool,dex:uint32,nonce:uint256,deadline:uint256") },
   Withdrawal: { Withdrawal: fields("owner:address,offerId:bytes32,amount:uint256,toMargin:bool,dex:uint32,nonce:uint256,deadline:uint256") },
   Permit: { Permit: fields("owner:address,spender:address,value:uint256,nonce:uint256,deadline:uint256") },
   Withdraw: { Withdraw: fields("account:address,token:address,amount:uint256,fee:uint256,to:address,salt:uint64,ts:uint64") },
@@ -217,8 +217,7 @@ export function venueUnits(value: bigint, venue: string): bigint {
 export const sweepMinimum = (venue: string): bigint => 10n ** BigInt(decimalsOf(venue));
 /**
  * `dex: "xyz"`: a standard Hyperliquid account's transfer leaves its trade.xyz balance instead of
- * its perps; a move, to the signer itself, goes to the other one. A unified account's one balance
- * includes trade.xyz.
+ * its perps. A unified account's one balance includes trade.xyz.
  */
 export type Dex = "xyz" | undefined;
 /** The `sourceDex` a Hyperliquid transfer must sign: trade.xyz when asked, else the account mode's perps or spot. */
@@ -292,15 +291,13 @@ function msgpack(name: string, args: string[]): Uint8Array {
 export const opHash = (name: string, args: string[]): string => `0x${toHex(keccak_256(msgpack(name, args)))}`;
 /**
  * Checks a send to `recipient`, another account on the same venue, against the requested amount
- * at `now` seconds; on Hyperliquid, `recipient` the signer itself for a move between its perps and
- * trade.xyz, from trade.xyz with `dex`. A Polymarket wallet shows only the operation's hash: it is rebuilt here from
- * `op`, whose terms are checked.
+ * at `now` seconds; on Hyperliquid, from trade.xyz with `dex`. A Polymarket wallet shows only the
+ * operation's hash: it is rebuilt here from `op`, whose terms are checked.
  */
 export function checkSend(typed: TransferTyped, venue: string, signer: string, recipient: string, amount: bigint, now = Date.now() / 1000, dex?: Dex): asserts typed is Verified<TransferTyped> {
   checkTypes(typed);
   insist(amount > 0n, differs("amount"));
-  const move = same(recipient, signer);
-  insist(!move || venue === "hyperliquid", differs("recipient"));
+  insist(!same(recipient, signer), differs("recipient"));
   insist(venue === "hyperliquid" || !dex, differs("venue"));
   if (isOpTyped(typed) || venue === "polymarket") {
     insist(venue === "polymarket" && isOpTyped(typed), differs("primaryType"));
@@ -321,9 +318,8 @@ export function checkSend(typed: TransferTyped, venue: string, signer: string, r
   if (venue === "hyperliquid") {
     checkSendAsset(typed, amount, now, "Stale transfer nonce");
     insist(typeof m.destination === "string" && m.destination === recipient.toLowerCase() && !isHyperliquidSystem(m.destination), differs("destination"));
-    // A move leaves a standard account's perps (`""`) or trade.xyz for the other one.
-    insist((move ? [dex === "xyz" ? "xyz" : ""] : sourceDexes(dex)).includes(String(m.sourceDex)), differs("sourceDex"));
-    insist((move ? [dex === "xyz" ? "" : "xyz"] : ["", "spot"]).includes(String(m.destinationDex)), differs("destinationDex"));
+    insist(sourceDexes(dex).includes(String(m.sourceDex)), differs("sourceDex"));
+    insist(["", "spot"].includes(String(m.destinationDex)), differs("destinationDex"));
   } else {
     insist(venue === "aster", differs("venue"));
     const transfer = asterTransfer(typed);
@@ -433,8 +429,7 @@ export function checkAsterTransfer(transfer: ReturnType<typeof asterTransfer>, f
 export type QuoteIntent = { venue: string; recipient: string; supply: string; receive: string; min_fill: string };
 type QuoteOrder = { id: string; venue: string; owner_address: string; quote_signer: string };
 export type PreparedQuote = { draft_id: string; sequence: number; valid_until: number; quote_size: string; expires_at: number; quotes: QuoteIntent[]; to_sign: SignItem[] };
-export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & { last_sequence: number }, requested: QuoteIntent | QuoteIntent[], validUntil: number, size: string): asserts prepared is PreparedQuote & { to_sign: Verified<SignItem[]> } {
-  const quotes = Array.isArray(requested) ? requested : [requested];
+export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & { last_sequence: number }, quotes: QuoteIntent[], validUntil: number, size: string): asserts prepared is PreparedQuote & { to_sign: Verified<SignItem[]> } {
   insist(quotes.length > 0, differs("quotes"));
   insist(prepared.valid_until === validUntil, differs("valid_until"));
   insist(prepared.quote_size === size, differs("quote_size"));
@@ -454,8 +449,7 @@ export function checkPreparedQuote(prepared: PreparedQuote, order: QuoteOrder & 
 }
 /** The entire replacement set is reviewed, in order: no extra route, recipient or amount may be
  * added, and each position is the quote index a fill names. */
-export function checkSignedQuote(item: SignItem, order: QuoteOrder, asked: QuoteIntent | QuoteIntent[], sequence: number, expires: number) {
-  const requested = Array.isArray(asked) ? asked : [asked];
+export function checkSignedQuote(item: SignItem, order: QuoteOrder, requested: QuoteIntent[], sequence: number, expires: number) {
   checkEscrowTyped(item.typed_data, order.venue);
   const m = item.typed_data.message;
   const quotes = array(m.quotes).map(record);

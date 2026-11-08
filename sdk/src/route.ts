@@ -1,6 +1,6 @@
 import { wait, type Client } from "./client.ts";
 import { fresh, prefunded } from "./funds.ts";
-import { CHAINS, groupable, insist, same, venueStep, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { CHAINS, FINAL_FILL_STATES, groupable, insist, same, venueStep, VENUE_SETTLED } from "./protocol/protocol.ts";
 import { required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import type { Signer } from "./signer.ts";
@@ -48,7 +48,7 @@ export type RouteOptions = Omit<TransferOptions, "onStage"> & {
  * account; null while a part can still deliver.
  */
 function delivered(fills: Fill[]) {
-  if (!fills.every(fill => fill.maker_leg === "CLAIMED" || ["SETTLED", "EXPIRED", "REFUNDED", "TAKER_LOSS", "MAKER_LOSS"].includes(fill.state))) return null;
+  if (!fills.every(fill => fill.maker_leg === "CLAIMED" || FINAL_FILL_STATES.has(fill.state))) return null;
   const claimed = fills.filter(fill => fill.maker_leg === "CLAIMED");
   return { received: claimed.reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n), released: Math.max(0, ...claimed.map(fill => Date.parse(fill.maker_claimed_at ?? "") || 0)),
     kept: claimed.length > 0 && claimed.every(fill => fill.maker_destination === "escrow") };

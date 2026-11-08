@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createClient } from "./client.ts";
+import { countingSigner, mockApi as fake } from "./mock.test.ts";
 import { CHAINS, EIP712Domain, ESCROW, schemas } from "./protocol/protocol.ts";
 import { address, record, required } from "./protocol/validation.ts";
 import { memoryStore } from "./store.ts";
@@ -8,23 +8,7 @@ import { checkEscrowLocks, refundPayment, withdraw, type ChainReaders } from "./
 const owner = `0x${"11".repeat(20)}` as const, other = `0x${"22".repeat(20)}`, swap = `0x${"aa".repeat(32)}`, hashlock = `0x${"bb".repeat(32)}`;
 const now = () => Math.floor(Date.now() / 1000);
 
-function fake(routes: Record<string, (body: unknown) => unknown>) {
-  const calls: string[] = [];
-  const fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    const route = `${request.method} ${new URL(request.url).pathname}`;
-    calls.push(route);
-    const handler = required(routes[route], route);
-    const body: unknown = await request.json().catch(() => undefined);
-    const answer = handler(body);
-    return answer === null ? new Response(null, { status: 204 }) : Response.json(answer);
-  }, { preconnect: globalThis.fetch.preconnect });
-  return { client: createClient({ apiUrl: "http://localhost:8080", fetch }), calls };
-}
-const counting = (address: `0x${string}` = owner) => {
-  const signer = { address, signed: 0, signMessage: async () => "0x00" as const, signTypedData: async () => { signer.signed++; return "0x00" as const; } };
-  return signer;
-};
+const counting = (address: `0x${string}` = owner) => countingSigner(address);
 
 const polymarketWithdrawal = (to: string) => ({
   types: { EIP712Domain, ...schemas.Withdraw }, primaryType: "Withdraw",
@@ -166,7 +150,7 @@ const hyperliquidSend = (message: Record<string, unknown>) => ({
   message: { hyperliquidChain: "Mainnet", token: "USDC:0x6d1e7cde53ba9467b783cb7c530ce054", amount: "2", fromSubAccount: "", nonce: Date.now(), ...message },
 });
 
-test("a standard Hyperliquid account withdraws from trade.xyz and moves between its perps and trade.xyz as asked", async () => {
+test("a standard Hyperliquid account withdraws from trade.xyz as asked", async () => {
   const asked: unknown[] = [];
   const toHyperEvm = "0x2000000000000000000000000000000000000000";
   let answer = hyperliquidSend({ destination: toHyperEvm, sourceDex: "xyz", destinationDex: "spot" });
@@ -177,14 +161,10 @@ test("a standard Hyperliquid account withdraws from trade.xyz and moves between 
   });
   const signer = counting();
   await withdraw(client, signer, { id: "xyz-out", venue: "hyperliquid", amount: 2_000_000n, to: "signer", dex: "xyz" });
-  answer = hyperliquidSend({ destination: owner, sourceDex: "", destinationDex: "xyz" });
-  await withdraw(client, signer, { id: "xyz-in", venue: "hyperliquid", amount: 2_000_000n, to: "xyz" });
-  expect(asked).toEqual([{ venue: "hyperliquid", amount: "2000000", to: "signer", dex: "xyz" }, { venue: "hyperliquid", amount: "2000000", to: "xyz" }]);
-  // The perps answered for trade.xyz, or a move the other way, sign nothing.
+  expect(asked).toEqual([{ venue: "hyperliquid", amount: "2000000", to: "signer", dex: "xyz" }]);
+  // The perps answered for trade.xyz sign nothing.
   answer = hyperliquidSend({ destination: toHyperEvm, sourceDex: "", destinationDex: "spot" });
   await expect(withdraw(client, signer, { id: "xyz-swapped", venue: "hyperliquid", amount: 2_000_000n, to: "signer", dex: "xyz" })).rejects.toThrow("sourceDex");
-  answer = hyperliquidSend({ destination: owner, sourceDex: "xyz", destinationDex: "" });
-  await expect(withdraw(client, signer, { id: "xyz-back", venue: "hyperliquid", amount: 2_000_000n, to: "xyz" })).rejects.toThrow("Dex");
-  expect(signer.signed).toBe(2);
+  expect(signer.signed).toBe(1);
   await expect(withdraw(client, signer, { id: "xyz-elsewhere", venue: "polymarket", amount: 2_000_000n, to: "signer", dex: "xyz" })).rejects.toThrow("trade.xyz");
 });

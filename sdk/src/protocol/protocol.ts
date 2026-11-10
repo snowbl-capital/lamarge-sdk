@@ -122,7 +122,7 @@ const DIFFERS = "The signing request differs from your instructions";
 export function insist(ok: unknown, message = DIFFERS): asserts ok { if (!ok) throw new Error(message); }
 export const differs = (field: string) => `${DIFFERS}: ${field}`;
 export const uint = (value: unknown): bigint => { insist(typeof value === "string" && /^\d+$/.test(value) || typeof value === "number" && Number.isSafeInteger(value) && value >= 0, "Invalid signing integer"); return BigInt(value); };
-const fields = (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
+const fields = /* @__NO_SIDE_EFFECTS__ */ (description: string) => description.split(",").map(pair => { const [name, type] = pair.split(":"); return { name: required(name), type: required(type) }; });
 export const EIP712Domain = fields("name:string,version:string,chainId:uint256,verifyingContract:address");
 /** Polymarket's operations sign under a domain without contract. */
 const OpDomain = fields("name:string,version:string,chainId:uint256");

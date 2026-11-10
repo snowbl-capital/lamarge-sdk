@@ -26,7 +26,7 @@ function api(options: { continuable?: string; unknownReads?: number; hub?: strin
     const count = records.filter(row => row.previous_transfer_id).length;
     return { id: key === "first" || count === 0 ? `transfer-${key}` : `transfer-${key}-${count + 1}`, client_transfer_id: body.client_transfer_id, client_take_id: `take-client-${key}`, ...leg, amount_in: body.amount_in, min_out: body.min_out,
       ...(body.max_fee_bps === undefined ? {} : { max_fee_bps: body.max_fee_bps }),
-      max_parts: 8, payer: key === "first" ? owner : hub, recipient: body.recipient, from_chain_id: chain.id, to_chain_id: required(CHAINS[leg.to]).id, withdrawal: null, take_id: null as string | null,
+      funding: body.funding ?? "venue", max_parts: 8, payer: key === "first" ? owner : hub, recipient: body.recipient, from_chain_id: chain.id, to_chain_id: required(CHAINS[leg.to]).id, withdrawal: null, take_id: null as string | null,
       withdrawal_preparation: null, take_final: null, then: body.then ?? null, previous_transfer_id: body.previous_transfer_id ?? null, destination: body.destination ?? "venue",
       continuable: key === "first" && delivery.claimed ? options.continuable ?? "1000000" : null, cancelled_at: null, created_at: at(0),
       funding_plan: { venue: leg.from, owner: key === "first" ? owner : hub, amount: body.amount_in, deposit: "0", withdrawal_amount: "0", withdrawal_to: null, observed_at: at(0), payment_setup: "done",
@@ -34,7 +34,7 @@ function api(options: { continuable?: string; unknownReads?: number; hub?: strin
   };
   const fill = (key: "first" | "second") => {
     const leg = legs[key], claimed = key === "first" && delivery.claimed;
-    return { id: `fill-${key}`, take_id: `take-${key}`, order_id: id, sequence: 1, role: "taker", state: claimed ? options.refunded ? "REFUNDED" : "SETTLED" : "PAID", from_venue: leg.from, to_venue: leg.to,
+    return { funding: intents[key]?.funding ?? "venue", id: `fill-${key}`, take_id: `take-${key}`, order_id: id, sequence: 1, role: "taker", state: claimed ? options.refunded ? "REFUNDED" : "SETTLED" : "PAID", from_venue: leg.from, to_venue: leg.to,
       amount_in: key === "first" ? "1000000" : String(intents.second?.amount_in ?? "1000000"), amount_out: key === "first" || end ? "1000000" : String(10n ** 18n), payer: key === "first" ? owner : hub,
       maker_recipient: maker, taker_recipient: key === "first" ? hub : end ?? owner,
       taker_fee: "0", swap_id: id, destination: "venue", hashlock: `0x${"bb".repeat(32)}`, pay_by: at(45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: claimed ? options.refunded ? "ABANDONED" : "CLAIMED" : "NONE",
@@ -48,14 +48,18 @@ function api(options: { continuable?: string; unknownReads?: number; hub?: strin
     const payment = { payer, swapId: reserved.swap_id, recipient: maker, amount: reserved.amount_in, hashlock: reserved.hashlock, refundAt: now() + 7200, deadline: now() + 45, orderId: id, sequence: 1,
       amountOut: reserved.amount_out, receiveChainId: receive.id, receiveToken: wallet ? receive.walletToken : receive.token, receiveEscrow: receive.escrow, receiveRecipient: key === "first" ? hub : end ?? owner, dex: 0 };
     const least = wallet ? { token: required(receive.walletToken), amount: String(minimumReceived(leg.to, BigInt(reserved.amount_out))) } : null;
-    return { take: { id: `take-${key}`, fills: [reserved], minimum_received: least }, to_sign: [{ kind: "pay_take", fill_id: reserved.id, signer: payer,
+    return { take: { funding: intents[key]?.funding ?? "venue", id: `take-${key}`, fills: [reserved], minimum_received: least }, to_sign: [{ kind: "pay_take", fill_id: reserved.id, signer: payer,
       typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: pay.id, verifyingContract: ESCROW }, message: { payer, deposit: "0", payments: [payment] } } }] };
   };
   const balance = (venue: string, held: string) => ({ venue, address: venue === "hyperliquid" ? hub : owner, venue_wallet: null, chain_balance: held, chain_error: null, chain_read_at: at(0), escrow_balance: "0",
     deposit_balance: "0", withdrawable: "0", withdrawal_fee: "0", withdrawal_reserve: "0", read_at: at(0) });
   const book = (from: string, to: string) => ({ from, to, max_fill: String(10n ** 24n), levels: [{ order_id: id, supply: to === "aster" ? String(10n ** 18n) : "1000000", receive: "1000000", available: String(10n ** 24n), min_fill: "1", valid_until: at(60) }] });
   const routes: Record<string, Handler> = {
-    "GET /v1/venues": () => [],
+    "GET /v1/venues": () => Object.entries(CHAINS).map(([venue, chain]) => ({ id: venue, enabled: true, chain: { ...chain, permit: { name: chain.permit, version: chain.version }, wallet_funding: chain } })),
+    "GET /v1/wallets/polymarket": () => ({ venue: "polymarket", address: owner, chain_id: 137, escrow: ESCROW,
+      token: required(CHAINS.polymarket).token, decimals: 6, symbol: "pUSD", block: 1, wallet: "1000000", available: "0",
+      spendable_wallet: "1000000", spendable_available: "0", committed_wallet: "0", committed_available: "0", observed_at: at(0),
+      payment_setup: { address: owner, authorized: true, pending: false, hash: null, permit: null } }),
     "GET /v1/orders": () => [],
     "GET /v1/books": (_body, query) => book(String(query.get("from")), String(query.get("to"))),
     "POST /v1/transfers": body => {

@@ -29,8 +29,7 @@ export interface Signer {
   signTypedData(request: TypedDataRequest, context?: SignContext): Promise<Hex>;
   /**
    * Sends a transaction from `address`: calls `sent` with its hash once broadcast, then resolves with it once mined
-   * successfully, rejecting if it is refused or reverts. Only a transfer paying from GMX needs it: GMX Account funds
-   * leave by their owner's own `transferOut`.
+   * successfully, rejecting if it is refused or reverts. GMX venue funding and Polygon native-USDC conversion need it; the owner pays network gas.
    */
   sendTransaction?(request: { chainId: number; to: Hex; data: Hex }, sent?: (hash: Hex) => void | Promise<void>): Promise<Hex>;
 }
@@ -62,6 +61,7 @@ export type Signing =
   | { kind: "take"; input: components["schemas"]["TakeInput"]; prepared: Answer<"postTake">; route?: true }
   | { kind: "withdrawal"; venue: string; destination: string; amount: bigint; typed: TransferTyped; route?: true }
   | { kind: "setup"; venue: string; step: Answer<"postVenueSetupStep"> }
+  | { kind: "conversion"; step: "approve" | "convert"; amount: bigint; minOut: bigint }
   /** A transaction, not a signature: GMX Account funds to the signer's own address on Arbitrum. */
   | { kind: "transfer_out"; venue: "gmx"; amount: bigint }
   /** `signed`: what a resumed route already signed, never asked again. */

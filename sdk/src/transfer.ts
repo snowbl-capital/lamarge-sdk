@@ -1,4 +1,6 @@
+import { checkConversion, conversionInput, convertFunding, type ConversionInput } from "./conversion.ts";
 import { LaMargeError, wait, type Answer, type Client } from "./client.ts";
+import { readWalletFunding, requireWalletFunding, submitWalletPermit } from "./wallet.ts";
 import { permitDone, submitPermit } from "./account.ts";
 import { prefunded, sweepable } from "./funds.ts";
 import { checkFundingPlan } from "./protocol/consents.ts";
@@ -31,6 +33,8 @@ export interface TransferRequest {
   /** `wallet`: by plain transfer to `recipient` on `to`'s escrow chain, in its wallet token, no account on `to` needed; `venue`, the default: into the account linked on `to`. */
   destination?: Destination | undefined;
   funding: Funding;
+  /** Polygon native-USDC input and minimum pUSD credit, separate from the pUSD settlement amount. */
+  conversion?: ConversionInput | undefined;
   /** `xyz`: from a standard Hyperliquid account, the withdrawal leaves its trade.xyz balance instead of its perps. */
   from_dex?: "xyz" | undefined;
   /** The transfer to resume, as `onIntent` last named it. */
@@ -84,12 +88,13 @@ export const consent = (maxFeeBps: number | undefined) => maxFeeBps === undefine
 /** The transfer's take, its wallet destination and recipient included: checked against the transfer, itself checked against what the caller asked. */
 export const takeInput = (intent: TransferIntent): TakeInput => ({ from: intent.from, to: intent.to, amount_in: intent.amount_in, min_out: intent.min_out,
   max_parts: intent.max_parts, client_take_id: intent.client_take_id, transfer_intent_id: intent.id, ...consent(intent.max_fee_bps),
+  ...intent.funding === "wallet" ? { funding: "wallet", payer: intent.payer } : {},
   ...destined(intent.destination), ...destinationOf(intent) === "wallet" ? { recipient: intent.recipient } : {} });
 
 function replacement(intent: TransferIntent, clientId: string) {
   const { from, to, amount_in, min_out, max_parts, payer, recipient, then, previous_transfer_id: previous } = intent;
   // The request's `then` carries the route's terms only: `chain_id` is the server's answer.
-  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...destined(intent.destination), ...consent(intent.max_fee_bps), ...fromDex(intent.from_dex),
+  return { client_transfer_id: clientId, from, to, amount_in, min_out, max_parts, payer, recipient, ...conversionInput(intent.conversion), ...intent.funding === "wallet" ? { funding: "wallet" as const } : {}, ...destined(intent.destination), ...consent(intent.max_fee_bps), ...fromDex(intent.from_dex),
     ...(then ? { then: { to: then.to, recipient: then.recipient, ...destined(then.destination), amount_in: then.amount_in, min_out: then.min_out, ...consent(then.max_fee_bps) } } : {}),
     ...(previous ? { previous_transfer_id: previous } : {}) };
 }
@@ -181,11 +186,14 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   const stage = (value: TransferStage) => { signal?.throwIfAborted(); onStage?.(value); };
   insist(request.funding === "venue" || !VENUE_SETTLED.has(request.from), `Wallet funding does not apply to ${request.from}, whose account pays`);
   stage("checking");
+  if (!request.transfer_id && request.funding === "wallet") await requireWalletFunding(client, request.from, signal);
   let intent = request.transfer_id
     ? asked(await client.call("getTransfer", { path: { id: request.transfer_id }, query: { funding_plan: true }, signal }), { id: request.transfer_id })
     : asked(await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.to, amount_in: request.amount_in,
-      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient, ...destined(request.destination), ...consent(request.max_fee_bps), ...fromDex(request.from_dex) }, signal, retry: true }),
+      min_out: request.min_out, max_parts: maxParts, payer, recipient: request.recipient, ...conversionInput(request.conversion), ...request.funding === "wallet" ? { funding: "wallet" } : {}, ...destined(request.destination), ...consent(request.max_fee_bps), ...fromDex(request.from_dex) }, signal, retry: true }),
     { clientId: request.client_transfer_id });
+  const durableFunding = request.transfer_id ? intent.funding ?? "venue" : request.funding;
+  insist(request.funding === "wallet" || durableFunding === "venue", "Transfer funding changed");
   // A replacement repeats nothing: the same terms, under a client id derived from the transfer it replaces.
   const replace = async (clientId: string) => asked(await client.call("postTransfer", { body: replacement(intent, clientId), signal, retry: true }), { clientId });
   // A replacement decided before a lost cancellation answer is completed, never decided again.
@@ -195,11 +203,15 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     renewedFrom = intent.id;
     intent = await replace(`renew:${renewedFrom}`);
   }
+  let conversionId = intent.conversion?.id;
   const checkIntent = () => {
+    checkConversion(intent, request.conversion);
+    if (conversionId) insist(intent.conversion?.id === conversionId, "Conversion identity changed");
+    conversionId = intent.conversion?.id;
     insist(!intent.cancelled_at, "Transfer cancelled");
     insist(intent.max_parts === maxParts && intent.from === request.from && intent.to === request.to && intent.from_chain_id === CHAINS[request.from]?.id && intent.to_chain_id === CHAINS[request.to]?.id && intent.amount_in === request.amount_in
       && intent.min_out === request.min_out && intent.max_fee_bps === request.max_fee_bps && intent.from_dex === request.from_dex && same(intent.payer, payer) && same(intent.recipient, request.recipient)
-      && destinationOf(intent) === destinationOf(request), "Transfer terms changed; review the original transfer");
+      && (intent.funding ?? "venue") === durableFunding && destinationOf(intent) === destinationOf(request), "Transfer terms changed; review the original transfer");
   };
   checkIntent();
   /** A transfer whose withdrawal preparation went unsigned over 45 seconds is replaced. */
@@ -225,6 +237,19 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   };
   await renewStale();
   await announce();
+  if (intent.conversion && !intent.take_id) {
+    stage("funding");
+    for (const deadline = now() + arrivalWaitMs; !await convertFunding(client, signer, intent, store, now, signal, options.beforeSigning);) {
+      intent = asked(await client.call("getTransfer", { path: { id: intent.id }, signal }), { id: intent.id });
+      checkIntent();
+      await announce();
+      if (now() >= deadline) throw new TransferPending(intent, "arrival_unconfirmed");
+      await sleep(pollMs);
+    }
+    intent = asked(await client.call("getTransfer", { path: { id: intent.id }, query: { funding_plan: true }, signal }), { id: intent.id });
+    checkIntent();
+    await announce();
+  }
   // A replacement of a take that expired unsigned after its funding: never funded again.
   const funded = (id: string) => `funded:${id}`;
   const alreadyFunded = await store.load(funded(intent.id)) !== undefined;
@@ -233,6 +258,12 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     const balances = await client.call("getBalances", { signal });
     const from = balances.find(balance => balance.venue === intent.from);
     const to = balances.find(balance => balance.venue === intent.to);
+    if (durableFunding === "wallet") {
+      insist(wallet || same(to?.address, request.recipient), "Receiving account changed");
+      const funds = await readWalletFunding(client, intent.from, payer, now(), signal, intent.take_id ?? undefined);
+      const ready = BigInt(funds.spendable_wallet) + BigInt(funds.spendable_available);
+      return { ready, supplied: ready, balances };
+    }
     // A wallet delivery needs no account on `to`.
     insist(same(from?.address, payer) && (wallet || same(to?.address, request.recipient)), "Linked account changed; review the transfer again");
     const ready = prefunded(from, now());
@@ -241,7 +272,7 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   const covers = (funds: Awaited<ReturnType<typeof readFunds>>) => insist(funds !== null && funds.supplied >= amount, "Wallet funds do not cover the transfer");
   // Every new payment signature from wallet funds is preceded by a fresh read that covers it.
   const beforeSigning: BeforeSigning = async signing => {
-    if (request.funding === "wallet") covers(await readFunds());
+    if (request.funding === "wallet" && !(durableFunding === "wallet" && signing.kind === "take")) covers(await readFunds());
     await options.beforeSigning?.(signing);
   };
   const pay = (balances?: Answer<"getBalances">) => take(client, signer, takeInput(intent), { store, signal, balances, recipient: request.recipient, beforeSigning, now, lock: options.lock });
@@ -354,7 +385,8 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
     const plan = checkPlan();
     if (!plan.requests.some(item => item.kind === "permit")) return plan;
     stage("funding");
-    await submitPermit(client, intent.from, signer, signal, options.beforeSigning, now);
+    if (durableFunding === "wallet") await submitWalletPermit(client, intent.from, signer, store, signal, beforeSigning, now);
+    else await submitPermit(client, intent.from, signer, signal, options.beforeSigning, now);
     // The permit waited for its signer: the plan is read again before it decides a withdrawal. One
     // another run recorded meanwhile is waited for as any other.
     if (intent.withdrawal) return;
@@ -435,7 +467,10 @@ export async function transfer(client: Client, signer: Signer, request: Transfer
   if (!plan && intent.funding_plan) await fund();
   // The permit gets its own wait, however long the funds took to arrive.
   const confirmBy = now() + arrivalWaitMs;
-  while (authorizing && !await permitDone(client, intent.from, signer, signal)) {
+  const permissionDone = async () => durableFunding === "wallet"
+    ? (await readWalletFunding(client, intent.from, payer, now(), signal, intent.take_id ?? undefined)).payment_setup.authorized
+    : permitDone(client, intent.from, signer, signal);
+  while (authorizing && !await permissionDone()) {
     stage("authorizing");
     if (now() >= confirmBy) throw new TransferPending(intent, "authorization_unconfirmed");
     await sleep(pollMs);

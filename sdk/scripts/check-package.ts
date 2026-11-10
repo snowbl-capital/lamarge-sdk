@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
-const BUDGET_BYTES = 37_500;
+const BUDGET_BYTES = 40_000;
 
 const root = resolve(import.meta.dir, "..");
 const work = mkdtempSync(join(tmpdir(), "lamarge-sdk-"));

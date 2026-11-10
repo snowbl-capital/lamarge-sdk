@@ -114,6 +114,8 @@ export interface components {
             release_minimum: string | null;
         };
         EscrowChain: {
+            /** @description Escrow-token wallet funding without a source venue account; absent or null when unsupported. Polygon uses pUSD, not native USDC. */
+            wallet_funding?: components["schemas"]["WalletFundingCapability"] | null;
             /** @description What a wallet delivery pays on this chain (`destination` `wallet`): the escrow's token, or on Polygon native USDC converted from pUSD. Null where the escrow cannot deliver to a wallet, and on Lighter and Aster. */
             wallet: {
                 token: components["schemas"]["Address"];
@@ -161,6 +163,7 @@ export interface components {
             levels: components["schemas"]["Level"][];
         };
         Route: {
+            funding?: components["schemas"]["Funding"];
             destination: components["schemas"]["Destination"];
             /** @description For a wallet destination, the least its recipient receives of the wallet token for `amount_out`; null for a venue. */
             minimum_received: components["schemas"]["TokenAmount"] | null;
@@ -213,6 +216,7 @@ export interface components {
             digest: components["schemas"]["Bytes32"];
         };
         TradeProof: {
+            funding?: components["schemas"]["Funding"];
             destination: components["schemas"]["Destination"];
             /** @description A wallet delivery's receipt; null for a venue delivery. */
             received: components["schemas"]["WalletReceipt"] | null;
@@ -738,7 +742,92 @@ export interface components {
             error: string | null;
             at: components["schemas"]["Timestamp"];
         };
+        /**
+         * @description Venue uses the linked account and may withdraw a shortfall. Wallet spends only the payer wallet and available escrow balance, in the escrow token, without a source venue account for the master. Immutable across retries.
+         * @default venue
+         * @enum {string}
+         */
+        Funding: "venue" | "wallet" | (string & {});
+        /** @description Native USDC input and minimum pUSD credit. Transfer amount_in must equal min_out. Replacements reuse id; omission opts out of conversion. */
+        WalletConversionInput: {
+            amount_in: components["schemas"]["Amount"];
+            min_out: components["schemas"]["Amount"];
+            id?: components["schemas"]["Uuid"];
+        };
+        WalletConversion: {
+            amount_in: components["schemas"]["Amount"];
+            min_out: components["schemas"]["Amount"];
+            id?: components["schemas"]["Uuid"];
+            chain_id?: number;
+            escrow?: components["schemas"]["Address"];
+            payer?: components["schemas"]["Address"];
+            converter?: components["schemas"]["Address"];
+            token?: components["schemas"]["Address"];
+            nonce?: components["schemas"]["Amount"];
+            deadline?: components["schemas"]["Amount"];
+            prepared_block?: number;
+            /** @enum {string} */
+            state?: "prepared" | "pending" | "ready" | "expired" | (string & {});
+            attempts?: string[];
+            tx_hash?: string | null;
+            received?: string | null;
+            block_number?: number | null;
+        };
+        WalletConversionCapability: {
+            token: components["schemas"]["Address"];
+            symbol: string;
+            decimals: number;
+            converter: components["schemas"]["Address"];
+            min_out_bps: number;
+            minimum: components["schemas"]["Amount"];
+        };
+        WalletFundingCapability: {
+            conversion?: components["schemas"]["WalletConversionCapability"];
+            token: components["schemas"]["Address"];
+            symbol: string;
+            decimals: number;
+        };
+        WalletPermission: {
+            address: components["schemas"]["Address"];
+            authorized: boolean;
+            pending: boolean;
+            hash: string | null;
+            permit: {
+                id: components["schemas"]["Uuid"];
+                to_sign: {
+                    /** @enum {string} */
+                    kind: "permit" | (string & {});
+                    signer: components["schemas"]["Address"];
+                    typed_data: components["schemas"]["TypedData"];
+                };
+            } | null;
+        };
+        WalletFunding: {
+            conversion?: {
+                token: components["schemas"]["Address"];
+                balance: components["schemas"]["Amount"];
+                allowance: components["schemas"]["Amount"];
+            };
+            venue: components["schemas"]["VenueId"];
+            chain_id: number;
+            escrow: components["schemas"]["Address"];
+            token: components["schemas"]["Address"];
+            symbol: string;
+            decimals: number;
+            address: components["schemas"]["Address"];
+            wallet: components["schemas"]["Amount"];
+            available: components["schemas"]["Amount"];
+            committed_wallet: components["schemas"]["Amount"];
+            committed_available: components["schemas"]["Amount"];
+            spendable_wallet: components["schemas"]["Amount"];
+            spendable_available: components["schemas"]["Amount"];
+            block: number;
+            observed_at: components["schemas"]["Timestamp"];
+            payment_setup: components["schemas"]["WalletPermission"];
+        };
         TransferInput: {
+            conversion?: components["schemas"]["WalletConversionInput"];
+            funding?: components["schemas"]["Funding"];
             client_transfer_id: components["schemas"]["ClientId"];
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
@@ -746,7 +835,7 @@ export interface components {
             min_out: components["schemas"]["Amount"];
             /** @default 8 */
             max_parts?: number;
-            /** @description The linked account on `from`. */
+            /** @description The linked account on `from`; with wallet funding, the master or the linked source address. */
             payer: components["schemas"]["Address"];
             /** @description The linked account on `to`; with `destination` `wallet`, any address. */
             recipient: components["schemas"]["Address"];
@@ -795,6 +884,8 @@ export interface components {
             pending: boolean;
         };
         TransferIntent: {
+            conversion?: components["schemas"]["WalletConversion"];
+            funding?: components["schemas"]["Funding"];
             destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             client_transfer_id: components["schemas"]["ClientId"];
@@ -876,6 +967,9 @@ export interface components {
             has_more: boolean;
         };
         TakeInput: {
+            /** @description Only with wallet funding; defaults to the signed-in master. Otherwise must be the linked source address. */
+            payer?: components["schemas"]["Address"];
+            funding?: components["schemas"]["Funding"];
             /** @description The venue the taker pays on. */
             from: components["schemas"]["VenueId"];
             /** @description The venue the taker receives on. */
@@ -901,6 +995,7 @@ export interface components {
         };
         /** @description One order's share of a take, as its taker or maker sees it. */
         Fill: {
+            funding?: components["schemas"]["Funding"];
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -1344,6 +1439,7 @@ export interface components {
             }[];
         };
         Take: {
+            funding?: components["schemas"]["Funding"];
             /** @description For a wallet delivery, the least its recipient receives in all, in the wallet token: on Polygon `ceil(amount_out × WALLET_SWAP_MIN_BPS / 10,000)` per call, elsewhere `amount_out`. Null for a venue delivery. */
             minimum_received: components["schemas"]["TokenAmount"] | null;
             /** @description First fill's id. */
@@ -1423,6 +1519,7 @@ export interface components {
             client_order_id: components["schemas"]["ClientId"];
         };
         FillPreview: {
+            funding?: components["schemas"]["Funding"];
             destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             take_id: components["schemas"]["Uuid"];
@@ -1651,6 +1748,7 @@ export interface components {
             sequence: number | null;
         };
         FillHistoryRow: {
+            funding?: components["schemas"]["Funding"];
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -1727,6 +1825,7 @@ export interface components {
             has_more: boolean;
         };
         PendingTrade: {
+            funding?: components["schemas"]["Funding"];
             destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             from: components["schemas"]["VenueId"];
@@ -2070,6 +2169,7 @@ export interface operations {
     getRoute: {
         parameters: {
             query: {
+                funding?: components["schemas"]["Funding"];
                 /** @description The venue the taker pays on. */
                 from: components["schemas"]["VenueId"];
                 /** @description The venue the taker receives on. */
@@ -2561,6 +2661,92 @@ export interface operations {
                 };
             };
             409: components["responses"]["AccountInUse"];
+        };
+    };
+    getWalletFunding: {
+        parameters: {
+            query?: {
+                /** @description Master by default, or the linked source address. */
+                payer?: components["schemas"]["Address"];
+                /** @description Exclude this own take commitment when checking funds before its signature. */
+                take_id?: components["schemas"]["Uuid"];
+            };
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fresh escrow-token balances at the payer, net of shared commitments. No source link required for the master. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletFunding"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+            422: components["responses"]["AccountNotLinked"];
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    postWalletPermit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                venue: components["schemas"]["VenueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    payer?: components["schemas"]["Address"];
+                    ref?: components["schemas"]["Uuid"];
+                    signature?: components["schemas"]["Signature"];
+                };
+            };
+        };
+        responses: {
+            /** @description Prepare without ref/signature; submit with both. Reuses the existing permit relay. Requires beta access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletPermission"];
+                };
+            };
+            400: components["responses"]["BadSignature"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description Access required or suspended. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Permit not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["StateConflict"];
+            422: components["responses"]["AccountNotLinked"];
+            502: components["responses"]["VenueUnavailable"];
         };
     };
     getBalances: {
@@ -3139,7 +3325,10 @@ export interface operations {
     };
     getEscrow: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Explicit master reads its available balance without a venue link; omission lists linked owners. */
+                owner?: components["schemas"]["Address"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3169,6 +3358,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description Explicit master can withdraw order zero to its wallet without a link; omission uses the linked owner. */
+                    owner?: components["schemas"]["Address"];
                     venue: components["schemas"]["VenueId"];
                     order_id: components["schemas"]["Bytes32"];
                     amount: components["schemas"]["Amount"];
@@ -3185,6 +3376,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        owner?: components["schemas"]["Address"];
                         venue: components["schemas"]["VenueId"];
                         order_id: components["schemas"]["Bytes32"];
                         amount: components["schemas"]["Amount"];
@@ -3227,6 +3419,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description Explicit master can withdraw order zero to its wallet without a link; omission uses the linked owner. */
+                    owner?: components["schemas"]["Address"];
                     venue: components["schemas"]["VenueId"];
                     order_id: components["schemas"]["Bytes32"];
                     amount: components["schemas"]["Amount"];
@@ -3426,6 +3620,118 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    prepareTransferConversion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The same durable conversion, with a nonce and deadline once prepared. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletConversion"];
+                };
+            };
+            /** @description Invalid conversion terms. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            /** @description Resolve the existing conversion or review the transfer. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Funding unavailable. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            502: components["responses"]["VenueUnavailable"];
+        };
+    };
+    reportTransferConversion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    tx_hash?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The same durable conversion, with a nonce and deadline once prepared. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletConversion"];
+                };
+            };
+            /** @description Invalid conversion terms. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AccessRequired"];
+            404: components["responses"]["NotFound"];
+            /** @description Resolve the existing conversion or review the transfer. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Funding unavailable. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            502: components["responses"]["VenueUnavailable"];
         };
     };
     prepareTransferWithdrawal: {
@@ -4527,6 +4833,8 @@ export const routes = {
   postVenueSetupStep: {"path":"/v1/accounts/{venue}/setup/{step}","method":"POST"},
   postLink: {"path":"/v1/accounts/link","method":"POST"},
   deleteLink: {"path":"/v1/accounts/{venue}","method":"DELETE"},
+  getWalletFunding: {"path":"/v1/wallets/{venue}","method":"GET"},
+  postWalletPermit: {"path":"/v1/wallets/{venue}/permit","method":"POST"},
   getBalances: {"path":"/v1/balances","method":"GET"},
   getStats: {"path":"/v1/me/stats","method":"GET"},
   getV1MeExposure: {"path":"/v1/me/exposure","method":"GET"},
@@ -4551,6 +4859,8 @@ export const routes = {
   getTransfers: {"path":"/v1/transfers","method":"GET"},
   getTransfer: {"path":"/v1/transfers/{id}","method":"GET"},
   cancelTransfer: {"path":"/v1/transfers/{id}","method":"DELETE"},
+  prepareTransferConversion: {"path":"/v1/transfers/{id}/conversion/prepare","method":"POST"},
+  reportTransferConversion: {"path":"/v1/transfers/{id}/conversion","method":"POST"},
   prepareTransferWithdrawal: {"path":"/v1/transfers/{id}/withdrawal/prepare","method":"POST"},
   submitTransferWithdrawal: {"path":"/v1/transfers/{id}/withdrawal","method":"POST"},
   prepareGroupedRoute: {"path":"/v1/transfers/{id}/grouped","method":"POST"},

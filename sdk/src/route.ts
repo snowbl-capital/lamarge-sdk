@@ -1,3 +1,5 @@
+import { conversionInput, type ConversionInput } from "./conversion.ts";
+import { requireWalletFunding } from "./wallet.ts";
 import { wait, type Client } from "./client.ts";
 import { fresh, prefunded } from "./funds.ts";
 import { CHAINS, FINAL_FILL_STATES, groupable, insist, same, venueStep, VENUE_SETTLED } from "./protocol/protocol.ts";
@@ -27,6 +29,7 @@ export interface RouteRequest {
   max_fee_bps?: number | undefined;
   /** How the first transfer pays; the second pays from the account on `via`. */
   funding: Funding;
+  conversion?: ConversionInput | undefined;
   /** `xyz`: from a standard Hyperliquid account, the first transfer's withdrawal leaves its trade.xyz balance. */
   from_dex?: "xyz" | undefined;
   transfer_id?: string | undefined;
@@ -84,11 +87,13 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   insist(secondId.length <= 64 && request.via !== request.from && request.via !== request.to, "Unexpected route");
   toWallet(request);
   if (request.funding !== "wallet") sendsFrom(request.from, signer);
+  if (!request.transfer_id && request.funding === "wallet") await requireWalletFunding(client, request.from, signal);
   let first: TransferIntent = request.transfer_id
     ? await client.call("getTransfer", { path: { id: request.transfer_id }, signal })
     : await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, ...destined(request.destination), amount_in: request.then.amount_in,
+      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, ...conversionInput(request.conversion), ...request.funding === "wallet" ? { funding: "wallet" } : {}, then: { to: request.to, recipient: request.recipient, ...destined(request.destination), amount_in: request.then.amount_in,
         min_out: request.then.min_out, ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps), ...request.from_dex ? { from_dex: request.from_dex } : {} }, signal, retry: true });
+  insist(request.transfer_id || (first.funding ?? "venue") === request.funding, "Route funding changed");
   const then = first.then;
   // The first transfer is the one asked before anything of it is signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
   // Only the route's end can be a wallet: the first take delivers into the account on `via`.
@@ -118,7 +123,7 @@ export async function route(client: Client, signer: Signer, request: RouteReques
     // route keeps its first delivery in escrow and withdraws nothing there.
     sendsFrom(request.via, hub);
     fills = await transfer(client, signer, { client_transfer_id: first.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      recipient: hub.address, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps, from_dex: request.from_dex }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
+      recipient: hub.address, conversion: request.conversion, funding: request.funding, transfer_id: first.id, max_parts: first.max_parts, max_fee_bps: request.max_fee_bps, from_dex: request.from_dex }, { ...options, onStage: stage, onIntent: async intent => { first = intent; await onIntent?.(intent); } });
     stage("relaying");
   }
   const take = fills[0]?.take_id ?? first.take_id;

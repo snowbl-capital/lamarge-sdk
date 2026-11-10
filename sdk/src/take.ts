@@ -7,6 +7,7 @@ import { fromHex, isAddress, record, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { attested, signedItem, signItems, signTyped, withoutAttestation, type BeforeSigning, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
+import { readWalletFunding } from "./wallet.ts";
 import { signWithdrawal } from "./withdraw.ts";
 
 export type Fill = Answer<"getFills">[number];
@@ -46,10 +47,16 @@ export interface TakeOptions {
 /** How a payment is checked and signed: at `at` seconds, `payWindow` its longest window, `route` when it is part of a route signed at once. */
 interface PaymentOptions { at: number; signal?: AbortSignal | undefined; before?: BeforeSigning | undefined; payWindow?: number | undefined; route?: boolean | undefined }
 
-export async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Balance, recipient: string, options: PaymentOptions) {
+export async function signPayment(client: Client, prepared: Prepared, input: TakeInput, signer: Signer, payer: Pick<Balance, "address" | "venue_wallet">, recipient: string, options: PaymentOptions) {
   const { take, to_sign } = prepared;
   const { at, signal, before } = options;
-  const checked = async () => { await before?.({ kind: "take", input, prepared, ...(options.route ? { route: true as const } : {}) }); };
+  insist((take.funding ?? "venue") === (input.funding ?? "venue") && take.fills.every(fill => (fill.funding ?? "venue") === (input.funding ?? "venue")), "Take funding changed");
+  const checked = async () => {
+    if (input.funding === "wallet") {
+      const funds = await readWalletFunding(client, input.from, payer.address, at * 1000, signal, take.id);
+      insist(BigInt(funds.spendable_wallet) + BigInt(funds.spendable_available) >= BigInt(input.amount_in), "Wallet funds do not cover the take");
+    }
+    await before?.({ kind: "take", input, prepared, ...(options.route ? { route: true as const } : {}) }); };
   insist(to_sign.every(entry => entry.kind === takePaymentKind(input.from)), "The signing request differs from the take's venue");
   checkMinimumReceived(take, input);
   const item = required(to_sign[0]);
@@ -90,12 +97,13 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   if (lock) return lock(() => take(client, signer, input, unlocked));
   const { store = memoryStore(), signal, withdrawal } = options;
   input = { ...input, max_parts: input.max_parts ?? MAX_PARTS };
+  insist(input.funding !== "wallet" || !withdrawal, "Wallet funding cannot withdraw from a venue");
   insist(!withdrawal || BigInt(withdrawal.amount) > 0n && BigInt(withdrawal.amount) <= BigInt(input.amount_in), "The withdrawal differs from the take it funds");
   // A wallet delivery goes to the address the take names: no account on `to` is read or needed.
   const wallet = toWallet(input);
   insist(!wallet || isAddress(input.recipient), "Invalid recipient");
   const balances = options.balances ?? await client.call("getBalances", { signal });
-  const payer = balances.find(balance => balance.venue === input.from);
+  const payer = input.funding === "wallet" ? { address: input.payer ?? signer.address, venue_wallet: null } : balances.find(balance => balance.venue === input.from);
   const recipient = wallet ? input.recipient : balances.find(balance => balance.venue === input.to)?.address;
   insist(payer && recipient, wallet ? "Link the paying venue first" : "Link both venues first");
   insist(options.recipient === undefined || same(recipient, options.recipient), "Linked account changed; review the transfer again");

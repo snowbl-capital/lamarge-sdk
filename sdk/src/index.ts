@@ -16,3 +16,6 @@ export { Maker, Quoter, type Credential, type DeliveryFill, type FeedFill, type 
 export { checkEscrowLocks, refundPayment, withdraw, type ChainReaders, type RefundFill, type Withdrawal, type WithdrawalRequest } from "./withdraw.ts";
 export { route, type RouteOptions, type RouteRequest, type RouteStage } from "./route.ts";
 export { RouteAbandoned } from "./grouped.ts";
+export { readWalletFunding, submitWalletPermit } from "./wallet.ts";
+
+export { conversionMinimum, type ConversionInput } from "./conversion.ts";

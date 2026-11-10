@@ -314,6 +314,13 @@
         ],
         "parameters": [
           {
+            "name": "funding",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Funding"
+            }
+          },
+          {
             "name": "from",
             "in": "query",
             "required": true,
@@ -1109,6 +1116,169 @@
           },
           "409": {
             "$ref": "#/components/responses/AccountInUse"
+          }
+        }
+      }
+    },
+    "/v1/wallets/{venue}": {
+      "get": {
+        "tags": [
+          "Accounts"
+        ],
+        "summary": "Read wallet funding",
+        "operationId": "getWalletFunding",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "venue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/VenueId"
+            }
+          },
+          {
+            "name": "payer",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Address"
+            },
+            "description": "Master by default, or the linked source address."
+          },
+          {
+            "name": "take_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            },
+            "description": "Exclude this own take commitment when checking funds before its signature."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh escrow-token balances at the payer, net of shared commitments. No source link required for the master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletFunding"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "502": {
+            "$ref": "#/components/responses/VenueUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/wallets/{venue}/permit": {
+      "post": {
+        "tags": [
+          "Accounts"
+        ],
+        "summary": "Authorize wallet funding",
+        "operationId": "postWalletPermit",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "venue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/VenueId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payer": {
+                    "$ref": "#/components/schemas/Address"
+                  },
+                  "ref": {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  "signature": {
+                    "$ref": "#/components/schemas/Signature"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prepare without ref/signature; submit with both. Reuses the existing permit relay. Requires beta access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletPermission"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadSignature"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "description": "Access required or suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Permit not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          },
+          "502": {
+            "$ref": "#/components/responses/VenueUnavailable"
           }
         }
       }
@@ -2107,6 +2277,16 @@
             "session": []
           }
         ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "description": "Explicit master reads its available balance without a venue link; omission lists linked owners.",
+            "schema": {
+              "$ref": "#/components/schemas/Address"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Orders holding funds.",
@@ -2156,6 +2336,10 @@
                   "to_margin"
                 ],
                 "properties": {
+                  "owner": {
+                    "$ref": "#/components/schemas/Address",
+                    "description": "Explicit master can withdraw order zero to its wallet without a link; omission uses the linked owner."
+                  },
                   "venue": {
                     "$ref": "#/components/schemas/VenueId"
                   },
@@ -2193,6 +2377,9 @@
                     "to_sign"
                   ],
                   "properties": {
+                    "owner": {
+                      "$ref": "#/components/schemas/Address"
+                    },
                     "venue": {
                       "$ref": "#/components/schemas/VenueId"
                     },
@@ -2292,6 +2479,10 @@
                   "signature"
                 ],
                 "properties": {
+                  "owner": {
+                    "$ref": "#/components/schemas/Address",
+                    "description": "Explicit master can withdraw order zero to its wallet without a link; omission uses the linked owner."
+                  },
                   "venue": {
                     "$ref": "#/components/schemas/VenueId"
                   },
@@ -2598,6 +2789,171 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/transfers/{id}/conversion/prepare": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "prepareTransferConversion",
+        "summary": "Prepare the transfer’s native-USDC conversion",
+        "description": "Owner-sent Polygon conversion into the payer's available pUSD. Preparation is durable and replacements reuse its id. An empty report atomically changes prepared to pending before the wallet prompt; it is not retried after an unknown answer. A tx_hash is an untrusted broadcast hint. Only a matching finalized escrow event establishes ready. Never prepare another conversion to recover an unknown broadcast. Reads and hash reporting survive access withdrawal.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The same durable conversion, with a nonce and deadline once prepared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletConversion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid conversion terms.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Resolve the existing conversion or review the transfer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Funding unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/VenueUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/transfers/{id}/conversion": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "operationId": "reportTransferConversion",
+        "summary": "Fence a conversion prompt or report a broadcast hash",
+        "description": "Owner-sent Polygon conversion into the payer's available pUSD. Preparation is durable and replacements reuse its id. An empty report atomically changes prepared to pending before the wallet prompt; it is not retried after an unknown answer. A tx_hash is an untrusted broadcast hint. Only a matching finalized escrow event establishes ready. Never prepare another conversion to recover an unknown broadcast. Reads and hash reporting survive access withdrawal.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tx_hash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The same durable conversion, with a nonce and deadline once prepared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletConversion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid conversion terms.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AccessRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Resolve the existing conversion or review the transfer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Funding unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/VenueUnavailable"
           }
         }
       }
@@ -4872,6 +5228,17 @@
           "wallet"
         ],
         "properties": {
+          "wallet_funding": {
+            "description": "Escrow-token wallet funding without a source venue account; absent or null when unsupported. Polygon uses pUSD, not native USDC.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WalletFundingCapability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "wallet": {
             "description": "What a wallet delivery pays on this chain (`destination` `wallet`): the escrow's token, or on Polygon native USDC converted from pUSD. Null where the escrow cannot deliver to a wallet, and on Lighter and Aster.",
             "oneOf": [
@@ -5039,6 +5406,9 @@
           "minimum_received"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "destination": {
             "$ref": "#/components/schemas/Destination"
           },
@@ -5229,6 +5599,9 @@
           "received"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "destination": {
             "$ref": "#/components/schemas/Destination"
           },
@@ -7011,6 +7384,322 @@
           }
         }
       },
+      "Funding": {
+        "type": "string",
+        "enum": [
+          "venue",
+          "wallet"
+        ],
+        "default": "venue",
+        "description": "Venue uses the linked account and may withdraw a shortfall. Wallet spends only the payer wallet and available escrow balance, in the escrow token, without a source venue account for the master. Immutable across retries."
+      },
+      "WalletConversionInput": {
+        "type": "object",
+        "required": [
+          "amount_in",
+          "min_out"
+        ],
+        "description": "Native USDC input and minimum pUSD credit. Transfer amount_in must equal min_out. Replacements reuse id; omission opts out of conversion.",
+        "properties": {
+          "amount_in": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_out": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WalletConversion": {
+        "type": "object",
+        "required": [
+          "amount_in",
+          "min_out"
+        ],
+        "properties": {
+          "amount_in": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_out": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "escrow": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "payer": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "converter": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "nonce": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "prepared_block": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "pending",
+              "ready",
+              "expired"
+            ]
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tx_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "received": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "block_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "WalletConversionCapability": {
+        "type": "object",
+        "required": [
+          "token",
+          "symbol",
+          "decimals",
+          "converter",
+          "min_out_bps",
+          "minimum"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "converter": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "min_out_bps": {
+            "type": "integer"
+          },
+          "minimum": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "WalletFundingCapability": {
+        "type": "object",
+        "required": [
+          "token",
+          "symbol",
+          "decimals"
+        ],
+        "properties": {
+          "conversion": {
+            "$ref": "#/components/schemas/WalletConversionCapability"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WalletPermission": {
+        "type": "object",
+        "required": [
+          "address",
+          "authorized",
+          "pending",
+          "hash",
+          "permit"
+        ],
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "authorized": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permit": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "id",
+                  "to_sign"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  "to_sign": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "signer",
+                      "typed_data"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "permit"
+                        ]
+                      },
+                      "signer": {
+                        "$ref": "#/components/schemas/Address"
+                      },
+                      "typed_data": {
+                        "$ref": "#/components/schemas/TypedData"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WalletFunding": {
+        "type": "object",
+        "required": [
+          "venue",
+          "chain_id",
+          "escrow",
+          "token",
+          "symbol",
+          "decimals",
+          "address",
+          "wallet",
+          "available",
+          "committed_wallet",
+          "committed_available",
+          "spendable_wallet",
+          "spendable_available",
+          "block",
+          "observed_at",
+          "payment_setup"
+        ],
+        "properties": {
+          "conversion": {
+            "type": "object",
+            "required": [
+              "token",
+              "balance",
+              "allowance"
+            ],
+            "properties": {
+              "token": {
+                "$ref": "#/components/schemas/Address"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "allowance": {
+                "$ref": "#/components/schemas/Amount"
+              }
+            }
+          },
+          "venue": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "escrow": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "available": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "committed_wallet": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "committed_available": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "spendable_wallet": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "spendable_available": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "block": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "payment_setup": {
+            "$ref": "#/components/schemas/WalletPermission"
+          }
+        }
+      },
       "TransferInput": {
         "type": "object",
         "required": [
@@ -7023,6 +7712,12 @@
           "recipient"
         ],
         "properties": {
+          "conversion": {
+            "$ref": "#/components/schemas/WalletConversionInput"
+          },
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "client_transfer_id": {
             "$ref": "#/components/schemas/ClientId"
           },
@@ -7046,7 +7741,7 @@
           },
           "payer": {
             "$ref": "#/components/schemas/Address",
-            "description": "The linked account on `from`."
+            "description": "The linked account on `from`; with wallet funding, the master or the linked source address."
           },
           "recipient": {
             "$ref": "#/components/schemas/Address",
@@ -7218,6 +7913,12 @@
           "destination"
         ],
         "properties": {
+          "conversion": {
+            "$ref": "#/components/schemas/WalletConversion"
+          },
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "destination": {
             "$ref": "#/components/schemas/Destination"
           },
@@ -7541,6 +8242,13 @@
           "min_out"
         ],
         "properties": {
+          "payer": {
+            "$ref": "#/components/schemas/Address",
+            "description": "Only with wallet funding; defaults to the signed-in master. Otherwise must be the linked source address."
+          },
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "from": {
             "$ref": "#/components/schemas/VenueId",
             "description": "The venue the taker pays on."
@@ -7637,6 +8345,9 @@
           "received"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -9177,6 +9888,9 @@
           "minimum_received"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "minimum_received": {
             "oneOf": [
               {
@@ -9520,6 +10234,9 @@
           "destination"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "destination": {
             "$ref": "#/components/schemas/Destination"
           },
@@ -10489,6 +11206,9 @@
           "revision"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -10820,6 +11540,9 @@
           "destination"
         ],
         "properties": {
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
           "destination": {
             "$ref": "#/components/schemas/Destination"
           },

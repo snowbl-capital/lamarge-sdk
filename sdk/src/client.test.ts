@@ -89,8 +89,8 @@ test("the client refuses plain HTTP outside localhost and carries its token", as
   expect(seen[0]?.headers.get("authorization")).toBe("Bearer mk_scoped");
 });
 
-// Production's listing: GMX, without a production escrow yet, is not enabled there.
-const listed = () => Object.entries(CHAINS).filter(([, chain]) => !/^0x0+$/.test(chain.escrow)).map(([id, chain]) => ({ id, enabled: true, settlement: VENUE_SETTLED.has(id) ? "venue" : "escrow",
+// Production's listing.
+const listed = () => Object.entries(CHAINS).map(([id, chain]) => ({ id, enabled: true, settlement: VENUE_SETTLED.has(id) ? "venue" : "escrow",
   chain: { id: chain.id, token: chain.token, decimals: chain.decimals, escrow: chain.escrow, permit: chain.permit ? { name: chain.permit, version: chain.version } : null } }));
 const venues = () => Response.json(listed());
 const signer = { address: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A" as const, signMessage: async () => { signed++; return "0x00" as const; } };

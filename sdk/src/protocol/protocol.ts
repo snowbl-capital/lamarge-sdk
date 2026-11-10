@@ -9,19 +9,29 @@ export const ESCROW = "0x3100b7b49c0f9631c6af25877b5a4e13a47afad6";
 /**
  * Each venue's escrow chain, token decimals and permit domain, and `escrow`: production's escrow on
  * an escrow venue, the contract of its signing domain on a venue settled inside itself. A venue the
- * API enables but that is not pinned here is not traded.
+ * API enables but that is not pinned here is not traded. `walletToken`: what a wallet delivery pays
+ * on an escrow venue's chain, of `decimals` too; none on a venue settled inside itself.
  */
-export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string }> = {
-  hyperliquid: { id: 999, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6, permit: "USDC", version: "2", escrow: ESCROW },
-  polymarket: { id: 137, token: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", decimals: 6, permit: "Polymarket USD", version: "1", escrow: ESCROW },
+export const CHAINS: Record<string, { id: number; token: string; decimals: number; permit?: string; version?: string; escrow: string; walletToken?: string }> = {
+  hyperliquid: { id: 999, token: "0xb88339cb7199b77e23db6e890353e22632ba630f", decimals: 6, permit: "USDC", version: "2", escrow: ESCROW, walletToken: "0xb88339cb7199b77e23db6e890353e22632ba630f" },
+  // A wallet delivery is native USDC there, converted from pUSD.
+  polymarket: { id: 137, token: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", decimals: 6, permit: "Polymarket USD", version: "1", escrow: ESCROW, walletToken: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" },
   // Settled inside the venue, no escrow. Quote sets and payment terms name a signing chain id,
   // contract and token: Lighter's L2 chain id, its zkLighter contract on Ethereum and its USDC;
   // BSC, Aster's vault and USDT.
   aster: { id: 56, token: "0x55d398326f99059ff775485246999027b3197955", decimals: 18, escrow: "0x128463a60784c4d3f46c23af3f65ed859ba87974" },
   lighter: { id: 304, token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", decimals: 6, escrow: "0x3b4d794a66304f130a4db8f2551b0070dfcf5ca7" },
-  // GMX Accounts, settled in an escrow on Arbitrum; no production escrow yet.
-  gmx: { id: 42161, token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", decimals: 6, permit: "USD Coin", version: "2", escrow: "0x0000000000000000000000000000000000000000" },
+  // GMX Accounts, settled in an escrow on Arbitrum.
+  gmx: { id: 42161, token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", decimals: 6, permit: "USD Coin", version: "2", escrow: "0x7b0c3eb38153614452a56bc9295d1bd084a9190a", walletToken: "0xaf88d065e77c8cc2239327c5edb3a432268e5831" },
 };
+/** The least share of the pUSD paid out, in basis points, that a Polygon wallet delivery's recipient receives in native USDC, as the escrow bounds it. */
+export const WALLET_SWAP_MIN_BPS = 9_995;
+/** The least a wallet delivery of `amountOut` to `to` pays its recipient, as the escrow checks it: on Polygon, rounded up; elsewhere all of it. */
+export const minimumReceived = (to: string, amountOut: bigint): bigint =>
+  to === "polymarket" ? (amountOut * BigInt(WALLET_SWAP_MIN_BPS) + 9_999n) / 10_000n : amountOut;
+/** A wallet take's `minimum_received` on `to`: the least for all its fills deliver, bounded once over their total as the escrow checks it. */
+export const takeMinimumReceived = (to: string, fills: readonly { amount_out: string }[]): bigint =>
+  minimumReceived(to, fills.reduce((sum, fill) => sum + BigInt(fill.amount_out), 0n));
 /** GMX's MultichainTransferRouter on Arbitrum: an account's own `transferOut` moves its GMX Account funds to its address. */
 export const GMX_TRANSFER_ROUTER = "0x3f6772b95423fc03264adf90efb8a9922b6c8c6e";
 /**
@@ -180,11 +190,13 @@ function checkEscrowTypedAt(typed: Typed, venue: string, pinned: (escrow: unknow
   insist(typed.domain.chainId === chain.id && (permit ? same(typed.domain.verifyingContract, chain.token) : pinned(typed.domain.verifyingContract)) && typed.domain.name === (permit ? chain.permit : "LaMarge") && typed.domain.version === (permit ? chain.version : "1"), "Unexpected signing domain");
   if (permit) insist(pinned(typed.message.spender), "Unexpected permit spender");
 }
-/** Validate the API's chain, token, decimals and permit domain against the pins; `manifest` selects permitted escrows. */
-export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined }, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
-  const known = CHAINS[venue], permit = chain.permit;
+/** Validate the API's chain, token, decimals, permit domain and wallet token against the pins; `manifest` selects permitted escrows. */
+export function checkRegistry(venue: string, chain: { id: number; token: string; decimals: number; escrow: string; permit?: { name: string; version: string } | null | undefined;
+  wallet?: { token: string; decimals: number } | null | undefined }, manifest: DeploymentManifest = ESCROW_DEPLOYMENTS) {
+  const known = CHAINS[venue], { permit, wallet } = chain;
   insist(known && known.id === chain.id && same(known.token, chain.token) && known.decimals === chain.decimals && isPinnedEscrow(venue, chain.escrow, manifest)
-    && (permit === undefined || (permit === null ? known.permit === undefined : permit.name === known.permit && permit.version === known.version)), "API deployment differs from the reviewed deployment");
+    && (permit === undefined || (permit === null ? known.permit === undefined : permit.name === known.permit && permit.version === known.version))
+    && (!wallet || same(wallet.token, known.walletToken) && wallet.decimals === known.decimals), "API deployment differs from the reviewed deployment");
 }
 export function checkDeadline(value: unknown, seconds: number, now = Date.now() / 1000) {
   const at = Number(uint(value));

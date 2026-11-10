@@ -27,6 +27,16 @@ test("a listed permit domain is the pinned one, and none on a venue settled insi
   expect(() => checkRegistry("lighter", { ...lighter, permit: { name: "USDC", version: "2" } })).toThrow("reviewed deployment");
 });
 
+test("a listed wallet token is the pinned one, and none on a venue settled inside itself", () => {
+  const listed = (venue: string, wallet: { token: string; decimals: number } | null) => { const { id, token, decimals, escrow } = required(CHAINS[venue]); return { id, token, decimals, escrow, wallet }; };
+  const usdc = required(CHAINS.polymarket?.walletToken);
+  for (const venue of ["polymarket", "lighter"]) expect(() => checkRegistry(venue, listed(venue, null))).not.toThrow();
+  expect(() => checkRegistry("polymarket", listed("polymarket", { token: usdc, decimals: 6 }))).not.toThrow();
+  expect(() => checkRegistry("polymarket", listed("polymarket", { token: required(CHAINS.polymarket).token, decimals: 6 }))).toThrow("reviewed deployment");
+  expect(() => checkRegistry("polymarket", listed("polymarket", { token: usdc, decimals: 18 }))).toThrow("reviewed deployment");
+  expect(() => checkRegistry("lighter", listed("lighter", { token: required(CHAINS.lighter).token, decimals: 6 }))).toThrow("reviewed deployment");
+});
+
 test("a funding plan lists the permit first, only when a wallet deposit needs it, then the withdrawal and the payment", () => {
   const kinds = (...names: string[]) => names.map(kind => ({ kind, signer: master, chain_id: 137 }));
   const intent = (plan: Record<string, unknown>) => ({ from: "polymarket", payer: master, amount_in: "10000000", funding_plan: { observed_at: new Date().toISOString(), venue: "polymarket", owner: master,

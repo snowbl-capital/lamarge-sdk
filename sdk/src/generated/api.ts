@@ -2,6 +2,23 @@ export interface components {
     schemas: {
         /** @description A venue id from `GET /v1/venues`. */
         VenueId: string;
+        /**
+         * @description Where a take delivers on `to`: `venue`, into the taker's account linked there; `wallet`, by plain transfer to `recipient`'s address on `to`'s escrow chain, in that chain's wallet token (`chain.wallet` in `GET /v1/venues`; on Polygon native USDC converted from pUSD), any address ([wallet delivery](/how-it-works#wallet-delivery)).
+         * @enum {string}
+         */
+        Destination: "venue" | "wallet" | (string & {});
+        TokenAmount: {
+            token: components["schemas"]["Address"];
+            amount: components["schemas"]["Amount"];
+        };
+        /** @description What a wallet delivery's recipient received, as the escrow's `WalletPaid` recorded it. */
+        WalletReceipt: {
+            token: components["schemas"]["Address"];
+            /** @description This fill's share, in `token` base units: a take's fills to one recipient share one transfer, split in proportion to `amount_out`, the last fill taking the rounding. */
+            amount: components["schemas"]["Amount"];
+            /** @description The token's sender, as the escrow's `WalletPaid` names it (the escrow, or on Polygon the pinned converter). */
+            sender: components["schemas"]["Address"];
+        };
         /** @description Basis points; the escrow refuses more than 100. */
         FeeBps: number;
         /** @description Decimal base units of the venue's token (`decimals` in `GET /v1/venues`), below 2^256: with 6 decimals, `"1000000"` is 1 token. */
@@ -11,10 +28,10 @@ export interface components {
         Bytes32: string;
         /** @description A 65-byte signature `r ‖ s ‖ v`, `v` 0, 1, 27 or 28, `s` low (EIP-2). */
         Signature: string;
-        /** @description Present when LaMarge attests the request: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: "LaMarge attestation", version: "2"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash). Check it with `verifyAttestation` from `@lamarge/sdk/attestation` ([taker quickstart](/taker-quickstart)). */
+        /** @description Present when LaMarge attests the request: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: "LaMarge attestation", version: "2"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash); for a wallet delivery, `WalletTakeAttestation(address signer,bytes32 digest,WalletTakeTerms terms)` in the same domain. Check it with `verifyAttestation` from `@lamarge/sdk/attestation` ([taker quickstart](/taker-quickstart)). */
         TakeAttestation: {
             signature: components["schemas"]["Signature"];
-            terms: components["schemas"]["TakeTerms"];
+            terms: components["schemas"]["TakeTerms"] | components["schemas"]["WalletTakeTerms"];
         };
         /** @description `TakeTerms(bytes32 take,string from,string to,address recipient,address token,uint256 amountOut,uint64 payBy)`: what the take delivers, as LaMarge committed it. */
         TakeTerms: {
@@ -30,6 +47,23 @@ export interface components {
             amountOut: components["schemas"]["Amount"];
             /** @description Unix seconds: the payment is signed before then, or not at all. */
             payBy: number;
+        };
+        /** @description `WalletTakeTerms(bytes32 take,string from,string to,address recipient,address token,uint256 amountOut,uint64 payBy,string destination)`: a wallet delivery's terms, as LaMarge committed them. */
+        WalletTakeTerms: {
+            /** @description The take id's 16 bytes then 16 zero bytes. */
+            take: components["schemas"]["Bytes32"];
+            from: components["schemas"]["VenueId"];
+            to: components["schemas"]["VenueId"];
+            /** @description The address the take transfers to. */
+            recipient: components["schemas"]["Address"];
+            /** @description The wallet token of `to`'s chain. */
+            token: components["schemas"]["Address"];
+            /** @description The least the recipient receives in all, `minimum_received`, in the token's base units. */
+            amountOut: components["schemas"]["Amount"];
+            /** @description Unix seconds: the payment is signed before then, or not at all. */
+            payBy: number;
+            /** @enum {string} */
+            destination: "wallet" | (string & {});
         };
         /** @description LaMarge's word that it asks `signer` to approve its Aster agent or register its Lighter key: its attester's EIP-712 signature of `SetupAttestation(address signer,bytes32 digest)` under the domain `{name: "LaMarge attestation", version: "2"}`, `digest` the hash the wallet signs. Verified with `verifyAttestation` from `@lamarge/sdk/attestation`. */
         SetupAttestation: {
@@ -80,6 +114,14 @@ export interface components {
             release_minimum: string | null;
         };
         EscrowChain: {
+            /** @description What a wallet delivery pays on this chain (`destination` `wallet`): the escrow's token, or on Polygon native USDC converted from pUSD. Null where the escrow cannot deliver to a wallet, and on Lighter and Aster. */
+            wallet: {
+                token: components["schemas"]["Address"];
+                symbol: string;
+                decimals: number;
+                /** @description The least each part of a wallet take delivers, in this chain's token base units. */
+                minimum: components["schemas"]["Amount"];
+            } | null;
             /** @description 999 HyperEVM, 137 Polygon; on Lighter or Aster its signing chain id, 304 for Lighter (`escrow` its zkLighter contract, `token` Ethereum's USDC), 56 for Aster (`escrow` its vault, `token` BSC's USDT). */
             id: number;
             escrow: components["schemas"]["Address"];
@@ -119,6 +161,9 @@ export interface components {
             levels: components["schemas"]["Level"][];
         };
         Route: {
+            destination: components["schemas"]["Destination"];
+            /** @description For a wallet destination, the least its recipient receives of the wallet token for `amount_out`; null for a venue. */
+            minimum_received: components["schemas"]["TokenAmount"] | null;
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
             /** @description What the first take pays, in `from` base units. */
@@ -168,6 +213,9 @@ export interface components {
             digest: components["schemas"]["Bytes32"];
         };
         TradeProof: {
+            destination: components["schemas"]["Destination"];
+            /** @description A wallet delivery's receipt; null for a venue delivery. */
+            received: components["schemas"]["WalletReceipt"] | null;
             /**
              * @description 2 for a trade with a taker fee, which `taker_fee` and `taker_fee_venue` give.
              * @enum {integer}
@@ -700,8 +748,10 @@ export interface components {
             max_parts?: number;
             /** @description The linked account on `from`. */
             payer: components["schemas"]["Address"];
-            /** @description The linked account on `to`. */
+            /** @description The linked account on `to`; with `destination` `wallet`, any address. */
             recipient: components["schemas"]["Address"];
+            /** @description Default `venue`. `wallet` only on an escrow venue, never with `then`. */
+            destination?: components["schemas"]["Destination"];
             /** @description A route through `to`: where it ends. Its second transfer, from `to`, names this one in `previous_transfer_id`. */
             then?: components["schemas"]["TransferThen"];
             /** @description The transfer with `then` this one continues, from its `to` and `recipient` to its `then`, once no part of its take can deliver more: at most its `continuable`. It replaces an earlier continuation that neither took nor sent a withdrawal still in flight. */
@@ -716,8 +766,10 @@ export interface components {
         };
         TransferThen: {
             to: components["schemas"]["VenueId"];
-            /** @description The linked account on `to`. */
+            /** @description The linked account on `to`; with `destination` `wallet`, any address. */
             recipient: components["schemas"]["Address"];
+            /** @description Default `venue`; `wallet` only on an escrow venue. */
+            destination?: components["schemas"]["Destination"];
             /** @description What the second transfer was to pay, in the intermediate venue's base units. */
             amount_in: components["schemas"]["Amount"];
             /** @description Least the route accepts on `to` for that `amount_in`; a continuation paying another amount scales it. */
@@ -743,6 +795,7 @@ export interface components {
             pending: boolean;
         };
         TransferIntent: {
+            destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             client_transfer_id: components["schemas"]["ClientId"];
             /** @description `transfer:<id>`, for the take. */
@@ -841,6 +894,10 @@ export interface components {
             max_parts?: number;
             /** @description The highest taker fee accepted, as the book's `taker_fee_bps`: a higher one is `VALIDATION_ERROR` with reason `fee_above_max`, before anything is reserved. Without it the take pays no fee. Part of the request's identity for retries. */
             max_fee_bps?: components["schemas"]["FeeBps"];
+            /** @description Default `venue`. `wallet` only on an escrow venue whose `chain.wallet` is set; it needs no account on `to`. Part of the request's identity for retries. */
+            destination?: components["schemas"]["Destination"];
+            /** @description With `destination` `wallet`, and only then: the address it transfers to, among those a [wallet delivery](/how-it-works#wallet-delivery) accepts. Part of the request's identity for retries. */
+            recipient?: components["schemas"]["Address"];
         };
         /** @description One order's share of a take, as its taker or maker sees it. */
         Fill: {
@@ -881,8 +938,11 @@ export interface components {
             maker_owner: components["schemas"]["Address"];
             /** @description The quote's payment recipient. */
             maker_recipient: components["schemas"]["Address"];
-            /** @description The taker's linked address on `to_venue`. */
+            /** @description The address receiving on `to_venue`, its linked account or, for a wallet delivery, the address named. */
             taker_recipient: components["schemas"]["Address"];
+            destination: components["schemas"]["Destination"];
+            /** @description A wallet delivery's receipt; null before it, and for a venue delivery. */
+            received: components["schemas"]["WalletReceipt"] | null;
             payment_leg: components["schemas"]["PaymentLeg"];
             /**
              * @description Where the maker's claimed payment was released; null until observed.
@@ -890,10 +950,10 @@ export interface components {
              */
             payment_destination: "venue" | "escrow" | null;
             /**
-             * @description Where the taker's claimed output was released; null until observed.
+             * @description Where the taker's claimed output was released (`wallet`: transferred to `taker_recipient`); null until observed.
              * @enum {string|null}
              */
-            maker_destination: "venue" | "escrow" | null;
+            maker_destination: "venue" | "escrow" | "wallet" | null;
             /**
              * Format: date-time
              * @description When the taker's signatures were accepted; null before.
@@ -1284,6 +1344,8 @@ export interface components {
             }[];
         };
         Take: {
+            /** @description For a wallet delivery, the least its recipient receives in all, in the wallet token: on Polygon `ceil(amount_out × WALLET_SWAP_MIN_BPS / 10,000)` per call, elsewhere `amount_out`. Null for a venue delivery. */
+            minimum_received: components["schemas"]["TokenAmount"] | null;
             /** @description First fill's id. */
             id: components["schemas"]["Uuid"];
             client_take_id: components["schemas"]["ClientId"];
@@ -1361,6 +1423,7 @@ export interface components {
             client_order_id: components["schemas"]["ClientId"];
         };
         FillPreview: {
+            destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             take_id: components["schemas"]["Uuid"];
             order_id: components["schemas"]["Bytes32"];
@@ -1372,7 +1435,7 @@ export interface components {
             /** @enum {string|null} */
             payment_destination: "venue" | "escrow" | null;
             /** @enum {string|null} */
-            maker_destination: "venue" | "escrow" | null;
+            maker_destination: "venue" | "escrow" | "wallet" | null;
             amount_in: components["schemas"]["Amount"];
             amount_out: components["schemas"]["Amount"];
             /** @description The taker fee, in `taker_fee_venue` base units. */
@@ -1623,6 +1686,9 @@ export interface components {
             revision: components["schemas"]["Cursor"];
         };
         TradeHistoryRow: {
+            destination: components["schemas"]["Destination"];
+            /** @description A wallet delivery's receipt; null for a venue delivery. */
+            received: components["schemas"]["WalletReceipt"] | null;
             id: components["schemas"]["Uuid"];
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
@@ -1661,6 +1727,7 @@ export interface components {
             has_more: boolean;
         };
         PendingTrade: {
+            destination: components["schemas"]["Destination"];
             id: components["schemas"]["Uuid"];
             from: components["schemas"]["VenueId"];
             to: components["schemas"]["VenueId"];
@@ -2007,6 +2074,8 @@ export interface operations {
                 from: components["schemas"]["VenueId"];
                 /** @description The venue the taker receives on. */
                 to: components["schemas"]["VenueId"];
+                /** @description `wallet` prices a wallet delivery on `to`: no deposit minimum, `minimum_received` set. */
+                destination?: components["schemas"]["Destination"];
                 /** @description Most the taker pays, in `from` base units. */
                 amount_in: components["schemas"]["Amount"];
                 /** @description Least the taker receives for `amount_in`, in `to` base units: the worst price it takes. A smaller amount is held to the same price, in proportion. */

@@ -332,6 +332,14 @@
             }
           },
           {
+            "name": "destination",
+            "in": "query",
+            "description": "`wallet` prices a wallet delivery on `to`: no deposit minimum, `minimum_received` set.",
+            "schema": {
+              "$ref": "#/components/schemas/Destination"
+            }
+          },
+          {
             "name": "amount_in",
             "in": "query",
             "required": true,
@@ -979,7 +987,7 @@
           "Account"
         ],
         "summary": "Link a venue account",
-        "description": "One account per venue. The master address links without `nonce` or `signature`; another address sends the link challenge's. `setup` lists the steps left ([setup](/api-reference/account/setup)); relinking another address drops the steps done for the previous one. `venue_wallet` is the signer's Polymarket wallet or the Lighter master account index; without one, `WALLET_NOT_FOUND` ([venues](/how-it-works#venues-and-balances)).",
+        "description": "One account per venue. The master address links without `nonce` or `signature`; another address sends the link challenge's. `setup` lists the steps left ([setup](/api-reference/account/setup)); relinking another address drops the steps done for the previous one. `venue_wallet` is the signer's Polymarket wallet, without one `WALLET_NOT_FOUND`, or the Lighter master account index, null until the address's first deposit ([opening an account](/how-it-works#opening-an-account)).",
         "operationId": "postLink",
         "security": [
           {
@@ -4493,6 +4501,53 @@
         "type": "string",
         "description": "A venue id from `GET /v1/venues`."
       },
+      "Destination": {
+        "type": "string",
+        "enum": [
+          "venue",
+          "wallet"
+        ],
+        "description": "Where a take delivers on `to`: `venue`, into the taker's account linked there; `wallet`, by plain transfer to `recipient`'s address on `to`'s escrow chain, in that chain's wallet token (`chain.wallet` in `GET /v1/venues`; on Polygon native USDC converted from pUSD), any address ([wallet delivery](/how-it-works#wallet-delivery))."
+      },
+      "TokenAmount": {
+        "type": "object",
+        "required": [
+          "token",
+          "amount"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WalletReceipt": {
+        "type": "object",
+        "description": "What a wallet delivery's recipient received, as the escrow's `WalletPaid` recorded it.",
+        "required": [
+          "token",
+          "amount",
+          "sender"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "This fill's share, in `token` base units: a take's fills to one recipient share one transfer, split in proportion to `amount_out`, the last fill taking the rounding."
+          },
+          "sender": {
+            "$ref": "#/components/schemas/Address",
+            "description": "The token's sender, as the escrow's `WalletPaid` names it (the escrow, or on Polygon the pinned converter)."
+          }
+        },
+        "additionalProperties": false
+      },
       "FeeBps": {
         "type": "integer",
         "minimum": 0,
@@ -4520,7 +4575,7 @@
       },
       "TakeAttestation": {
         "type": "object",
-        "description": "Present when LaMarge attests the request: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: \"LaMarge attestation\", version: \"2\"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash). Check it with `verifyAttestation` from `@lamarge/sdk/attestation` ([taker quickstart](/taker-quickstart)).",
+        "description": "Present when LaMarge attests the request: its attester's EIP-712 signature of `TakeAttestation(address signer,bytes32 digest,TakeTerms terms)` under the domain `{name: \"LaMarge attestation\", version: \"2\"}`, `digest` the hash the wallet signs (the typed data's EIP-712 hash, or the owner message's `personal_sign` hash); for a wallet delivery, `WalletTakeAttestation(address signer,bytes32 digest,WalletTakeTerms terms)` in the same domain. Check it with `verifyAttestation` from `@lamarge/sdk/attestation` ([taker quickstart](/taker-quickstart)).",
         "required": [
           "signature",
           "terms"
@@ -4530,7 +4585,14 @@
             "$ref": "#/components/schemas/Signature"
           },
           "terms": {
-            "$ref": "#/components/schemas/TakeTerms"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TakeTerms"
+              },
+              {
+                "$ref": "#/components/schemas/WalletTakeTerms"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -4589,6 +4651,71 @@
           "payBy": {
             "type": "integer",
             "description": "Unix seconds: the payment is signed before then, or not at all."
+          }
+        },
+        "additionalProperties": false
+      },
+      "WalletTakeTerms": {
+        "type": "object",
+        "description": "`WalletTakeTerms(bytes32 take,string from,string to,address recipient,address token,uint256 amountOut,uint64 payBy,string destination)`: a wallet delivery's terms, as LaMarge committed them.",
+        "required": [
+          "take",
+          "from",
+          "to",
+          "recipient",
+          "token",
+          "amountOut",
+          "payBy",
+          "destination"
+        ],
+        "properties": {
+          "take": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Bytes32"
+              }
+            ],
+            "description": "The take id's 16 bytes then 16 zero bytes."
+          },
+          "from": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "to": {
+            "$ref": "#/components/schemas/VenueId"
+          },
+          "recipient": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              }
+            ],
+            "description": "The address the take transfers to."
+          },
+          "token": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              }
+            ],
+            "description": "The wallet token of `to`'s chain."
+          },
+          "amountOut": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "description": "The least the recipient receives in all, `minimum_received`, in the token's base units."
+          },
+          "payBy": {
+            "type": "integer",
+            "description": "Unix seconds: the payment is signed before then, or not at all."
+          },
+          "destination": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
           }
         },
         "additionalProperties": false
@@ -4741,9 +4868,43 @@
           "token",
           "symbol",
           "decimals",
-          "permit"
+          "permit",
+          "wallet"
         ],
         "properties": {
+          "wallet": {
+            "description": "What a wallet delivery pays on this chain (`destination` `wallet`): the escrow's token, or on Polygon native USDC converted from pUSD. Null where the escrow cannot deliver to a wallet, and on Lighter and Aster.",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "token",
+                  "symbol",
+                  "decimals",
+                  "minimum"
+                ],
+                "properties": {
+                  "token": {
+                    "$ref": "#/components/schemas/Address"
+                  },
+                  "symbol": {
+                    "type": "string"
+                  },
+                  "decimals": {
+                    "type": "integer"
+                  },
+                  "minimum": {
+                    "$ref": "#/components/schemas/Amount",
+                    "description": "The least each part of a wallet take delivers, in this chain's token base units."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "integer",
             "description": "999 HyperEVM, 137 Polygon; on Lighter or Aster its signing chain id, 304 for Lighter (`escrow` its zkLighter contract, `token` Ethereum's USDC), 56 for Aster (`escrow` its vault, `token` BSC's USDT)."
@@ -4873,9 +5034,25 @@
           "amount_in",
           "amount_out",
           "capped",
-          "legs"
+          "legs",
+          "destination",
+          "minimum_received"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
+          "minimum_received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenAmount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a wallet destination, the least its recipient receives of the wallet token for `amount_out`; null for a venue."
+          },
           "from": {
             "$ref": "#/components/schemas/VenueId"
           },
@@ -5047,9 +5224,25 @@
           "delivery",
           "taker",
           "payment",
-          "transactions"
+          "transactions",
+          "destination",
+          "received"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
+          "received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WalletReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A wallet delivery's receipt; null for a venue delivery."
+          },
           "version": {
             "type": "integer",
             "enum": [
@@ -6857,7 +7050,11 @@
           },
           "recipient": {
             "$ref": "#/components/schemas/Address",
-            "description": "The linked account on `to`."
+            "description": "The linked account on `to`; with `destination` `wallet`, any address."
+          },
+          "destination": {
+            "$ref": "#/components/schemas/Destination",
+            "description": "Default `venue`. `wallet` only on an escrow venue, never with `then`."
           },
           "then": {
             "$ref": "#/components/schemas/TransferThen",
@@ -6895,7 +7092,11 @@
           },
           "recipient": {
             "$ref": "#/components/schemas/Address",
-            "description": "The linked account on `to`."
+            "description": "The linked account on `to`; with `destination` `wallet`, any address."
+          },
+          "destination": {
+            "$ref": "#/components/schemas/Destination",
+            "description": "Default `venue`; `wallet` only on an escrow venue."
           },
           "amount_in": {
             "$ref": "#/components/schemas/Amount",
@@ -7013,9 +7214,13 @@
           "created_at",
           "funding_plan",
           "funding_plan_error",
-          "grouped"
+          "grouped",
+          "destination"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
           "id": {
             "$ref": "#/components/schemas/Uuid"
           },
@@ -7369,6 +7574,14 @@
           "max_fee_bps": {
             "$ref": "#/components/schemas/FeeBps",
             "description": "The highest taker fee accepted, as the book's `taker_fee_bps`: a higher one is `VALIDATION_ERROR` with reason `fee_above_max`, before anything is reserved. Without it the take pays no fee. Part of the request's identity for retries."
+          },
+          "destination": {
+            "$ref": "#/components/schemas/Destination",
+            "description": "Default `venue`. `wallet` only on an escrow venue whose `chain.wallet` is set; it needs no account on `to`. Part of the request's identity for retries."
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Address",
+            "description": "With `destination` `wallet`, and only then: the address it transfers to, among those a [wallet delivery](/how-it-works#wallet-delivery) accepts. Part of the request's identity for retries."
           }
         },
         "additionalProperties": false
@@ -7419,7 +7632,9 @@
           "created_at",
           "updated_at",
           "settled_at",
-          "transactions"
+          "transactions",
+          "destination",
+          "received"
         ],
         "properties": {
           "id": {
@@ -7515,7 +7730,21 @@
           },
           "taker_recipient": {
             "$ref": "#/components/schemas/Address",
-            "description": "The taker's linked address on `to_venue`."
+            "description": "The address receiving on `to_venue`, its linked account or, for a wallet delivery, the address named."
+          },
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
+          "received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WalletReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A wallet delivery's receipt; null before it, and for a venue delivery."
           },
           "payment_leg": {
             "$ref": "#/components/schemas/PaymentLeg"
@@ -7540,9 +7769,10 @@
             "enum": [
               "venue",
               "escrow",
+              "wallet",
               null
             ],
-            "description": "Where the taker's claimed output was released; null until observed."
+            "description": "Where the taker's claimed output was released (`wallet`: transferred to `taker_recipient`); null until observed."
           },
           "signed_at": {
             "type": [
@@ -8943,9 +9173,21 @@
           "amount_in",
           "amount_out",
           "taker_fee",
-          "fills"
+          "fills",
+          "minimum_received"
         ],
         "properties": {
+          "minimum_received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenAmount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a wallet delivery, the least its recipient receives in all, in the wallet token: on Polygon `ceil(amount_out × WALLET_SWAP_MIN_BPS / 10,000)` per call, elsewhere `amount_out`. Null for a venue delivery."
+          },
           "id": {
             "$ref": "#/components/schemas/Uuid",
             "description": "First fill's id."
@@ -9274,9 +9516,13 @@
           "maker_accept_by",
           "maker_accepted_at",
           "reason",
-          "role"
+          "role",
+          "destination"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
           "id": {
             "$ref": "#/components/schemas/Uuid"
           },
@@ -9321,6 +9567,7 @@
             "enum": [
               "venue",
               "escrow",
+              "wallet",
               null
             ]
           },
@@ -10364,9 +10611,25 @@
           "maker_in",
           "maker_out",
           "settled_at",
-          "taker_address"
+          "taker_address",
+          "destination",
+          "received"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
+          "received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WalletReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A wallet delivery's receipt; null for a venue delivery."
+          },
           "id": {
             "$ref": "#/components/schemas/Uuid"
           },
@@ -10553,9 +10816,13 @@
           "amount_in",
           "amount_out",
           "state",
-          "created_at"
+          "created_at",
+          "destination"
         ],
         "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Destination"
+          },
           "id": {
             "$ref": "#/components/schemas/Uuid"
           },

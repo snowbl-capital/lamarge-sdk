@@ -1,9 +1,9 @@
 import { LaMargeError, type Answer, type Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
-import { checkAsterTakeIntent, checkLighterTakeIntent, checkTakeIntent, signableUntil, takePaymentKind } from "./protocol/intents.ts";
+import { checkAsterTakeIntent, checkLighterTakeIntent, checkMinimumReceived, checkTakeIntent, signableUntil, takePaymentKind, toWallet } from "./protocol/intents.ts";
 import { COLLATERAL_ROUTE, lighterAccountOwner, transferMessage, USDC_ASSET } from "./protocol/lighter.ts";
 import { ASTER_TRANSFER_CHAIN_ID, AT_ONCE_SEND_MARGIN_SECONDS, AT_ONCE_SIGNING_SECONDS, checkAsterRequest, insist, ROUTE_PAY_WINDOW_SECONDS, same, type Dex, type Typed } from "./protocol/protocol.ts";
-import { fromHex, record, required } from "./protocol/validation.ts";
+import { fromHex, isAddress, record, required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import { attested, signedItem, signItems, signTyped, withoutAttestation, type BeforeSigning, type Signer } from "./signer.ts";
 import { canonical, memoryStore, signedItems, type SignatureStore } from "./store.ts";
@@ -31,7 +31,7 @@ export interface TakeOptions {
   balances?: Balance[] | undefined;
   /** A take prepared earlier, to sign and submit. */
   prepared?: Prepared | undefined;
-  /** The account that must receive on `input.to`; the linked one otherwise. */
+  /** The account that must receive on `input.to`; the linked one otherwise, or with a wallet destination `input.recipient`. */
   recipient?: string | undefined;
   /** Runs on the checked payment before it is first signed, never before submitting a stored one: a check that throws stops the take. */
   beforeSigning?: BeforeSigning | undefined;
@@ -51,6 +51,7 @@ export async function signPayment(client: Client, prepared: Prepared, input: Tak
   const { at, signal, before } = options;
   const checked = async () => { await before?.({ kind: "take", input, prepared, ...(options.route ? { route: true as const } : {}) }); };
   insist(to_sign.every(entry => entry.kind === takePaymentKind(input.from)), "The signing request differs from the take's venue");
+  checkMinimumReceived(take, input);
   const item = required(to_sign[0]);
   // A Lighter account is an index: Lighter itself says whose it is, LaMarge's record of it doesn't.
   if (input.to === "lighter") {
@@ -90,10 +91,13 @@ export async function take(client: Client, signer: Signer, input: TakeInput, opt
   const { store = memoryStore(), signal, withdrawal } = options;
   input = { ...input, max_parts: input.max_parts ?? MAX_PARTS };
   insist(!withdrawal || BigInt(withdrawal.amount) > 0n && BigInt(withdrawal.amount) <= BigInt(input.amount_in), "The withdrawal differs from the take it funds");
+  // A wallet delivery goes to the address the take names: no account on `to` is read or needed.
+  const wallet = toWallet(input);
+  insist(!wallet || isAddress(input.recipient), "Invalid recipient");
   const balances = options.balances ?? await client.call("getBalances", { signal });
   const payer = balances.find(balance => balance.venue === input.from);
-  const recipient = balances.find(balance => balance.venue === input.to)?.address;
-  insist(payer && recipient, "Link both venues first");
+  const recipient = wallet ? input.recipient : balances.find(balance => balance.venue === input.to)?.address;
+  insist(payer && recipient, wallet ? "Link the paying venue first" : "Link both venues first");
   insist(options.recipient === undefined || same(recipient, options.recipient), "Linked account changed; review the transfer again");
   insist(same(payer.address, signer.address), "The signer is not the account paying on this venue");
   // Retried as its client id makes it idempotent: a payment it waits for is soon signed or settled.

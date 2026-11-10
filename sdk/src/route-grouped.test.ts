@@ -18,7 +18,7 @@ const then = { to: "polymarket", recipient: owner, amount_in: "10000000", min_ou
 const grouped = (state: string) => ({ state, second_transfer_id: "transfer-second", first_take_id: "take-first", second_take_id: "take-second", commit_by: at(40) });
 
 /** Lighter → Hyperliquid → Polymarket. `kept` retains the first delivery in escrow; `mixed` retains half. */
-function api(options: { state?: string | null; closedAfter?: number; paid?: boolean; left?: string; from?: string; prepare?: () => Response; kept?: boolean; mixed?: boolean;
+function api(options: { state?: string | null; closedAfter?: number; paid?: boolean; left?: string; from?: string; kept?: boolean; mixed?: boolean;
   escrow?: string; venueRead?: boolean; continued?: boolean; accept?: boolean } = {}) {
   let reads = 0, declined = false;
   const from = options.from ?? "lighter";
@@ -45,7 +45,7 @@ function api(options: { state?: string | null; closedAfter?: number; paid?: bool
     "GET /v1/transfers/transfer-second": second,
     "GET /v1/transfers": () => ({ data: [...options.continued ? [successor] : [], second(), first()], next_cursor: null, has_more: false }),
     "GET /v1/transfers/transfer-third": () => successor,
-    "POST /v1/transfers/transfer-first/grouped": options.prepare ?? (() => error(409, "STATE_CONFLICT", "grouped_unavailable")),
+    "POST /v1/transfers/transfer-first/grouped": () => error(409, "STATE_CONFLICT", "grouped_unavailable"),
     "GET /v1/balances": () => [{ venue: from, address: owner, venue_wallet: "42" }, { venue: "hyperliquid", address: owner, venue_wallet: null,
       withdrawable: options.venueRead === false ? null : "100000000", withdrawal_fee: "0", withdrawal_reserve: "0", read_at: options.venueRead === false ? null : at(1), chain_balance: "0",
       escrow_balance: options.escrow ?? "0", deposit_balance: "0", chain_read_at: at(0) }, { venue: "polymarket", address: owner }],
@@ -102,13 +102,6 @@ test("without grouped, a route is signed leg by leg", async () => {
   expect(calls.some(call => call.includes("/grouped"))).toBe(false);
 });
 
-test("an unavailable grouped Aster route never replaces its take or starts a sequential transfer", async () => {
-  const { client, calls, bodies } = api({ from: "aster" });
-  await expect(route(client, signer, { ...request, from: "aster" }, { ...fast, grouped: true })).rejects.toBeInstanceOf(RouteAbandoned);
-  expect(calls).toEqual(["GET /v1/transfers/transfer-first", "POST /v1/transfers/transfer-first/grouped"]);
-  expect(bodies["POST /v1/transfers"]).toBeUndefined();
-});
-
 /** A closed route whose second take never paid, its first take's 10 kept in escrow, Hyperliquid unread. */
 const kept = { state: "committed", paid: false, left: "10000000", kept: true, escrow: "10000000", venueRead: false };
 
@@ -140,10 +133,12 @@ test("resuming an aborted grouped route stops before any reservation or signatur
   expect(calls).toEqual(["GET /v1/transfers/transfer-first"]);
 });
 
-test("the caller can explicitly retry an unavailable route leg by leg", async () => {
+test("an unavailable grouped Aster route never replaces its take or starts a sequential transfer; the caller can explicitly retry it leg by leg", async () => {
   const { client, calls, bodies } = api({ from: "aster" });
   const aster = { ...request, from: "aster" };
   await expect(route(client, signer, aster, { ...fast, grouped: true })).rejects.toBeInstanceOf(RouteAbandoned);
+  expect(calls).toEqual(["GET /v1/transfers/transfer-first", "POST /v1/transfers/transfer-first/grouped"]);
+  expect(bodies["POST /v1/transfers"]).toBeUndefined();
   await expect(route(client, signer, aster, { ...fast, grouped: false })).rejects.toThrow("STATE_CONFLICT");
   expect(calls).toContain("DELETE /v1/takes/take-first");
   expect(required(bodies["POST /v1/transfers"]).map(body => body.client_transfer_id)).toEqual(["retry:transfer-first"]);

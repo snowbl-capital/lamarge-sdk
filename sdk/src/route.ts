@@ -1,6 +1,7 @@
 import { wait, type Client } from "./client.ts";
 import { fresh, prefunded } from "./funds.ts";
 import { CHAINS, FINAL_FILL_STATES, groupable, insist, same, venueStep, VENUE_SETTLED } from "./protocol/protocol.ts";
+import { destined, destinationOf, toWallet, type Destination } from "./protocol/intents.ts";
 import { required } from "./protocol/validation.ts";
 import { MAX_PARTS } from "./book.ts";
 import type { Signer } from "./signer.ts";
@@ -18,8 +19,10 @@ export interface RouteRequest {
   min_out: string;
   /** The second take as planned: what it pays on `via`, the least it delivers on `to`, and the highest taker fee it accepts (none without). */
   then: { amount_in: string; min_out: string; max_fee_bps?: number | undefined };
-  /** The linked account receiving on `to`; the signer, or `via`'s own (`RouteOptions.viaSigner`), receives on `via` and pays from there. */
+  /** The account receiving on `to`, as `TransferRequest.recipient`; the signer, or `via`'s own (`RouteOptions.viaSigner`), receives on `via` and pays from there. */
   recipient: string;
+  /** Where the second take delivers on `to`, as `TransferRequest.destination`; the first always into the account on `via`. */
+  destination?: Destination | undefined;
   /** The highest taker fee the first take accepts, in basis points, as the route's first leg shows it; without it, it pays none. */
   max_fee_bps?: number | undefined;
   /** How the first transfer pays; the second pays from the account on `via`. */
@@ -79,18 +82,20 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   const stage = (value: RouteStage) => { signal?.throwIfAborted(); onStage?.(value); };
   const secondId = `${request.client_transfer_id}.2`;
   insist(secondId.length <= 64 && request.via !== request.from && request.via !== request.to, "Unexpected route");
+  toWallet(request);
   if (request.funding !== "wallet") sendsFrom(request.from, signer);
   let first: TransferIntent = request.transfer_id
     ? await client.call("getTransfer", { path: { id: request.transfer_id }, signal })
     : await client.call("postTransfer", { body: { client_transfer_id: request.client_transfer_id, from: request.from, to: request.via, amount_in: request.amount_in, min_out: request.min_out,
-      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, amount_in: request.then.amount_in, min_out: request.then.min_out,
-        ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps), ...request.from_dex ? { from_dex: request.from_dex } : {} }, signal, retry: true });
+      max_parts: MAX_PARTS, payer: signer.address, recipient: hub.address, then: { to: request.to, recipient: request.recipient, ...destined(request.destination), amount_in: request.then.amount_in,
+        min_out: request.then.min_out, ...consent(request.then.max_fee_bps) }, ...consent(request.max_fee_bps), ...request.from_dex ? { from_dex: request.from_dex } : {} }, signal, retry: true });
   const then = first.then;
   // The first transfer is the one asked before anything of it is signed. A cancelled one goes to `transfer`, which completes a replacement it had decided.
+  // Only the route's end can be a wallet: the first take delivers into the account on `via`.
   insist(then && first.from === request.from && first.to === request.via && first.from_chain_id === CHAINS[request.from]?.id && first.to_chain_id === CHAINS[request.via]?.id
     && first.amount_in === request.amount_in && first.min_out === request.min_out && first.max_fee_bps === request.max_fee_bps && first.from_dex === request.from_dex && same(first.payer, signer.address) && same(first.recipient, hub.address)
-    && then.to === request.to && same(then.recipient, request.recipient) && then.amount_in === request.then.amount_in && then.min_out === request.then.min_out
-    && then.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
+    && destinationOf(first) === "venue" && then.to === request.to && same(then.recipient, request.recipient) && destinationOf(then) === destinationOf(request) && then.amount_in === request.then.amount_in
+    && then.min_out === request.then.min_out && then.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
   // Signed at once where it can be: committed, it runs to its end with nothing left to sign.
   if (options.grouped === true && !first.cancelled_at && groupable(request.from, request.via) && (!first.grouped || first.grouped.state === "prepared")) {
     await onIntent?.(first);
@@ -129,12 +134,13 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   const paid = grouped ? await executed(client, grouped.second_transfer_id, signal) : [];
   if (arrived.received === 0n) return { first: fills, second: paid };
   const continuing = (second: TransferIntent) => {
-    insist(second.previous_transfer_id === first.id && second.from === request.via && second.to === request.to && same(second.recipient, request.recipient)
+    insist(second.previous_transfer_id === first.id && second.from === request.via && second.to === request.to && same(second.recipient, request.recipient) && destinationOf(second) === destinationOf(request)
       && BigInt(second.amount_in) <= arrived.received && second.max_fee_bps === request.then.max_fee_bps, "Transfer terms changed; review the original transfer");
     stage("continuing");
     // Kept in escrow, it pays from the available balance and never withdraws from the venue.
     return transfer(client, hub, { client_transfer_id: second.client_transfer_id, from: request.via, to: request.to, amount_in: second.amount_in, min_out: second.min_out,
-      recipient: request.recipient, funding: arrived.kept ? "wallet" : "venue", transfer_id: second.id, max_parts: second.max_parts, max_fee_bps: request.then.max_fee_bps }, { ...options, onStage: stage });
+      recipient: request.recipient, destination: request.destination, funding: arrived.kept ? "wallet" : "venue", transfer_id: second.id, max_parts: second.max_parts, max_fee_bps: request.then.max_fee_bps },
+      { ...options, onStage: stage });
   };
   // A continuation already opened is followed, never opened again: the one named, else the route's latest, from the history.
   let latest = request.then_transfer_id ? await client.call("getTransfer", { path: { id: request.then_transfer_id }, signal }) : undefined;
@@ -174,7 +180,8 @@ export async function route(client: Client, signer: Signer, request: RouteReques
   }
   // A successor of the latest continuation goes under `renew:<id>`, with what is left now.
   const second = await client.call("postTransfer", { body: { client_transfer_id: latest ? `renew:${latest.id}` : secondId, from: request.via, to: request.to, amount_in: amount.toString(),
-    min_out: minOut.toString(), max_parts: MAX_PARTS, payer: hub.address, recipient: request.recipient, previous_transfer_id: first.id, ...consent(request.then.max_fee_bps) }, signal, retry: true });
+    min_out: minOut.toString(), max_parts: MAX_PARTS, payer: hub.address, recipient: request.recipient, ...destined(request.destination), previous_transfer_id: first.id, ...consent(request.then.max_fee_bps) },
+    signal, retry: true });
   return { first: fills, second: [...paid, ...await continuing(second)] };
 }
 

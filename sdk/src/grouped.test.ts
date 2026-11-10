@@ -7,7 +7,7 @@ import { checkRouteIntent, signableUntil } from "./protocol/intents.ts";
 import { array, record, required } from "./protocol/validation.ts";
 import type { Signing } from "./signer.ts";
 import { memoryStore } from "./store.ts";
-import { apiError, mockApi } from "./mock.test.ts";
+import { apiError, bybit, mockApi, walletId } from "./mock.test.ts";
 
 const account = privateKeyToAccount(`0x${"44".repeat(32)}`);
 const owner = account.address;
@@ -22,7 +22,7 @@ const first = {
   id: "transfer-first", client_transfer_id: "move", client_take_id: "transfer:transfer-first", from: "lighter", to: "hyperliquid", amount_in: "10006500", min_out: "10000000",
   max_parts: 1, payer: owner, recipient: owner, from_chain_id: 304, to_chain_id: 999, withdrawal_preparation: null, withdrawal: null, take_id: "take-first", take_final: false,
   then: { to: "polymarket", recipient: owner, amount_in: "10000000", min_out: "9000000", chain_id: 137 }, previous_transfer_id: null, continuable: null,
-  cancelled_at: null, created_at: iso(0), funding_plan: null, funding_plan_error: null, grouped: null,
+  cancelled_at: null, created_at: iso(0), funding_plan: null, funding_plan_error: null, grouped: null, destination: "venue",
 };
 const fill = (overrides: Record<string, unknown>) => ({ order_id: id, sequence: 1, role: "taker", state: "RESERVED", payer: owner, maker_owner: maker, maker_recipient: maker,
   taker_recipient: owner, taker_fee: "0", swap_id: id, hashlock, t1: iso(3600), t2: iso(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null,
@@ -140,17 +140,22 @@ test("a flow aborted while signing still aborts the route", async () => {
   expect(calls).toContain(abort);
 });
 
-test("a run interrupted after the first signature resumes from the kept one, the route shown again", async () => {
-  const { client } = api();
-  const { signer, signed } = wallet();
+/** A run interrupted after the first signature. A restart, not a decline: the store keeps what was signed, as a crash between two requests would. */
+async function interruptedRun(client: ReturnType<typeof api>["client"], signer: ReturnType<typeof wallet>["signer"]) {
   const stop = new Error("interrupted");
   const interrupted = { ...signer, signTypedData: async () => { throw stop; } };
-  // A restart, not a decline: the store keeps what was signed, as a crash between two requests would.
   const kept = new Map<string, unknown>();
   const durable = { load: async (key: string) => kept.get(key), save: async (key: string, value: unknown) => { kept.set(key, value); }, delete: async (key: string) => { if (key !== "route:transfer-first" || !crashed) kept.delete(key); } };
   let crashed = true;
   await expect(signRoute(client, signer, interrupted, first, { store: durable })).rejects.toBe(stop);
   crashed = false;
+  return { kept, durable };
+}
+
+test("a run interrupted after the first signature resumes from the kept one, the route shown again", async () => {
+  const { client } = api();
+  const { signer, signed } = wallet();
+  const { kept, durable } = await interruptedRun(client, signer);
   expect(kept.has("route:transfer-first")).toBe(true);
   const hooks: string[] = [];
   expect((await signRoute(client, signer, signer, first, { store: durable, beforeSigning: signing => { hooks.push(signing.kind === "route" ? `route ${JSON.stringify(signing.signed)}` : signing.kind); } }))?.state).toBe("committed");
@@ -162,13 +167,7 @@ test("a checkpoint an earlier SDK saved resumes from its signature, unless it ho
   for (const [withdrawal, messages] of [[null, 1], [{ primaryType: "Withdrawal" }, 2]] as const) {
     const { client } = api();
     const { signer, signed } = wallet();
-    const stop = new Error("interrupted");
-    const interrupted = { ...signer, signTypedData: async () => { throw stop; } };
-    const kept = new Map<string, unknown>();
-    const durable = { load: async (key: string) => kept.get(key), save: async (key: string, value: unknown) => { kept.set(key, value); }, delete: async (key: string) => { if (key !== "route:transfer-first" || !crashed) kept.delete(key); } };
-    let crashed = true;
-    await expect(signRoute(client, signer, interrupted, first, { store: durable })).rejects.toBe(stop);
-    crashed = false;
+    const { kept, durable } = await interruptedRun(client, signer);
     // As SDK 0.14 and earlier saved it: a withdrawal entry, and each request with its attestation.
     const checkpoint = record(kept.get("route:transfer-first"));
     const requests = record(checkpoint.requests);
@@ -186,6 +185,42 @@ test("a route's checks compare its second transfer with the plan and refuse any 
   expect(() => checkRouteIntent(first, delivering, { ...second, min_out: "8999999" }, owner)).toThrow("plan");
   expect(() => checkRouteIntent(first, delivering, { ...second, amount_in: "10000001" }, owner)).toThrow("plan");
   expect(() => checkRouteIntent(first, delivering, { ...second, withdrawal_preparation: { amount: "4000000", created_at: iso(0), typed_data: {} } }, owner)).toThrow("second transfer");
+});
+
+/** A route ending in a wallet on Polygon: its first transfer's `then`, and its second transfer. */
+const toWallet = { ...first, then: { ...first.then, recipient: bybit, destination: "wallet" } };
+const walletSecond = { ...second, recipient: bybit, destination: "wallet" };
+/** The second take reserved for `fill`'s destination: native USDC to the wallet, under a wallet swap id. */
+const walletTake = (destination = "wallet") => {
+  const prepared = payTake();
+  Object.assign(required(prepared.take.fills[0]), { destination, swap_id: walletId, taker_recipient: bybit });
+  Object.assign(record(array(required(prepared.to_sign[0]).typed_data.message.payments)[0]), { swapId: walletId, receiveRecipient: bybit, receiveToken: required(CHAINS.polymarket?.walletToken) });
+  // 9,990,000 pUSD delivered: at least ⌈9,990,000 × 0.9995⌉ native USDC.
+  return { ...prepared, take: { ...prepared.take, minimum_received: { token: required(CHAINS.polymarket?.walletToken), amount: "9985005" } } };
+};
+
+test("a route ending in a wallet signs its second take for the address and kind of the route's end", async () => {
+  const { client } = api({ prepare: () => ({ route: route(), first: lighterTake(), second: walletTake() }), second: walletSecond });
+  const { signer, signed } = wallet();
+  expect((await signRoute(client, signer, signer, toWallet)).state).toBe("committed");
+  expect(signed).toEqual(["message", "PayTake"]);
+  // The destination alone differing: the second transfer's from the route's end, or its take's from the second transfer.
+  const intoVenue = { ...toWallet, then: { ...toWallet.then, destination: "venue" } };
+  for (const [end, transfer, take] of [[toWallet, { ...walletSecond, destination: "venue" }, walletTake()], [intoVenue, walletSecond, walletTake()], [toWallet, walletSecond, walletTake("venue")]] as const) {
+    const refused = api({ prepare: () => ({ route: route(), first: lighterTake(), second: take }), second: transfer });
+    const other = wallet();
+    await expect(signRoute(refused.client, other.signer, other.signer, end)).rejects.toThrow(/second transfer differs|fills\.destination/);
+    expect(other.signed.includes("PayTake")).toBe(false);
+    expect(refused.calls).toContain(abort);
+  }
+});
+
+test("a route's second transfer must keep the destination of the route's end", () => {
+  const delivering = [{ amount_out: "10000000" }];
+  checkRouteIntent(toWallet, delivering, walletSecond, owner);
+  expect(() => checkRouteIntent(toWallet, delivering, { ...walletSecond, destination: "venue" }, owner)).toThrow("second transfer");
+  expect(() => checkRouteIntent(toWallet, delivering, { ...walletSecond, destination: undefined }, owner)).toThrow("second transfer");
+  expect(() => checkRouteIntent(first, delivering, { ...second, destination: "wallet" }, owner)).toThrow("second transfer");
 });
 
 test("an Aster take can be signed only while its nonce stays far enough ahead, short of its pay_by", () => {

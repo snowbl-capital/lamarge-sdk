@@ -114,19 +114,14 @@ test("Lighter's key is registered by the owner's signature of Lighter's own mess
   expect(flow.messages[0]?.startsWith("Register Lighter Account")).toBe(true);
 });
 
-test("Lighter's key is registered at LaMarge's development index, never at another slot of the account", async () => {
+test("Lighter's key is registered at LaMarge's development index, never at another slot of the account, nor at the other environment's under a deployment's own index", async () => {
   const done = (step: Step) => ({ ...step, status: "done" });
   expect((await fixture("lighter", [status("api_key")], done, owner, 253).run()).ready).toBe(true);
-  const other = fixture("lighter", [status("api_key")], done, owner, 4);
-  await expect(other.run()).rejects.toThrow("Unexpected Lighter key registration");
-  expect(other.messages).toEqual([]);
-});
-
-test("a deployment's own Lighter key index refuses the other environment's registration", async () => {
-  const done = (step: Step) => ({ ...step, status: "done" });
-  const other = fixture("lighter", [status("api_key")], done, owner, 253);
-  await expect(other.run({ lighterKeyIndex: 254 })).rejects.toThrow("Unexpected Lighter key registration");
-  expect(other.messages).toEqual([]);
+  for (const [index, pins] of [[4, {}], [253, { lighterKeyIndex: 254 }]] as const) {
+    const other = fixture("lighter", [status("api_key")], done, owner, index);
+    await expect(other.run(pins)).rejects.toThrow("Unexpected Lighter key registration");
+    expect(other.messages).toEqual([]);
+  }
 });
 
 test("a Lighter account that Lighter says is someone else's gets no key registration", async () => {

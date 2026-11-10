@@ -8,12 +8,14 @@ import { address, hex } from "./validation.ts";
 const attester = privateKeyToAccount(`0x${"0a".repeat(32)}`);
 const SIGNER = "0x00000000000000000000000000000000000a11ce";
 const DOMAIN = { name: "LaMarge attestation", version: "2" } as const;
-const TAKE_TYPES = {
-  TakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "TakeTerms" }],
-  TakeTerms: [
-    { name: "take", type: "bytes32" }, { name: "from", type: "string" }, { name: "to", type: "string" }, { name: "recipient", type: "address" },
-    { name: "token", type: "address" }, { name: "amountOut", type: "uint256" }, { name: "payBy", type: "uint64" },
-  ],
+const TERM_TYPES = [
+  { name: "take", type: "bytes32" }, { name: "from", type: "string" }, { name: "to", type: "string" }, { name: "recipient", type: "address" },
+  { name: "token", type: "address" }, { name: "amountOut", type: "uint256" }, { name: "payBy", type: "uint64" },
+] as const;
+const TAKE_TYPES = { TakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "TakeTerms" }], TakeTerms: TERM_TYPES } as const;
+const WALLET_TYPES = {
+  WalletTakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "WalletTakeTerms" }],
+  WalletTakeTerms: [...TERM_TYPES, { name: "destination", type: "string" }],
 } as const;
 const SETUP_TYPES = { SetupAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }] } as const;
 const TERMS: TakeTerms = {
@@ -31,6 +33,11 @@ const takeMessage = (digest: Hex, terms: TakeTerms) =>
   ({ signer: SIGNER as Hex, digest, terms: { ...terms, take: hex(terms.take), recipient: address(terms.recipient), token: address(terms.token), amountOut: BigInt(terms.amountOut), payBy: BigInt(terms.payBy) } });
 const signTake = (digest: Hex, terms = TERMS) =>
   attester.signTypedData({ domain: DOMAIN, types: TAKE_TYPES, primaryType: "TakeAttestation", message: takeMessage(digest, terms) });
+/** A wallet take's terms name the wallet token and the least received: 0.9995 native USDC to a Polygon address. */
+const WALLET_TERMS: TakeTerms = { ...TERMS, to: "polymarket", recipient: "0x000000000000000000000000000000000000b7b1", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", amountOut: "999500" };
+const walletMessage = (digest: Hex, terms: TakeTerms) => { const message = takeMessage(digest, terms); return { ...message, terms: { ...message.terms, destination: "wallet" } }; };
+const signWallet = (digest: Hex, terms = WALLET_TERMS) =>
+  attester.signTypedData({ domain: DOMAIN, types: WALLET_TYPES, primaryType: "WalletTakeAttestation", message: walletMessage(digest, terms) });
 const signSetup = (digest: Hex) => attester.signTypedData({ domain: DOMAIN, types: SETUP_TYPES, primaryType: "SetupAttestation", message: { signer: SIGNER, digest } });
 const verify = (attestation: unknown, request: Parameters<typeof verifyAttestation>[0]["request"] = REQUEST, now = NOW) =>
   verifyAttestation({ request, address: SIGNER, attestation, attesters: [attester.address], now });
@@ -42,11 +49,27 @@ describe("verifyAttestation", () => {
       .toBe("0x83b97beb0baa6c8963f9c9585d54258041f1fa77d94ce4f4d9c63e4dc3658535");
     expect(hashTypedData({ domain: DOMAIN, types: SETUP_TYPES, primaryType: "SetupAttestation", message: { signer: SIGNER, digest } }))
       .toBe("0x7136d204951a88fa2f5ba4ba302df614766121bb066de565278504db4f99d418");
+    // The wallet vector for the server's attester.
+    expect(hashTypedData({ domain: DOMAIN, types: WALLET_TYPES, primaryType: "WalletTakeAttestation", message: walletMessage(digest, WALLET_TERMS) }))
+      .toBe("0x68b66081ea11267a03fec4eaab2b005bc11b0207e948a1c6d8f4a67c8ee96c18");
   });
 
   test("returns a take's terms for the request it attests", async () => {
     const signature = await signTake(requestDigest(REQUEST));
-    expect(await verify({ signature, terms: TERMS })).toEqual({ kind: "take", terms: TERMS });
+    expect(await verify({ signature, terms: TERMS })).toEqual({ kind: "take", terms: TERMS, destination: "venue" });
+  });
+
+  test("returns a wallet take's terms with its destination, never read as a venue take's", async () => {
+    const digest = requestDigest(REQUEST);
+    const wallet = { signature: await signWallet(digest), terms: { ...WALLET_TERMS, destination: "wallet" } };
+    expect(await verify(wallet)).toEqual({ kind: "take", terms: WALLET_TERMS, destination: "wallet" });
+    // The same terms under the other type, either way, are another statement.
+    await expect(verify({ ...wallet, terms: WALLET_TERMS })).rejects.toThrow("another key signed it");
+    await expect(verify({ signature: await signTake(digest, WALLET_TERMS), terms: wallet.terms })).rejects.toThrow("another key signed it");
+    await expect(verify({ ...wallet, terms: { ...wallet.terms, recipient: SIGNER } })).rejects.toThrow("another key signed it");
+    // Exactly the seven terms, or those and `destination` "wallet".
+    for (const terms of [{ ...WALLET_TERMS, destination: "venue" }, { ...WALLET_TERMS, destination: "Wallet" }, { ...wallet.terms, extra: 1 }]) await expect(verify({ ...wallet, terms })).rejects.toThrow("unexpected take terms");
+    await expect(verify(wallet, REQUEST, WALLET_TERMS.payBy * 1000)).rejects.toThrow("payment window closed");
   });
 
   test("refuses terms, requests, signers and keys it does not attest", async () => {

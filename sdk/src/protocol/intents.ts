@@ -1,8 +1,21 @@
+import type { components } from "../generated/api.ts";
 import { fillMemo, LIGHTER_MAX_TAKER_FEE, TAKER_API_KEYS } from "./lighter.ts";
 import { isAddress, required, type Verified } from "./validation.ts";
 import { escrowDeployment } from "./deployments.ts";
-import { checkFee } from "./fees.ts";
-import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
+import { checkFee, swapFee } from "./fees.ts";
+import { asterTransfer, CHAINS, checkAsterTransfer, checkDeadline, checkEscrowTyped, checkSignedQuote, checkWithdrawal, differs, insist, isPinnedEscrow, MAKER_TIMEOUT_SECONDS, same, takeMinimumReceived, takePayments, TAKER_TIMEOUT_SECONDS, uint, VENUE_SETTLED, venueUnits, withdrawalCost, type SignItem, type QuoteIntent } from "./protocol.ts";
+/** Where a take delivers on `to`: into the account linked there (`venue`), or by plain transfer to an address on its escrow chain, in its wallet token (`wallet`); open as the API's enums are. */
+export type Destination = components["schemas"]["Destination"];
+/** A take's, a transfer's or a `then`'s destination: `venue` when it names none. */
+export const destinationOf = (terms: { destination?: Destination | null | undefined }): Destination => terms.destination ?? "venue";
+/** A request's destination, the field left out for a venue, as requests always were without one. */
+export const destined = (destination: Destination | null | undefined) => destination === "wallet" ? { destination: "wallet" as const } : {};
+/** Whether a take to `to` delivers to a wallet: only an escrow venue's chain has a wallet token. */
+export function toWallet(terms: { to: string; destination?: Destination | null | undefined }): boolean {
+  const destination = destinationOf(terms);
+  insist(destination === "venue" || destination === "wallet" && CHAINS[terms.to]?.walletToken !== undefined, `No ${destination} destination on ${terms.to}`);
+  return destination === "wallet";
+}
 /** Added capital comes from the linked wallet alone, or from one margin move of the whole deposit. */
 export type FundingSource = "wallet" | "venue";
 type MakerIntent = { venue: string; amount: string; quote_identity_id?: string | null | undefined; client_request_id: string; funding_source: FundingSource };
@@ -94,17 +107,29 @@ export function checkMakerIntent<T extends PreparedMaker>(prepared: T, input: Ma
     } else throw new Error("Unexpected maker signing operation");
   }
 }
-type TakeIntent = { from: string; to: string; amount_in: string; min_out: string; max_parts?: number; max_fee_bps?: number | undefined };
-export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined; taker_fee: string };
+/** `recipient`: with `destination` `wallet`, the address it transfers to. */
+type TakeIntent = { from: string; to: string; amount_in: string; min_out: string; max_parts?: number; max_fee_bps?: number | undefined; destination?: Destination | undefined; recipient?: string | undefined };
+export type TakeFill = { id: string; order_id: string; sequence: number; role: string; from_venue: string; to_venue: string; amount_in: string; amount_out: string; payer: string; maker_recipient: string; taker_recipient: string; swap_id: string; hashlock: string; pay_by: string; t1: string; t2: string; delivery_to?: string | null | undefined; taker_fee: string; destination?: Destination | undefined };
 export const takePaymentKind = (venue: string): string => venue === "aster" ? "aster_transfer" : venue === "lighter" ? "lighter_transfer" : "pay_take";
 type LighterTransfer = { kind: string; signer: string; fill_id?: string | undefined; typed_data: { api_key_index: number; from_account_index: number; amount: string; usdc_fee: string; memo: string } };
 function checkFill(fill: TakeFill, input: TakeIntent, payer: string, recipient: string) {
+  const wallet = toWallet(input);
   insist(fill.role === "taker", differs("fills.role"));
   insist(fill.from_venue === input.from, differs("fills.from_venue"));
   insist(fill.to_venue === input.to, differs("fills.to_venue"));
   insist(same(fill.payer, payer), differs("fills.payer"));
-  insist(same(fill.taker_recipient, recipient), differs("fills.taker_recipient"));
+  insist(same(fill.taker_recipient, recipient) && (!wallet || same(input.recipient, recipient)), differs("fills.taker_recipient"));
+  insist(destinationOf(fill) === destinationOf(input), differs("fills.destination"));
+  // The delivering escrow reads the kind from the swap id, which the taker's payment signs.
+  insist(swapFee(fill.swap_id).wallet === wallet, differs("fills.swap_id"));
   insist(BigInt(fill.amount_in) > 0n, differs("fills.amount_in"));
+}
+/** A prepared take's `minimum_received`, when it has one: with a wallet destination, the least its recipient gets of `to`'s wallet token for all the take delivers, as the escrow checks it; none into a venue. */
+export function checkMinimumReceived(take: { fills: readonly { to_venue: string; amount_out: string }[]; minimum_received?: { token: string; amount: string } | null | undefined }, input: TakeIntent): void {
+  const least = take.minimum_received;
+  // A server before wallet deliveries omits it; a wallet take never does.
+  if (least === undefined && !toWallet(input)) return;
+  insist(toWallet(input) ? least != null && same(least.token, CHAINS[input.to]?.walletToken) && uint(least.amount) === takeMinimumReceived(input.to, take.fills) : least === null, differs("minimum_received"));
 }
 /** Delivered inside a venue, a fill goes to the taker's own account there: its Aster address, or its Lighter index, whose owner only Lighter can confirm. Through an escrow, to none. */
 function checkDelivery(fill: TakeFill, recipient: string) {
@@ -156,13 +181,13 @@ export function signableUntil(prepared: { take: { fills: readonly { pay_by: stri
   return Math.min(...prepared.take.fills.map(fill => Date.parse(fill.pay_by) / 1000), ...nonces);
 }
 type RouteTransfer = { id: string; from: string; to: string; amount_in: string; min_out: string; payer: string; recipient: string; previous_transfer_id: string | null;
-  withdrawal_preparation: unknown; max_fee_bps?: number | undefined };
+  withdrawal_preparation: unknown; max_fee_bps?: number | undefined; destination?: Destination | undefined };
 /** The second leg must spend no more than the first delivers, at least 1% of the plan, at the planned price, and withdraw nothing: the first take's delivery stays in the escrow for it. */
-export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string; max_fee_bps?: number | undefined } | null | undefined },
+export function checkRouteIntent(first: { id: string; to: string; then?: { to: string; recipient: string; amount_in: string; min_out: string; max_fee_bps?: number | undefined; destination?: Destination | undefined } | null | undefined },
   delivering: readonly { amount_out: string }[], second: RouteTransfer, hub: string): void {
   const then = first.then;
   insist(then && second.previous_transfer_id === first.id && second.from === first.to && second.to === then.to && same(second.payer, hub) && same(second.recipient, then.recipient)
-    && second.max_fee_bps === then.max_fee_bps && second.withdrawal_preparation === null, "The route's second transfer differs from the route");
+    && destinationOf(second) === destinationOf(then) && second.max_fee_bps === then.max_fee_bps && second.withdrawal_preparation === null, "The route's second transfer differs from the route");
   const delivers = delivering.reduce((sum, fill) => sum + uint(fill.amount_out), 0n), pays = uint(second.amount_in), planned = uint(then.amount_in);
   insist(pays > 0n && pays <= delivers && pays * 100n >= planned && uint(second.min_out) >= uint(then.min_out) * pays / planned, "The route's second take differs from its plan");
 }
@@ -187,7 +212,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
   insist(take.fill_id !== undefined && fills.some(fill => fill.id === take.fill_id), differs("fill_id"));
   const payments = takePayments(typed);
   insist(payments.length === fills.length, differs("payments"));
-  const receive = CHAINS[input.to];
+  const receive = CHAINS[input.to], wallet = toWallet(input);
   for (const fill of fills) {
     checkFill(fill, input, payer, recipient);
     insist(BigInt(fill.amount_out) > 0n, differs("fills.amount_out"));
@@ -212,7 +237,7 @@ export function checkTakeIntent(items: SignItem[], fills: TakeFill[], input: Tak
     insist(uint(p.sequence) === BigInt(fill.sequence), differs("payments.sequence"));
     insist(uint(p.amountOut) === BigInt(fill.amount_out), differs("payments.amountOut"));
     insist(same(p.receiveRecipient, recipient), differs("payments.receiveRecipient"));
-    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, receive.token) && isPinnedEscrow(input.to, p.receiveEscrow)
+    insist(receive && uint(p.receiveChainId) === BigInt(receive.id) && same(p.receiveToken, wallet ? receive.walletToken : receive.token) && isPinnedEscrow(input.to, p.receiveEscrow)
       && (VENUE_SETTLED.has(input.to) || escrowDeployment(receive.id, String(p.receiveEscrow))?.environment === paidIn?.environment), differs("payments.receive"));
   }
   // Only the shortfall is pulled from the payer. The allowance is reusable, but no unrelated operation is signed.

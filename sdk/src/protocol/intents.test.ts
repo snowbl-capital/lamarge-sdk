@@ -1,4 +1,4 @@
-import { checkPermit, array, record, required, ESCROW_DEPLOYMENTS, RETIRED_V5_DEPLOYMENTS, checkMakerIntent, checkTakeIntent, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
+import { checkPermit, array, record, required, ESCROW_DEPLOYMENTS, RETIRED_V5_DEPLOYMENTS, checkMakerIntent, checkMinimumReceived, checkTakeIntent, WALLET_FEE_ON_PAYMENT, type PreparedMaker, type MakerOrderSnapshot, type TakeFill, CHAINS, EIP712Domain, ESCROW, MAKER_TIMEOUT_SECONDS, NEVER_VALID_UNTIL, UNLIMITED_ALLOWANCE, checkWithdrawal, schemas, type SignItem, type Typed } from "./index.ts";
 import { expect, test } from "bun:test";
 const owner=`0x${"11".repeat(20)}`, receiver=`0x${"22".repeat(20)}`, operator=`0x${"33".repeat(20)}`, id=`0x${"aa".repeat(32)}`;
 const now=Math.floor(Date.now()/1000);
@@ -161,4 +161,48 @@ test("deposit-only preparations preserve remaining quotes without extending thei
   expect(()=>check(extended)).toThrow();
   const inflated=structuredClone(p);record(array(required(inflated.to_sign[1]).typed_data.message.quotes)[0]).supply="20000000";
   expect(()=>check(inflated)).toThrow();
+});
+
+const bybit = `0x${"44".repeat(20)}`, walletId = `${WALLET_FEE_ON_PAYMENT}${"00".repeat(10)}${"cc".repeat(16)}`;
+const walletToken = required(CHAINS.polymarket?.walletToken);
+const walletTake = { ...take, destination: "wallet", recipient: bybit };
+const walletFill: TakeFill = { ...fill, destination: "wallet", swap_id: walletId, taker_recipient: bybit };
+const walletLock = () => ({ ...lock(), swapId: walletId, receiveToken: walletToken, receiveRecipient: bybit });
+
+test("a wallet take pays the address it names, in the wallet token, under a wallet swap id", () => {
+  const check = (payment = walletLock(), fills = [walletFill], input: Parameters<typeof checkTakeIntent>[2] = walletTake, recipient = bybit) => () => checkTakeIntent([payTake([payment])], fills, input, owner, recipient, now);
+  expect(check()).not.toThrow();
+  // Each binding alone, the rest a wallet take's.
+  expect(check(walletLock(), [{ ...walletFill, destination: "venue" }])).toThrow(/: fills\.destination$/);
+  expect(check(walletLock(), [{ ...walletFill, destination: undefined }])).toThrow(/: fills\.destination$/);
+  expect(check({ ...walletLock(), swapId: id }, [{ ...walletFill, swap_id: id }])).toThrow(/: fills\.swap_id$/);
+  expect(check({ ...walletLock(), receiveToken: required(CHAINS.polymarket).token })).toThrow(/: payments\.receive$/);
+  expect(check({ ...walletLock(), receiveRecipient: owner })).toThrow(/: payments\.receiveRecipient$/);
+  expect(check(walletLock(), [{ ...walletFill, taker_recipient: owner }])).toThrow(/: fills\.taker_recipient$/);
+  expect(check({ ...walletLock(), receiveRecipient: owner }, [{ ...walletFill, taker_recipient: owner }], walletTake, owner)).toThrow(/: fills\.taker_recipient$/);
+  // A venue take refuses each of them as well.
+  const venue = (payment: Record<string, unknown>, fills: TakeFill[]) => () => checkTakeIntent([payTake([payment])], fills, take, owner, owner, now);
+  expect(venue(lock(), [{ ...fill, destination: "venue" }])).not.toThrow();
+  expect(venue(lock(), [{ ...fill, destination: "wallet" }])).toThrow(/: fills\.destination$/);
+  expect(venue({ ...lock(), swapId: walletId }, [{ ...fill, swap_id: walletId }])).toThrow(/: fills\.swap_id$/);
+  expect(venue({ ...lock(), receiveToken: walletToken }, [fill])).toThrow(/: payments\.receive$/);
+  // Only an escrow venue delivers to a wallet.
+  for (const to of ["aster", "lighter"]) expect(check(walletLock(), [walletFill], { ...walletTake, to })).toThrow(`No wallet destination on ${to}`);
+  expect(check(walletLock(), [walletFill], { ...walletTake, destination: "bridge" })).toThrow("No bridge destination on polymarket");
+});
+
+test("a wallet take's least received is the escrow's floor on all it delivers, a venue take's none", () => {
+  // Two fills of 1.000001 delivered in one transfer: ⌈2,000,002 × 0.9995⌉, not each fill's floor added up.
+  const delivered = (to: string) => [{ to_venue: to, amount_out: "1000001" }, { to_venue: to, amount_out: "1000001" }], fills = delivered("polymarket");
+  const least = (amount: string | null, token = walletToken, to = "polymarket") => ({ fills: delivered(to), minimum_received: amount === null ? null : { token, amount } });
+  expect(() => checkMinimumReceived(least("1999002"), walletTake)).not.toThrow();
+  for (const wrong of [least("1999001"), least("1999004"), least("1999002", required(CHAINS.polymarket).token), least(null)]) expect(() => checkMinimumReceived(wrong, walletTake)).toThrow(/: minimum_received$/);
+  expect(() => checkMinimumReceived(least(null), take)).not.toThrow();
+  expect(() => checkMinimumReceived(least("1999002"), take)).toThrow(/: minimum_received$/);
+  // A wallet take's answer always carries it; a venue take's from an older server may not.
+  expect(() => checkMinimumReceived({ fills }, walletTake)).toThrow(/: minimum_received$/);
+  expect(() => checkMinimumReceived({ fills }, take)).not.toThrow();
+  const hyperevm = { ...walletTake, from: "polymarket", to: "hyperliquid" };
+  expect(() => checkMinimumReceived(least("2000002", required(CHAINS.hyperliquid?.walletToken), "hyperliquid"), hyperevm)).not.toThrow();
+  expect(() => checkMinimumReceived(least("1999002", required(CHAINS.hyperliquid?.walletToken), "hyperliquid"), hyperevm)).toThrow(/: minimum_received$/);
 });

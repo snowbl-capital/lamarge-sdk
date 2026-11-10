@@ -4,6 +4,7 @@ import { getAddress, hashMessage, hashTypedData, isAddress, recoverTypedDataAddr
 import type { components } from "../generated/api.ts";
 import { address as evmAddress, hex, isRecord } from "./validation.ts";
 import type { TypedDataRequest } from "../signer.ts";
+import type { Destination } from "./intents.ts";
 
 export type TakeAttestation = components["schemas"]["TakeAttestation"];
 export type SetupAttestation = components["schemas"]["SetupAttestation"];
@@ -17,19 +18,24 @@ export const ATTESTERS: Readonly<Record<Environment, readonly Hex[]>> = Object.f
   development: Object.freeze<Hex[]>(["0xf9d52b2ab0912cd972aaf545049e9c86dd74a7e9"]),
 });
 
-/** What the attestation proves: a take LaMarge commits to `terms`, or one of LaMarge's own setup steps (its Aster agent, its Lighter key). */
-export type Attested = { kind: "take"; terms: TakeTerms } | { kind: "setup" };
+/**
+ * What the attestation proves: a take LaMarge commits to `terms` delivered to `destination` (a wallet's terms name the wallet
+ * token and the least received), or one of LaMarge's own setup steps (its Aster agent, its Lighter key).
+ */
+export type Attested = { kind: "take"; terms: TakeTerms; destination: Destination } | { kind: "setup" };
 
 /** The wallet request about to be signed: typed data as `signTypedData` receives it, or a `personal_sign` text. */
 export type SignRequest = TypedDataRequest | { message: string };
 
 const DOMAIN = { name: "LaMarge attestation", version: "2" } as const;
-const TAKE_TYPES = {
-  TakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "TakeTerms" }],
-  TakeTerms: [
-    { name: "take", type: "bytes32" }, { name: "from", type: "string" }, { name: "to", type: "string" }, { name: "recipient", type: "address" },
-    { name: "token", type: "address" }, { name: "amountOut", type: "uint256" }, { name: "payBy", type: "uint64" },
-  ],
+const TERMS = [
+  { name: "take", type: "bytes32" }, { name: "from", type: "string" }, { name: "to", type: "string" }, { name: "recipient", type: "address" },
+  { name: "token", type: "address" }, { name: "amountOut", type: "uint256" }, { name: "payBy", type: "uint64" },
+] as const;
+const TAKE_TYPES = { TakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "TakeTerms" }], TakeTerms: TERMS } as const;
+const WALLET_TYPES = {
+  WalletTakeAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }, { name: "terms", type: "WalletTakeTerms" }],
+  WalletTakeTerms: [...TERMS, { name: "destination", type: "string" }],
 } as const;
 const SETUP_TYPES = { SetupAttestation: [{ name: "signer", type: "address" }, { name: "digest", type: "bytes32" }] } as const;
 /** Half the secp256k1 order: a signature with a higher `s` is the malleated twin of another. */
@@ -51,23 +57,25 @@ export function requestDigest(request: SignRequest): Hex {
   return hashTypedData({ domain, types, primaryType, message });
 }
 
-function terms(value: unknown): TakeTerms {
+/** A take's terms, and where it delivers: a wallet delivery's carry `destination` `"wallet"` as an eighth field. */
+function terms(value: unknown): { terms: TakeTerms; destination: Destination } {
   if (!isRecord(value)) refuse("no take terms");
-  const t = value;
+  const { destination, ...t } = value, wallet = "destination" in value;
   const keys = ["take", "from", "to", "recipient", "token", "amountOut", "payBy"];
-  if (Object.keys(t).length !== keys.length || !keys.every(key => key in t)) refuse("unexpected take terms");
+  if (wallet && destination !== "wallet" || Object.keys(t).length !== keys.length || !keys.every(key => key in t)) refuse("unexpected take terms");
   if (typeof t.take !== "string" || !/^0x[0-9a-f]{64}$/i.test(t.take)) refuse("take id");
   if (typeof t.from !== "string" || typeof t.to !== "string" || !t.from || !t.to) refuse("venues");
   if (typeof t.recipient !== "string" || !isAddress(t.recipient) || typeof t.token !== "string" || !isAddress(t.token)) refuse("recipient or token");
   if (typeof t.amountOut !== "string" || !/^(0|[1-9]\d*)$/.test(t.amountOut)) refuse("amount");
   if (typeof t.payBy !== "number" || !Number.isSafeInteger(t.payBy) || t.payBy < 0) refuse("payBy");
-  return { take: t.take.toLowerCase(), from: t.from, to: t.to, recipient: getAddress(t.recipient).toLowerCase(), token: getAddress(t.token).toLowerCase(), amountOut: t.amountOut, payBy: t.payBy };
+  return { terms: { take: t.take.toLowerCase(), from: t.from, to: t.to, recipient: getAddress(t.recipient).toLowerCase(), token: getAddress(t.token).toLowerCase(), amountOut: t.amountOut, payBy: t.payBy },
+    destination: wallet ? "wallet" : "venue" };
 }
 
 /**
  * Whether LaMarge's attester, one of `attesters` (`ATTESTERS.production`, or a local server's own), asks `address`
- * (the trusted key's own address) to sign `request`, the exact request about to be signed. A take's attestation also authenticates its terms, returned for the signer's
- * own policy (where it delivers, how much, its escrows), and is refused from `payBy` on (`now` in milliseconds). It
+ * (the trusted key's own address) to sign `request`, the exact request about to be signed. A take's attestation also authenticates its terms, returned with its
+ * destination for the signer's own policy (where and how it delivers, how much, its escrows), and is refused from `payBy` on (`now` in milliseconds). It
  * proves where a request comes from, never that it should be signed: it throws whenever it is not LaMarge's.
  */
 export async function verifyAttestation({ request, address, attestation, attesters, now = Date.now() }: {
@@ -85,13 +93,17 @@ export async function verifyAttestation({ request, address, attestation, atteste
   if (BigInt(`0x${signature.slice(66, 130)}`) > HALF_ORDER) refuse("a high-s signature");
   const digest = requestDigest(request);
   const signer = getAddress(address);
-  const take = raw === undefined ? undefined : terms(raw);
-  const recovered = await (take
-    ? recoverTypedDataAddress({ domain: DOMAIN, types: TAKE_TYPES, primaryType: "TakeAttestation", message: { signer, digest, terms: { ...take, take: hex(take.take), recipient: evmAddress(take.recipient), token: evmAddress(take.token), amountOut: BigInt(take.amountOut), payBy: BigInt(take.payBy) } }, signature: proof })
-    : recoverTypedDataAddress({ domain: DOMAIN, types: SETUP_TYPES, primaryType: "SetupAttestation", message: { signer, digest }, signature: proof })
+  const take = raw === undefined ? undefined : terms(raw), t = take?.terms;
+  const signed = t && { ...t, take: hex(t.take), recipient: evmAddress(t.recipient), token: evmAddress(t.token), amountOut: BigInt(t.amountOut), payBy: BigInt(t.payBy) };
+  // A wallet delivery's terms are another type: never read as a venue delivery's, nor the other way round.
+  const recovered = await (!signed
+    ? recoverTypedDataAddress({ domain: DOMAIN, types: SETUP_TYPES, primaryType: "SetupAttestation", message: { signer, digest }, signature: proof })
+    : take?.destination === "wallet"
+      ? recoverTypedDataAddress({ domain: DOMAIN, types: WALLET_TYPES, primaryType: "WalletTakeAttestation", message: { signer, digest, terms: { ...signed, destination: "wallet" } }, signature: proof })
+      : recoverTypedDataAddress({ domain: DOMAIN, types: TAKE_TYPES, primaryType: "TakeAttestation", message: { signer, digest, terms: signed }, signature: proof })
   ).catch(() => refuse("signature"));
   if (!attesters.some(attester => attester.toLowerCase() === recovered.toLowerCase())) refuse("another key signed it");
   if (!take) return { kind: "setup" };
-  if (now >= take.payBy * 1000) refuse("its payment window closed");
-  return { kind: "take", terms: take };
+  if (now >= take.terms.payBy * 1000) refuse("its payment window closed");
+  return { kind: "take", ...take };
 }

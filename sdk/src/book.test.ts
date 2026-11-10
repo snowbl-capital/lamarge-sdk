@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkQuote, MAX_PARTS, minimumTake, sweep } from "./book.ts";
+import { checkQuote, deliveryFloor, MAX_PARTS, minimumTake, paysAll, sweep } from "./book.ts";
 import { takeFee } from "./protocol/fees.ts";
 
 const level = (order_id: string, supply: number, receive: number, available: number, min_fill = 1) => ({
@@ -90,6 +90,33 @@ describe("sweep, as POST /takes takes", () => {
     expect(minimumTake(levels, NO_CAP, none, 5_000_000n)).toBe(5_000_000n);
     expect(minimumTake(levels, NO_CAP, none, 7_000_000n)).toBeNull();
     expect(minimumTake(levels, NO_CAP, none)).toBe(1_000_000n);
+  });
+
+  test("a wallet's minimum applies to each part, fee deducted, as a failed batch delivers them alone", () => {
+    const levels = ["a", "b"].map(id => level(id, 1, 1, 9_999));
+    const wallet = { total: 0n, part: 10_000n };
+    expect(sweep([...levels, level("c", 1, 1, 10_000)], NO_CAP, none, 30_000n, MAX_PARTS, wallet)).toEqual({ out: 10_000n, pay: 10_000n, parts: 1 });
+    expect(sweep(levels, NO_CAP, none, 30_000n, MAX_PARTS, wallet).parts).toBe(0);
+    expect(sweep([level("c", 1, 1, 10_000)], NO_CAP, none, 10_000n, MAX_PARTS, wallet, Date.now(), takeFee("lighter", 3, 3)).parts).toBe(0);
+    const venues = [{ id: "polymarket", release_minimum: "5000000", chain: { wallet: { minimum: "10000" } } }];
+    expect(deliveryFloor(venues, "polymarket")).toEqual({ total: 5_000_000n, part: 0n });
+    expect(deliveryFloor(venues, "polymarket", "wallet")).toEqual(wallet);
+    // A remainder under the per-part minimum cannot form a part: the take pays all the rest.
+    const book = [level("a", 1, 1, 100_000), level("b", 1, 1, 1_000_000)];
+    const swept = sweep(book, NO_CAP, none, 105_000n, MAX_PARTS, wallet);
+    expect(swept).toEqual({ out: 100_000n, pay: 100_000n, parts: 1 });
+    expect(paysAll(book, none, 105_000n, swept, undefined, Date.now(), wallet)).toBe(true);
+    expect(sweep(book, NO_CAP, none, 110_000n, MAX_PARTS, wallet).parts).toBe(2);
+    expect(paysAll(book, none, 105_000n, swept)).toBe(false);
+    expect(() => checkQuote({ max_fill: String(NO_CAP), levels: book, taker_fee_bps: 0 }, none, { amount_in: "105000", min_out: "100000" }, wallet)).not.toThrow();
+    // With the fee on delivery, a part needs 10,003 out to deliver 10,000: 10,002 left over is paid.
+    const fee = takeFee("lighter", 3, 3);
+    const short = sweep(book, NO_CAP, none, 110_002n, MAX_PARTS, wallet, Date.now(), fee);
+    expect(short.parts).toBe(1);
+    expect(paysAll(book, none, 110_002n, short, fee, Date.now(), wallet)).toBe(true);
+    expect(sweep(book, NO_CAP, none, 110_003n, MAX_PARTS, wallet, Date.now(), fee).parts).toBe(2);
+    const one = sweep(book, NO_CAP, none, 110_003n, 1, wallet, Date.now(), fee);
+    expect(paysAll(book, none, 110_003n, one, fee, Date.now(), wallet)).toBe(false);
   });
 
   test("an empty book or no amount takes nothing", () => {

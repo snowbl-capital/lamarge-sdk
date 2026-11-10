@@ -14,7 +14,7 @@ test("only the reviewed proxy permits balances and deposit receivers", () => {
 
 test("each pinned deployment names its environment, which has one escrow on each of its chains", () => {
   const chains = (environment: string) => ESCROW_DEPLOYMENTS.filter(deployment => deployment.environment === environment).map(deployment => deployment.chainId).sort();
-  expect(chains("production")).toEqual([137, 999]);
+  expect(chains("production")).toEqual([137, 42161, 999]);
   expect(chains("development")).toEqual([137, 42161, 999]);
   expect(ESCROW_DEPLOYMENTS.every(deployment => deployment.environment !== undefined)).toBe(true);
 });

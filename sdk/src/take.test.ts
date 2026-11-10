@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
-import { mockApi } from "./mock.test.ts";
+import { bybit, mockApi } from "./mock.test.ts";
+import { WALLET_FEE_ON_DELIVERY } from "./protocol/fees.ts";
 import { checkLighterTakeIntent, type TakeFill } from "./protocol/intents.ts";
+import { CHAINS } from "./protocol/protocol.ts";
+import { required } from "./protocol/validation.ts";
 import { fillMemo, transferMessage } from "./protocol/lighter.ts";
 import { memoryStore } from "./store.ts";
 import { take, takeKey } from "./take.ts";
@@ -20,12 +23,12 @@ const reserved = { id: fill, take_id: "take-1", order_id: "0x01", sequence: 1, r
   payer: owner.address, maker_owner: maker, maker_recipient: maker, taker_recipient: owner.address, taker_fee: "0", swap_id: "0x02", hashlock: "0x03", pay_by: at(40_000), t1: at(3_600_000), t2: at(7_200_000),
   signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_to: null, delivery_hash: null };
 
-/** A take paid from the Lighter account #42, the API and Lighter itself answering; `owners` is whose account each index is, as Lighter says. */
-function lighter(owners: Record<number, string> = { 42: owner.address, 731033: maker }, asked: object = item) {
+/** A take paid from the Lighter account #42, the API and Lighter itself answering; `owners` is whose account each index is, as Lighter says. `taken` adds to the reserved take, `linked` the accounts beside #42. */
+function lighter(owners: Record<number, string> = { 42: owner.address, 731033: maker }, asked: object = item, taken: Record<string, unknown> = {}, linked = [{ venue: "hyperliquid", address: owner.address, venue_wallet: null }]) {
   const { client, calls } = mockApi({
     "GET /api/v1/account": (_, query) => ({ accounts: [{ index: Number(query.get("value")), l1_address: owners[Number(query.get("value"))] }] }),
-    "GET /v1/balances": () => [{ venue: "lighter", address: owner.address, venue_wallet: "42" }, { venue: "hyperliquid", address: owner.address, venue_wallet: null }],
-    "POST /v1/takes": () => ({ take: { id: "take-1", fills: [reserved] }, to_sign: [asked] }),
+    "GET /v1/balances": () => [{ venue: "lighter", address: owner.address, venue_wallet: "42" }, ...linked],
+    "POST /v1/takes": () => ({ take: { id: "take-1", fills: [reserved], ...taken }, to_sign: [asked] }),
     "POST /v1/takes/take-1/signatures": () => ({ fills: [{ ...reserved, state: "PAID" }] }),
     "DELETE /v1/takes/take-1": () => null,
   });
@@ -91,4 +94,37 @@ test("a take resumes its kept signature when only LaMarge's attestation of the r
   await store.save(takeKey("take-1"), { ...kept, to_sign: [{ ...item, typed_data: { ...terms, amount: "1" } }] });
   const other = lighter(undefined, { ...item, attestation: attestation("bb") });
   await expect(take(other.client, other.signer, input, { store })).rejects.toThrow("differs from the one already signed");
+});
+
+const toWallet = { ...input, destination: "wallet", recipient: bybit };
+const delivered = { ...reserved, destination: "wallet", swap_id: `${WALLET_FEE_ON_DELIVERY}${"00".repeat(26)}`, taker_recipient: bybit };
+const least = (amount: string) => ({ fills: [delivered], minimum_received: { token: required(CHAINS.hyperliquid?.walletToken), amount } });
+
+test("a take to a wallet pays the address it names, with no account linked where it ends", async () => {
+  const { client, calls, messages, signer } = lighter(undefined, item, least("2000000"), []);
+  expect((await take(client, signer, toWallet)).map(row => row.state)).toEqual(["PAID"]);
+  expect(messages).toEqual([message]);
+  expect(calls).toContain("POST /v1/takes");
+  // Into a venue the same take needs that account; to a wallet, the address and a pinned destination, before any request.
+  await expect(take(lighter(undefined, item, {}, []).client, signer, input)).rejects.toThrow("Link both venues first");
+  for (const [asked, error] of [[{ ...input, destination: "wallet" }, "Invalid recipient"], [{ ...toWallet, to: "aster" }, "No wallet destination on aster"]] as const) {
+    const refused = lighter(undefined, item, {}, []);
+    await expect(take(refused.client, refused.signer, asked)).rejects.toThrow(error);
+    expect(refused.calls).toEqual([]);
+  }
+  // A least received other than the escrow's is refused before anything is signed.
+  const short = lighter(undefined, item, least("1999999"), []);
+  await expect(take(short.client, short.signer, toWallet)).rejects.toThrow("minimum_received");
+  expect(short.messages).toEqual([]);
+});
+
+test("a take paid from Lighter to a wallet is checked against the address and the kind it asked", () => {
+  const check = (fill: TakeFill, request: Parameters<typeof checkLighterTakeIntent>[2] = toWallet, recipient = bybit) => () => checkLighterTakeIntent([item], [fill], request, owner.address, recipient, 42);
+  expect(check(delivered)).not.toThrow();
+  expect(check({ ...delivered, destination: "venue" })).toThrow("fills.destination");
+  expect(check({ ...delivered, swap_id: `0x${"02".repeat(32)}` })).toThrow("fills.swap_id");
+  expect(check({ ...delivered, taker_recipient: owner.address })).toThrow("fills.taker_recipient");
+  expect(check({ ...delivered, taker_recipient: owner.address }, toWallet, owner.address)).toThrow("fills.taker_recipient");
+  expect(check(delivered, input)).toThrow("fills.destination");
+  expect(check(delivered, { ...toWallet, to: "aster" })).toThrow("No wallet destination on aster");
 });

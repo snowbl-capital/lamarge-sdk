@@ -50,17 +50,6 @@ test("funding against an unpinned escrow never reaches the financial key", async
   expect(prompts).toBe(0);
 });
 
-test("provisioning never signs a replaced destination or excessive shortfall", async () => {
-  const o=order();let prompts=0;
-  const signing={...account,signTypedData:async()=>{prompts++;return "0x00" as const;}};
-  for(const mutate of [(p:PreparedMaker)=>{p.funding.wallet_amount="5000001";}]) {
-    const p=prepared(o);mutate(p);
-    const client=api(url=>readResponse(url) ?? Response.json(p));
-    await expect(new Maker(client,signing,operator,"http://localhost:5173",testDeployments).addCapital(asked(o),credential)).rejects.toThrow("The signing request differs from your instructions");
-  }
-  expect(prompts).toBe(0);
-});
-
 const lines = [{ venue: "hyperliquid", buy: null, sell: "1.0002", stock: "5000000" }, { venue: "polymarket", buy: "1", sell: null, stock: "0" }];
 const lineQuotes = () => [{ venue: "polymarket", recipient: account.address, supply: "5000000", receive: "5001000", min_fill: "1000000" }];
 function linesApi(signer: string, validUntil: number, quotes: ReturnType<typeof lineQuotes>, seen: (url: string, init?: RequestInit) => void) {

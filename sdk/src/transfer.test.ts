@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { LaMargeError } from "./client.ts";
-import { apiError, countingSigner, mockApi, type Handler } from "./mock.test.ts";
-import { CHAINS, EIP712Domain, ESCROW, schemas, UNLIMITED_ALLOWANCE } from "./protocol/protocol.ts";
+import { apiError, bybit, countingSigner, mockApi, walletId, type Handler } from "./mock.test.ts";
+import { CHAINS, EIP712Domain, ESCROW, minimumReceived, schemas, UNLIMITED_ALLOWANCE } from "./protocol/protocol.ts";
 import { array, record, required } from "./protocol/validation.ts";
 import type { Signing } from "./signer.ts";
 import { memoryStore } from "./store.ts";
@@ -25,7 +25,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
   loseWithdrawals?: number; unrecorded?: number; freshPreparation?: boolean; takeFill?: Record<string, unknown>; refuseTakeCancel?: boolean;
   then?: Record<string, string | number>; loseReplacements?: number; live?: string[]; spent?: string; withdrawnDuringPermit?: boolean;
   previous?: "grouped" | "single" | undefined; atOnce?: boolean; committed?: boolean; payWindow?: number; submittedMeanwhile?: boolean; conflict?: string;
-  fromDex?: string; sourceDex?: string; moved?: { out: boolean } } = {}) {
+  fromDex?: string; sourceDex?: string; moved?: { out: boolean }; wallet?: string; releaseMinimum?: string } = {}) {
   // A withdrawal prepared, never submitted: a server without takes signed at once takes nothing before it.
   let unsent = Boolean(options.freshPreparation) && !options.withdrawal, committed = Boolean(options.committed);
   let failures = options.failSubmissions ?? 0;
@@ -50,16 +50,21 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       : options.freshPreparation ? { amount: "600000", created_at: at(0), typed_data: sendAsset("600000") } : null as unknown,
     take_final: null, previous_transfer_id: options.previous ? "transfer-0" : null, continuable: null, cancelled_at: null as string | null, created_at: at(0), ...options.then ? { then: options.then } : {},
     ...options.fromDex ? { from_dex: options.fromDex } : {},
+    // To a wallet: the address named, no account linked on Polymarket.
+    ...options.wallet ? { destination: "wallet", recipient: options.wallet } : {},
     funding_plan: { venue: from, owner: payer, amount: "1000000", deposit: setup === "required" ? "1000000" : "0", withdrawal_amount: options.withdrawalAmount ?? "0",
       withdrawal_to: options.withdrawalAmount ? "signer" : null, observed_at: at(0), payment_setup: setup, ...options.atOnce ? { signed_at_once: true } : {},
       requests: [...setup === "required" ? [{ kind: "permit", signer: payer, chain_id: fromChain }] : [], ...options.withdrawalAmount ? [{ kind: withdrawalKind, signer: payer, chain_id: fromChain }] : [], { kind: "pay_take", signer: payer, chain_id: fromChain }] },
   };
   const fill = { id: "fill-1", take_id: "take-1", order_id: id, sequence: 1, role: "taker", state: "PREPARED", from_venue: from, to_venue: "polymarket",
     amount_in: "1000000", amount_out: "1005000", payer, maker_recipient: maker, taker_recipient: payer, taker_fee: "0", swap_id: id, hashlock: `0x${"bb".repeat(32)}`,
-    pay_by: at(options.payWindow ?? 45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_hash: null, payment_locked_at: null, maker_claimed_at: null };
-  const payment = { payer, swapId: id, recipient: maker, amount: "1000000", hashlock: fill.hashlock, refundAt: now() + 7200, deadline: now() + (options.payWindow ?? 45), orderId: id, sequence: 1,
-    amountOut: fill.amount_out, receiveChainId: 137, receiveToken: required(CHAINS.polymarket).token, receiveEscrow: escrowOf("polymarket"), receiveRecipient: options.recipient ?? payer, dex: 0 };
-  const prepared = () => ({ take: { id: "take-1", fills: [{ ...fill, ...committed ? { signed_at: at(0) } : {}, ...options.takeFill }] }, to_sign: committed ? [] : [{ kind: "pay_take", fill_id: fill.id, signer: payer,
+    pay_by: at(options.payWindow ?? 45), t1: at(3600), t2: at(7200), signed_at: null, payment_leg: "NONE", maker_leg: "NONE", transactions: [], delivery_hash: null, payment_locked_at: null, maker_claimed_at: null,
+    ...options.wallet ? { destination: "wallet", swap_id: walletId, taker_recipient: options.wallet } : {} };
+  const payment = { payer, swapId: fill.swap_id, recipient: maker, amount: "1000000", hashlock: fill.hashlock, refundAt: now() + 7200, deadline: now() + (options.payWindow ?? 45), orderId: id, sequence: 1,
+    amountOut: fill.amount_out, receiveChainId: 137, receiveToken: required(CHAINS.polymarket)[options.wallet ? "walletToken" : "token"], receiveEscrow: escrowOf("polymarket"),
+    receiveRecipient: options.recipient ?? options.wallet ?? payer, dex: 0 };
+  const least = options.wallet ? { token: required(CHAINS.polymarket?.walletToken), amount: String(minimumReceived("polymarket", BigInt(fill.amount_out))) } : null;
+  const prepared = () => ({ take: { id: "take-1", fills: [{ ...fill, ...committed ? { signed_at: at(0) } : {}, ...options.takeFill }], minimum_received: least }, to_sign: committed ? [] : [{ kind: "pay_take", fill_id: fill.id, signer: payer,
     typed_data: { types: { EIP712Domain, ...schemas.PayTake }, primaryType: "PayTake", domain: { name: "LaMarge", version: "1", chainId: fromChain, verifyingContract: escrowOf(from) }, message: { payer, deposit: "0", payments: [payment] } } }] });
   const permitStep = (status: string) => ({ step: "permit", status, reason: null, expires_at: null, needed_for: ["pay"], hash: null,
     to_sign: status === "required" ? { kind: "permit", signer: payer, ref: "permit-1", typed_data: permitTyped() } : null });
@@ -81,7 +86,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
     return { ...intent, funding_plan: { ...plan, withdrawal_amount: "0", withdrawal_to: null, requests: plan.requests.filter(request => request.kind !== "margin_move") } };
   };
   const routes: Record<string, Handler> = {
-    "GET /v1/venues": () => [],
+    "GET /v1/venues": () => options.releaseMinimum ? [{ id: "polymarket", release_minimum: options.releaseMinimum }] : [],
     "GET /v1/orders": () => [],
     "GET /v1/books": () => ({ from, to: "polymarket", max_fill: "100000000", levels: options.levels ?? [{ order_id: id, supply: "1005000", receive: "1000000", available: "100000000", min_fill: "1", valid_until: at(60) }] }),
     "POST /v1/transfers": body => {
@@ -128,7 +133,7 @@ function api(options: { chainBalance?: string; withdrawalAmount?: string; recipi
       steps: [permitStep(options.permitReads?.[Math.min(permitReads++, options.permitReads.length - 1)] ?? "done")] }),
     "GET /v1/balances": () => [
       payerBalance(),
-      { venue: "polymarket", address: options.linkedRecipient ?? payer, venue_wallet: null, chain_balance: "0", chain_error: null, chain_read_at: at(0), escrow_balance: "0", deposit_balance: "0" },
+      ...options.wallet ? [] : [{ venue: "polymarket", address: options.linkedRecipient ?? payer, venue_wallet: null, chain_balance: "0", chain_error: null, chain_read_at: at(0), escrow_balance: "0", deposit_balance: "0" }],
     ],
     "POST /v1/takes": () => {
       if (options.submittedMeanwhile) {
@@ -181,23 +186,14 @@ const clock = (onSleep: () => void = () => {}) => {
 const count = (calls: string[], route: string) => calls.filter(call => call === route).length;
 const request: TransferRequest = { client_transfer_id: "move-1", from: "hyperliquid", to: "polymarket", amount_in: "1000000", min_out: "1000000", recipient: payer, funding: "wallet" };
 
-test("a wallet-funded transfer signs only its payment and submits it", async () => {
-  const { client, calls } = api();
-  const signer = counting();
-  const stages: string[] = [];
-  const fills = await transfer(client, signer, request, { onStage: stage => stages.push(stage) });
-  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
-  expect(signer.signed).toBe(1);
-  expect(stages).toEqual(["checking", "taking", "taking"]);
-  expect(calls).not.toContain("POST /v1/transfers/transfer-1/withdrawal");
-});
-
-test("wallet funding never withdraws: a shortfall stops before anything is signed or reserved", async () => {
-  const { client, calls } = api({ chainBalance: "400000", withdrawalAmount: "600000" });
-  const signer = counting();
-  await expect(transfer(client, signer, request)).rejects.toThrow("Wallet funds do not cover the transfer");
-  expect(signer.signed).toBe(0);
-  expect(calls.some(call => call.startsWith("POST /v1/takes") || call.includes("withdrawal"))).toBe(false);
+test("wallet funding never withdraws: a shortfall stops before anything is signed, reserved or permitted, even when the plan shows no withdrawal", async () => {
+  for (const plan of [{ withdrawalAmount: "600000" }, { permit: true }]) {
+    const { client, calls } = api({ chainBalance: "400000", ...plan });
+    const signer = counting();
+    await expect(transfer(client, signer, request)).rejects.toThrow("Wallet funds do not cover the transfer");
+    expect(signer.signed).toBe(0);
+    expect(calls.some(call => call.startsWith("POST /v1/takes") || call.includes("withdrawal") || call.includes("/setup/"))).toBe(false);
+  }
 });
 
 test("a payment to anyone but the requested recipient is never signed", async () => {
@@ -274,14 +270,6 @@ test("wallet funding is refused for a venue whose account pays, before any reque
   expect(signer.signed).toBe(0);
 });
 
-test("wallet funds short of the amount sign no permit, even when the plan shows no withdrawal", async () => {
-  const { client, calls } = api({ chainBalance: "400000", permit: true });
-  const signer = counting();
-  await expect(transfer(client, signer, request)).rejects.toThrow("Wallet funds do not cover the transfer");
-  expect(signer.signed).toBe(0);
-  expect(calls.some(call => call.includes("/setup/"))).toBe(false);
-});
-
 test("a plan the server could not compute fails as its refusal, with when to ask again", async () => {
   const { client, calls } = api({ withdrawalAmount: "600000", answered: { funding_plan: null,
     funding_plan_error: { code: "STATE_CONFLICT", message: "an earlier transfer is being sent", status: 409, retry_after: 9 } } });
@@ -321,13 +309,15 @@ test("the plan decides the withdrawal: a balances read predating a payment that 
   expect(stages).toEqual(["checking", "funding", "waiting", "taking", "taking"]);
 });
 
-test("the plan decides the withdrawal: funds the balances read has not seen yet are waited for, not withdrawn again", async () => {
-  const before = { chain_balance: "400000" };
-  const { client, calls } = api({ funds: [before, before, { chain_balance: "1000000" }] });
-  const signer = counting();
-  const fills = await transfer(client, signer, { ...request, funding: "venue" }, clock());
-  expect(fills.map(fill => fill.state)).toEqual(["PAID"]);
-  expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
+test("the plan decides the withdrawal: funds the balances read has not seen yet, or still at the deposit address, are waited for, not withdrawn again", async () => {
+  const unseen = { chain_balance: "400000" }, deposited = { chain_balance: "0", deposit_balance: "1000000" };
+  for (const funds of [[unseen, unseen, { chain_balance: "1000000" }], [deposited, deposited, { chain_balance: "0", deposit_balance: "0", escrow_balance: "1000000" }]]) {
+    const { client, calls } = api({ funds });
+    const stages: string[] = [];
+    expect((await transfer(client, counting(), { ...request, funding: "venue" }, { onStage: stage => stages.push(stage), ...clock() })).map(fill => fill.state)).toEqual(["PAID"]);
+    expect(calls.some(call => call.includes("withdrawal"))).toBe(false);
+    expect(stages).toEqual(["checking", "waiting", "taking", "taking"]);
+  }
 });
 
 test("the plan decides the withdrawal: a plan asking for a withdrawal while the take waits stops before anything is withdrawn or signed", async () => {
@@ -499,15 +489,6 @@ test("a final or absent payment setup is not waited for", async () => {
   }
 });
 
-test("funds already at the deposit address are not withdrawn again; the take waits for their sweep", async () => {
-  const deposited = { chain_balance: "0", deposit_balance: "1000000" };
-  const { client, calls } = api({ funds: [deposited, deposited, { chain_balance: "0", deposit_balance: "0", escrow_balance: "1000000" }] });
-  const stages: string[] = [];
-  expect((await transfer(client, counting(), venue, { onStage: stage => stages.push(stage), ...clock() })).map(fill => fill.state)).toEqual(["PAID"]);
-  expect(withdrawals(calls)).toEqual([]);
-  expect(stages).toEqual(["checking", "waiting", "taking", "taking"]);
-});
-
 test("dust at the deposit address is not counted: the shortfall is withdrawn in full", async () => {
   const dusty = { chain_balance: "400000", deposit_balance: "500000" };
   const { client, bodies } = api({ withdrawalAmount: "600000", funds: [dusty, dusty, { chain_balance: "1000000", deposit_balance: "0" }] });
@@ -528,12 +509,16 @@ test("a take paid inside a venue funds nothing first and goes straight to its re
   }
 });
 
-test("funds on the address that cover the amount go straight to the take without a withdrawal", async () => {
-  const { client, calls } = api();
-  const stages: string[] = [];
-  expect((await transfer(client, counting(), venue, { onStage: stage => stages.push(stage) })).map(fill => fill.state)).toEqual(["PAID"]);
-  expect(stages).toEqual(["checking", "taking", "taking"]);
-  expect(withdrawals(calls)).toEqual([]);
+test("funds on the address that cover the amount go straight to the take without a withdrawal: only its payment is signed and submitted", async () => {
+  for (const funding of ["wallet", "venue"] as const) {
+    const { client, calls } = api();
+    const signer = counting();
+    const stages: string[] = [];
+    expect((await transfer(client, signer, { ...request, funding }, { onStage: stage => stages.push(stage) })).map(fill => fill.state)).toEqual(["PAID"]);
+    expect(signer.signed).toBe(1);
+    expect(stages).toEqual(["checking", "taking", "taking"]);
+    expect(withdrawals(calls)).toEqual([]);
+  }
 });
 
 test("a refused or unknown withdrawal outcome stops before taking; a queued one read later as refused ends the wait with its error", async () => {
@@ -843,4 +828,61 @@ test("a signer that cannot send GMX's transferOut stops before anything is asked
   await expect(transfer(client, signer, { ...request, from: "gmx", funding: "venue" })).rejects.toThrow("cannot send GMX's transferOut");
   expect(calls).toEqual([]);
   expect(signer.signed).toBe(0);
+});
+
+const toWallet: TransferRequest = { ...request, recipient: bybit, destination: "wallet" };
+const expired = { state: "EXPIRED", maker_leg: "ABANDONED" };
+
+test("a transfer to a wallet asks for it, pays the address it names, and needs no account nor deposit minimum where it ends", async () => {
+  const { client, bodies } = api({ wallet: bybit, releaseMinimum: "5000000" });
+  const signer = counting();
+  expect((await transfer(client, signer, toWallet)).map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.kinds).toEqual(["PayTake"]);
+  expect(bodies["POST /v1/transfers"]).toMatchObject([{ destination: "wallet", recipient: bybit }]);
+  expect(bodies["POST /v1/takes"]).toMatchObject([{ transfer_intent_id: "transfer-1", destination: "wallet", recipient: bybit }]);
+  // Into the venue, Polymarket's minimum deposit stops the same transfer.
+  await expect(transfer(api({ releaseMinimum: "5000000" }).client, counting(), request)).rejects.toThrow("No executable price available");
+  // And a request without a destination asks for none, as before.
+  const plain = api();
+  await transfer(plain.client, counting(), request);
+  for (const route of ["POST /v1/transfers", "POST /v1/takes"]) expect(Object.keys(required(plain.bodies[route]?.[0]))).not.toContain("destination");
+  expect(Object.keys(required(plain.bodies["POST /v1/takes"]?.[0]))).not.toContain("recipient");
+});
+
+test("a transfer whose destination alone differs from the request is never paid, opened or resumed", async () => {
+  for (const [asked, mock] of [[request, api({ answered: { destination: "wallet" } })], [toWallet, api({ wallet: bybit, answered: { destination: "venue" } })]] as const) {
+    const signer = counting();
+    await expect(transfer(mock.client, signer, asked)).rejects.toThrow("Transfer terms changed");
+    expect(signer.signed).toBe(0);
+    expect(mock.calls.some(call => call.startsWith("POST /v1/takes"))).toBe(false);
+  }
+  const { client, calls } = api({ wallet: bybit });
+  await expect(transfer(client, counting(), { ...toWallet, destination: "venue", transfer_id: "transfer-1" })).rejects.toThrow("Transfer terms changed");
+  expect(calls).toEqual(["GET /v1/transfers/transfer-1"]);
+  // Only an escrow venue delivers to a wallet: refused before any request.
+  const lighter = api();
+  await expect(transfer(lighter.client, counting(), { ...toWallet, to: "lighter" })).rejects.toThrow("No wallet destination on lighter");
+  expect(lighter.calls).toEqual([]);
+});
+
+test("a transfer to a wallet stays one through its replacements and its resumption", async () => {
+  // Replaced under retry:<id> once its take expired unsigned, and under renew:<id> once its withdrawal went stale.
+  for (const [options, key] of [[{ takeId: "take-1", takeFill: expired }, "retry:transfer-1"], [{ stalePreparation: true }, "renew:transfer-1"]] as const) {
+    const { client, bodies } = api({ wallet: bybit, ...options });
+    expect((await transfer(client, counting(), { ...toWallet, funding: "venue", transfer_id: "transfer-1" })).map(fill => fill.state)).toEqual(["PAID"]);
+    expect(bodies["POST /v1/transfers"]).toMatchObject([{ client_transfer_id: key, destination: "wallet", recipient: bybit }]);
+    expect(bodies["POST /v1/takes"]).toMatchObject([{ transfer_intent_id: "transfer-2", destination: "wallet", recipient: bybit }]);
+  }
+  // A route's first transfer keeps its end's destination in `then`.
+  const then = { to: "hyperliquid", recipient: bybit, destination: "wallet", amount_in: "1000000", min_out: "990000" };
+  const routed = api({ takeId: "take-1", then: { ...then, chain_id: 999 }, takeFill: expired });
+  await transfer(routed.client, counting(), { ...request, transfer_id: "transfer-1" });
+  expect(record(routed.bodies["POST /v1/transfers"]?.[0]).then).toEqual(then);
+  // A lost submission resumes with the signature already made, the transfer still a wallet's.
+  const { client } = api({ wallet: bybit, failSubmissions: 3 });
+  const signer = counting();
+  const store = memoryStore();
+  await expect(transfer(client, signer, toWallet, { store })).rejects.toThrow("connection reset");
+  expect((await transfer(client, signer, { ...toWallet, transfer_id: "transfer-1" }, { store })).map(fill => fill.state)).toEqual(["PAID"]);
+  expect(signer.signed).toBe(1);
 });

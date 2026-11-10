@@ -1,5 +1,9 @@
 import { createClient } from "./client.ts";
+import { WALLET_FEE_ON_PAYMENT } from "./protocol/fees.ts";
 import { record } from "./protocol/validation.ts";
+
+/** A third party's address a wallet delivery goes to, and a wallet take's swap id, fee zero. */
+export const bybit = `0x${"55".repeat(20)}`, walletId = `${WALLET_FEE_ON_PAYMENT}${"00".repeat(10)}${"cc".repeat(16)}`;
 
 const API = "http://localhost:8080";
 /** A mocked route's answer: a Response as is, null as a 204, anything else as JSON. */

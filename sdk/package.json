@@ -1,6 +1,6 @@
 {
   "name": "@lamarge/sdk",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "TypeScript client for the LaMarge API: sign-in, transfers, takes and market making, with every signature checked first.",
   "license": "MIT",
   "homepage": "https://docs.lamarge.trade/sdk",
@@ -36,7 +36,11 @@
       "types": "./dist/protocol/attestation.d.ts",
       "default": "./dist/protocol/attestation.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./direct": {
+      "types": "./dist/direct.d.ts",
+      "default": "./dist/direct.js"
+    }
   },
   "files": [
     "dist"

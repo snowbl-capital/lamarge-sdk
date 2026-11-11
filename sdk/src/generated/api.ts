@@ -113,7 +113,44 @@ export interface components {
             /** @description Smallest amount the venue credits (deposit contract, or Lighter's 1 USDC transfer); a smaller escrow release stays in escrow. Null when none. */
             release_minimum: string | null;
         };
+        DirectRequest: {
+            client_operation_id: string;
+            /** @enum {string} */
+            venue: "hyperliquid" | "polymarket" | "gmx";
+            /** @enum {string} */
+            kind: "deposit" | "withdrawal";
+            owner: components["schemas"]["Address"];
+            recipient: components["schemas"]["Address"];
+            token: components["schemas"]["Address"];
+            amount: components["schemas"]["Amount"];
+            /** @description Equal to amount without conversion; otherwise minimum pUSD deposited. */
+            min_out: components["schemas"]["Amount"];
+        };
+        DirectOperation: {
+            id: components["schemas"]["Uuid"];
+            client_operation_id: string;
+            venue: string;
+            kind: string;
+            chain_id: number;
+            escrow: components["schemas"]["Address"];
+            owner: components["schemas"]["Address"];
+            recipient: components["schemas"]["Address"];
+            token: components["schemas"]["Address"];
+            amount: components["schemas"]["Amount"];
+            min_out: components["schemas"]["Amount"];
+            nonce: components["schemas"]["Amount"];
+            deadline: components["schemas"]["Amount"];
+            /** @enum {string} */
+            state: "prepared" | "pending" | "confirmed" | "failed" | "expired" | (string & {});
+            attempts: components["schemas"]["Bytes32"][];
+            tx_hash: components["schemas"]["Bytes32"] | null;
+            received: components["schemas"]["Amount"] | null;
+        };
         EscrowChain: {
+            /** @description Optional; true only after discovering the direct-deposit escrow implementation. Absent or false means unavailable. */
+            direct_deposit?: boolean;
+            /** @description Optional; owner-sent GMX Account withdrawal to its wallet, with durable reporting. */
+            direct_withdrawal?: boolean;
             /** @description Escrow-token wallet funding without a source venue account; absent or null when unsupported. Polygon uses pUSD, not native USDC. */
             wallet_funding?: components["schemas"]["WalletFundingCapability"] | null;
             /** @description What a wallet delivery pays on this chain (`destination` `wallet`): the escrow's token, or on Polygon native USDC converted from pUSD. Null where the escrow cannot deliver to a wallet, and on Lighter and Aster. */
@@ -2663,6 +2700,132 @@ export interface operations {
             409: components["responses"]["AccountInUse"];
         };
     };
+    createDirectOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectOperation"];
+                };
+            };
+            /** @description Prepared operation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectOperation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            409: components["responses"]["StateConflict"];
+            422: components["responses"]["AccountNotLinked"];
+        };
+    };
+    getDirectOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectOperation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    reportDirectOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    tx_hash?: components["schemas"]["Bytes32"];
+                };
+            };
+        };
+        responses: {
+            /** @description Current operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectOperation"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StateConflict"];
+        };
+    };
+    getDirectFunding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fresh token balance and allowance; GMX Account balance for withdrawals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        owner: components["schemas"]["Address"];
+                        token: components["schemas"]["Address"];
+                        spender: components["schemas"]["Address"];
+                        balance: components["schemas"]["Amount"];
+                        allowance: components["schemas"]["Amount"];
+                        block: number;
+                        /** Format: date-time */
+                        observed_at: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getWalletFunding: {
         parameters: {
             query?: {
@@ -4833,6 +4996,10 @@ export const routes = {
   postVenueSetupStep: {"path":"/v1/accounts/{venue}/setup/{step}","method":"POST"},
   postLink: {"path":"/v1/accounts/link","method":"POST"},
   deleteLink: {"path":"/v1/accounts/{venue}","method":"DELETE"},
+  createDirectOperation: {"path":"/v1/direct","method":"POST"},
+  getDirectOperation: {"path":"/v1/direct/{id}","method":"GET"},
+  reportDirectOperation: {"path":"/v1/direct/{id}","method":"POST"},
+  getDirectFunding: {"path":"/v1/direct/{id}/funding","method":"GET"},
   getWalletFunding: {"path":"/v1/wallets/{venue}","method":"GET"},
   postWalletPermit: {"path":"/v1/wallets/{venue}/permit","method":"POST"},
   getBalances: {"path":"/v1/balances","method":"GET"},

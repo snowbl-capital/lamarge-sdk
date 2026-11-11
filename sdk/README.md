@@ -29,3 +29,5 @@ console.log(fills.map(fill => `${fill.id} ${fill.state}`));
 Documentation, a resumable taker script and a maker bot: [docs.lamarge.trade/sdk](https://docs.lamarge.trade/sdk).
 
 The SDK is developed in LaMarge's repository, next to the server and the API contract. [snowbl-capital/lamarge-sdk](https://github.com/snowbl-capital/lamarge-sdk) mirrors each release; issues are welcome there. Before 1.0 a minor version may break.
+
+Local wallet deposits and GMX Account withdrawals are available separately through `@lamarge/sdk/direct` (`directTransfer`, `DirectRequest`, `DirectOperation`). They require the API's advertised direct capabilities and a wallet adapter implementing `sendTransaction`, plus a durable `SignatureStore`. [Direct transfer documentation](https://docs.lamarge.trade/direct-transfers) covers token selection, receiving setup and recovery. Existing maker integrations do not need to upgrade for these operations.

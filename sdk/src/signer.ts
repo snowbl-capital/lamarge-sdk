@@ -93,3 +93,14 @@ export async function signItems(signer: QuoteSigner, items: readonly SignItem[],
   for (const item of items) signed.push(signedItem(item, await signTyped(signer, item.typed_data, attested(item))));
   return signed;
 }
+
+/** Only an explicit wallet refusal proves the prompt sent nothing; transport errors do not. */
+export function walletRefused(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  while (isRecord(error) && !seen.has(error)) {
+    if (error.code === 4001) return true;
+    seen.add(error);
+    error = error.cause;
+  }
+  return false;
+}

@@ -1120,6 +1120,236 @@
         }
       }
     },
+    "/v1/direct": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Prepare a direct deposit or GMX withdrawal",
+        "operationId": "createDirectOperation",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "No maker or quote. A deposit pays from the owner's wallet into the linked recipient's venue account. Polygon accepts pUSD, or native USDC with an atomic conversion and explicit min_out. A GMX withdrawal moves USDC from the linked owner's GMX Account to its own wallet. Persist client_operation_id before calling; retries with identical terms return the same operation. The owner pays gas. Capability support is required only for new operations.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectOperation"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Prepared operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/AccountNotLinked"
+          }
+        }
+      }
+    },
+    "/v1/direct/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Read a direct operation",
+        "operationId": "getDirectOperation",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Recoverable after admission or account links change. Confirmed means canonical on-chain acceptance, not confirmation of asynchronous HyperCore credit. Deposits reconcile by nonce even without a reported hash. GMX withdrawals with a lost hash remain pending; never resend them automatically.",
+        "responses": {
+          "200": {
+            "description": "Current operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectOperation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Fence or report a direct transaction",
+        "operationId": "reportDirectOperation",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Send an empty body once before the wallet prompt. It atomically fences other tabs/devices. A lost response is an unknown attempt, never permission to prompt again. Then report tx_hash, including replacement hashes. Reports are hints; only matching canonical chain evidence confirms.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tx_hash": {
+                    "$ref": "#/components/schemas/Bytes32"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/StateConflict"
+          }
+        }
+      }
+    },
+    "/v1/direct/{id}/funding": {
+      "get": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Read direct operation funds",
+        "operationId": "getDirectFunding",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh token balance and allowance; GMX Account balance for withdrawals.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "owner",
+                    "token",
+                    "spender",
+                    "balance",
+                    "allowance",
+                    "block",
+                    "observed_at"
+                  ],
+                  "properties": {
+                    "owner": {
+                      "$ref": "#/components/schemas/Address"
+                    },
+                    "token": {
+                      "$ref": "#/components/schemas/Address"
+                    },
+                    "spender": {
+                      "$ref": "#/components/schemas/Address"
+                    },
+                    "balance": {
+                      "$ref": "#/components/schemas/Amount"
+                    },
+                    "allowance": {
+                      "$ref": "#/components/schemas/Amount"
+                    },
+                    "block": {
+                      "type": "integer"
+                    },
+                    "observed_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/v1/wallets/{venue}": {
       "get": {
         "tags": [
@@ -5216,6 +5446,157 @@
           }
         }
       },
+      "DirectRequest": {
+        "type": "object",
+        "required": [
+          "client_operation_id",
+          "venue",
+          "kind",
+          "owner",
+          "recipient",
+          "token",
+          "amount",
+          "min_out"
+        ],
+        "properties": {
+          "client_operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "venue": {
+            "type": "string",
+            "enum": [
+              "hyperliquid",
+              "polymarket",
+              "gmx"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "deposit",
+              "withdrawal"
+            ]
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_out": {
+            "$ref": "#/components/schemas/Amount",
+            "description": "Equal to amount without conversion; otherwise minimum pUSD deposited."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DirectOperation": {
+        "type": "object",
+        "required": [
+          "id",
+          "client_operation_id",
+          "venue",
+          "kind",
+          "chain_id",
+          "escrow",
+          "owner",
+          "recipient",
+          "token",
+          "amount",
+          "min_out",
+          "nonce",
+          "deadline",
+          "state",
+          "attempts",
+          "tx_hash",
+          "received"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "client_operation_id": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "escrow": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_out": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "nonce": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "pending",
+              "confirmed",
+              "failed",
+              "expired"
+            ]
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Bytes32"
+            }
+          },
+          "tx_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Bytes32"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "received": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "EscrowChain": {
         "type": "object",
         "required": [
@@ -5228,6 +5609,14 @@
           "wallet"
         ],
         "properties": {
+          "direct_deposit": {
+            "type": "boolean",
+            "description": "Optional; true only after discovering the direct-deposit escrow implementation. Absent or false means unavailable."
+          },
+          "direct_withdrawal": {
+            "type": "boolean",
+            "description": "Optional; owner-sent GMX Account withdrawal to its wallet, with durable reporting."
+          },
           "wallet_funding": {
             "description": "Escrow-token wallet funding without a source venue account; absent or null when unsupported. Polygon uses pUSD, not native USDC.",
             "oneOf": [

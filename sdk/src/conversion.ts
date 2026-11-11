@@ -1,8 +1,8 @@
 import type { Answer, Client } from "./client.ts";
 import type { components } from "./generated/api.ts";
 import { CHAINS, checkRegistry, insist, same, uint, WALLET_SWAP_MIN_BPS } from "./protocol/protocol.ts";
-import { address, isRecord, required } from "./protocol/validation.ts";
-import type { BeforeSigning, Hex, Signer } from "./signer.ts";
+import { address, required } from "./protocol/validation.ts";
+import { walletRefused, type BeforeSigning, type Hex, type Signer } from "./signer.ts";
 import { canonical, exclusive, type SignatureStore } from "./store.ts";
 import { readWalletFunding } from "./wallet.ts";
 
@@ -11,17 +11,6 @@ export const POLYGON_FUNDING_CONVERTER = "0x2d31ff03f5da1c385a64d764389962c160e7
 export const POLYGON_USDC = required(required(CHAINS.polymarket).walletToken);
 export const conversionMinimum = (amount: bigint) => (amount * BigInt(WALLET_SWAP_MIN_BPS) + 9_999n) / 10_000n;
 const word = (value: unknown) => { const n = uint(value); insist(n < 1n << 256n, "Invalid conversion integer"); return n.toString(16).padStart(64, "0"); };
-
-/** Only an explicit wallet refusal proves the prompt sent nothing; transport errors do not. */
-function declined(error: unknown): boolean {
-  const seen = new Set<unknown>();
-  while (isRecord(error) && !seen.has(error)) {
-    if (error.code === 4001) return true;
-    seen.add(error);
-    error = error.cause;
-  }
-  return false;
-}
 
 export function conversionInput(conversion: ConversionInput | undefined): { conversion?: ConversionInput } {
   return conversion ? { conversion: { amount_in: conversion.amount_in, min_out: conversion.min_out, ...(conversion.id ? { id: conversion.id } : {}) } } : {};
@@ -44,11 +33,12 @@ export async function convertFunding(client: Client, signer: Signer, intent: Ans
   const c = await client.call("prepareTransferConversion", { path: { id: intent.id }, signal, retry: true });
   checkConversion({ ...intent, conversion: c }, original);
   const id = required(c.id, "Conversion identity missing");
-  const chain = required(CHAINS.polymarket);
-  insist(c.chain_id === 137 && same(c.escrow, chain.escrow) && same(c.payer, signer.address)
+  const chain = required(CHAINS.polymarket), escrow = required(c.escrow, "Conversion escrow missing");
+  checkRegistry("polymarket", { id: required(c.chain_id), escrow, token: chain.token, decimals: chain.decimals });
+  insist(c.chain_id === 137 && same(c.payer, signer.address)
     && same(c.token, POLYGON_USDC) && same(c.converter, POLYGON_FUNDING_CONVERTER), "Conversion deployment changed");
   const nonce = required(c.nonce, "Conversion nonce missing"), deadline = required(c.deadline, "Conversion deadline missing");
-  const terms = { id, chain: 137, escrow: c.escrow, payer: c.payer, converter: c.converter, amount: c.amount_in, minOut: c.min_out, nonce, deadline };
+  const terms = { id, chain: 137, escrow, payer: c.payer, converter: c.converter, amount: c.amount_in, minOut: c.min_out, nonce, deadline };
   return exclusive(store, `conversion:${id}`, async () => {
     const keys = [`conversion-intent:${intent.id}`, `conversion:${id}:terms`];
     const previous = await Promise.all(keys.map(key => store.load(key)));
@@ -73,10 +63,13 @@ export async function convertFunding(client: Client, signer: Signer, intent: Ans
     const venues = await client.call("getVenues", { query: { all: true }, signal });
     const advertised = required(venues.find(v => v.id === "polymarket" && v.enabled)?.chain, "Conversion unavailable");
     checkRegistry("polymarket", advertised);
+    insist(same(advertised.escrow, escrow), "Conversion escrow changed");
     const capability = required(advertised.wallet_funding?.conversion, "Conversion unavailable");
     insist(same(capability.converter, POLYGON_FUNDING_CONVERTER) && same(capability.token, POLYGON_USDC)
       && capability.decimals === 6 && capability.min_out_bps === WALLET_SWAP_MIN_BPS, "Conversion capability changed");
-    const funds = required((await readWalletFunding(client, "polymarket", signer.address, now(), signal)).conversion, "Native funding balance missing");
+    const funding = await readWalletFunding(client, "polymarket", signer.address, now(), signal);
+    insist(same(funding.escrow, escrow), "Conversion funding escrow changed");
+    const funds = required(funding.conversion, "Native funding balance missing");
     insist(same(funds.token, POLYGON_USDC) && uint(funds.balance) >= uint(c.amount_in), "USDC balance too low");
     if (uint(funds.allowance) < uint(c.amount_in)) {
       const approvalKey = `conversion:${id}:approval`;
@@ -87,14 +80,14 @@ export async function convertFunding(client: Client, signer: Signer, intent: Ans
       let broadcast = false;
       try {
         const hash = await signer.sendTransaction({ chainId: 137, to: address(POLYGON_USDC),
-          data: `0x095ea7b3${word(BigInt(chain.escrow).toString())}${word(c.amount_in)}` }, async hash => {
+          data: `0x095ea7b3${word(BigInt(escrow).toString())}${word(c.amount_in)}` }, async hash => {
             broadcast = true;
             await store.save(approvalKey, hash);
           });
         broadcast = true;
         await store.save(approvalKey, hash);
       } catch (error) {
-        if (!broadcast && declined(error)) await store.delete(approvalKey);
+        if (!broadcast && walletRefused(error)) await store.delete(approvalKey);
         throw error;
       }
     }
@@ -110,11 +103,11 @@ export async function convertFunding(client: Client, signer: Signer, intent: Ans
       await client.call("reportTransferConversion", { path: { id: intent.id }, body: { tx_hash: hash }, signal, retry: true });
     };
     try {
-      const hash = await signer.sendTransaction({ chainId: 137, to: address(chain.escrow),
+      const hash = await signer.sendTransaction({ chainId: 137, to: address(escrow),
         data: `0x320a91b1${word(c.amount_in)}${word(c.min_out)}${word(nonce)}${word(deadline)}` }, saveHash);
       await saveHash(hash);
     } catch (error) {
-      if (!broadcast && declined(error)) await store.save(sentKey, false);
+      if (!broadcast && walletRefused(error)) await store.save(sentKey, false);
       throw error;
     }
     return false;

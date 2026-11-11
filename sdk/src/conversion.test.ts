@@ -11,10 +11,10 @@ import { transfer } from "./transfer.ts";
 const owner = `0x${"11".repeat(20)}` as const, hash = `0x${"22".repeat(32)}` as const;
 const chain = required(CHAINS.polymarket), now = 1_800_000_000_000;
 
-function scenario() {
-  const c = { id: "conversion", amount_in: "2000000", min_out: "1999000", chain_id: 137, escrow: chain.escrow, payer: owner,
+function scenario(escrow = chain.escrow) {
+  const c = { id: "conversion", amount_in: "2000000", min_out: "1999000", chain_id: 137, escrow, payer: owner,
     token: POLYGON_USDC, converter: POLYGON_FUNDING_CONVERTER, nonce: "42", deadline: String(now/1000+1800), state: "prepared", attempts: [] as string[], received: null as string | null, tx_hash: null as string | null };
-  let allowance = "0", fenceLost = false;
+  let allowance = "0", fenceLost = false, advertisedEscrow = escrow, fundingEscrow = escrow;
   const prepare = () => ({ ...c });
   const report = (body: Record<string, unknown>) => {
     if (typeof body.tx_hash === "string") c.attempts.push(body.tx_hash);
@@ -27,9 +27,9 @@ function scenario() {
     "POST /v1/transfers/transfer/conversion": report,
     "POST /v1/transfers/replacement/conversion/prepare": prepare,
     "POST /v1/transfers/replacement/conversion": report,
-    "GET /v1/venues": () => [{ id: "polymarket", enabled: true, chain: { ...chain, permit: undefined, decimals: 6,
+    "GET /v1/venues": () => [{ id: "polymarket", enabled: true, chain: { ...chain, escrow: advertisedEscrow, permit: undefined, decimals: 6,
       wallet_funding: { token: chain.token, conversion: { token: POLYGON_USDC, converter: POLYGON_FUNDING_CONVERTER, decimals: 6, min_out_bps: 9995 } } } }],
-    "GET /v1/wallets/polymarket": () => ({ venue: "polymarket", address: owner, chain_id: 137, escrow: chain.escrow, token: chain.token, decimals: 6,
+    "GET /v1/wallets/polymarket": () => ({ venue: "polymarket", address: owner, chain_id: 137, escrow: fundingEscrow, token: chain.token, decimals: 6,
       wallet: "0", available: "0", spendable_wallet: "0", spendable_available: "0", observed_at: new Date(now).toISOString(), payment_setup: { address: owner },
       conversion: { token: POLYGON_USDC, balance: "2000000", allowance } }),
   });
@@ -42,7 +42,7 @@ function scenario() {
     await callback?.(hash);
     return hash;
   } };
-  return { c, client, bodies, signer, sent, ready: () => { c.state="ready"; c.received="2000001"; c.tx_hash=hash; }, lose: () => { lost=true; }, loseFence: () => { fenceLost=true; },
+  return { c, client, bodies, signer, sent, advertise: (value: string) => { advertisedEscrow = value; }, fundingAt: (value: string) => { fundingEscrow = value; }, ready: () => { c.state="ready"; c.received="2000001"; c.tx_hash=hash; }, lose: () => { lost=true; }, loseFence: () => { fenceLost=true; },
     intent: () => client.call("getTransfer", { path: { id: "transfer" } }) };
 }
 
@@ -199,4 +199,22 @@ test("a finalized conversion rereads its pUSD funding plan before preparing the 
   expect(planReads).toBe(1);
   expect(bodies["POST /v1/takes"]?.[0]?.amount_in).toBe("1999000");
   expect(s.sent).toHaveLength(0);
+});
+
+
+test("conversion uses the validated development escrow for its allowance and transaction", async () => {
+  const escrow = "0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1";
+  const s = scenario(escrow);
+  await convertFunding(s.client, s.signer, await s.intent(), memoryStore(), () => now);
+  expect(s.sent[0]?.data).toBe(encodeFunctionData({ abi: parseAbi(["function approve(address,uint256)"]), functionName: "approve", args: [address(escrow), 2_000_000n] }));
+  expect(s.sent[1]?.to).toBe(escrow);
+});
+
+test("conversion refuses a changed capability or funding escrow before any wallet prompt", async () => {
+  for (const changed of ["capability", "funding"]) {
+    const s = scenario("0xa3fca394739ec4b984e908bd7a3c3b72d0ed77d1");
+    if (changed === "capability") s.advertise(chain.escrow); else s.fundingAt(chain.escrow);
+    await expect(convertFunding(s.client, s.signer, await s.intent(), memoryStore(), () => now)).rejects.toThrow(/escrow changed/);
+    expect(s.sent).toHaveLength(0);
+  }
 });
